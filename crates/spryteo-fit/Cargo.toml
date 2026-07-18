@@ -9,3 +9,8 @@ description = "Polygon simplification, corner detection, Bezier curve fitting."
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+spryteo-core = { path = "../spryteo-core" }
+spryteo-geom = { path = "../spryteo-geom" }
+
+[dev-dependencies]
+serde_json.workspace = true

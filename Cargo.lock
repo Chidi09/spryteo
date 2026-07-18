@@ -340,6 +340,9 @@ name = "spryteo-fit"
 version = "0.0.1"
 dependencies = [
  "serde",
+ "serde_json",
+ "spryteo-core",
+ "spryteo-geom",
  "thiserror",
 ]
 
