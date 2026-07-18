@@ -10,5 +10,22 @@ description = "spryteo CLI binary (clap)."
 name = "spryteo"
 path = "src/main.rs"
 
+[lib]
+name = "spryteo_cli"
+path = "src/lib.rs"
+
 [dependencies]
 spryteo-core = { path = "../spryteo-core" }
+spryteo-raster = { path = "../spryteo-raster" }
+spryteo-quant = { path = "../spryteo-quant" }
+spryteo-trace = { path = "../spryteo-trace" }
+spryteo-fit = { path = "../spryteo-fit" }
+spryteo-svg = { path = "../spryteo-svg" }
+
+clap = { version = "4", features = ["derive"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
