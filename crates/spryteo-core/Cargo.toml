@@ -9,3 +9,4 @@ description = "IR types, ConvertOptions, pipeline orchestration, traits."
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
