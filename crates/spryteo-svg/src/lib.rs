@@ -1,2 +1,1092 @@
 //! SceneGraph to SVG emission, optimizer, metadata sidecar.
-//! Phase 0 stub — see /ROADMAP.md.
+
+use spryteo_core::ir::{
+    Bbox, ConvertResult, CurveSet, Group, Meta, Node, NodeMeta, PathElement, Primitive, Rgb,
+    SceneGraph, Shape, Stats, Transform,
+};
+use spryteo_core::options::{ConvertOptions, Grouping, IdStyle, OutputFormat, TOrigin};
+use spryteo_geom::{dedupe_ids, stable_id};
+use std::fmt::Write;
+
+/// Extracts the endpoints from a sequence of path elements.
+///
+/// For a curved node, this flattens its path elements to a point sequence.
+/// The endpoint of each segment is sufficient for hashing and geometry calculation.
+fn extract_endpoints(segments: &[PathElement]) -> Vec<(f64, f64)> {
+    let mut points = Vec::new();
+    for seg in segments {
+        match seg {
+            PathElement::MoveTo(x, y) => points.push((*x, *y)),
+            PathElement::LineTo(x, y) => points.push((*x, *y)),
+            PathElement::CurveTo(_, _, _, _, x3, y3) => points.push((*x3, *y3)),
+            PathElement::ClosePath => {}
+        }
+    }
+    points
+}
+
+/// Computes the axis-aligned bounding box, centroid, and area of a polygon defined by points.
+fn get_polygon_geom(points: &[(f64, f64)]) -> (Bbox, (f64, f64), f64) {
+    let n = points.len();
+    if n == 0 {
+        return (
+            Bbox {
+                x_min: 0.0,
+                x_max: 0.0,
+                y_min: 0.0,
+                y_max: 0.0,
+            },
+            (0.0, 0.0),
+            0.0,
+        );
+    }
+
+    let mut x_min = f64::INFINITY;
+    let mut x_max = f64::NEG_INFINITY;
+    let mut y_min = f64::INFINITY;
+    let mut y_max = f64::NEG_INFINITY;
+    for &(x, y) in points {
+        if x < x_min {
+            x_min = x;
+        }
+        if x > x_max {
+            x_max = x;
+        }
+        if y < y_min {
+            y_min = y;
+        }
+        if y > y_max {
+            y_max = y;
+        }
+    }
+
+    let mut area = 0.0;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    for i in 0..n {
+        let p1 = points[i];
+        let p2 = points[(i + 1) % n];
+        let factor = p1.0 * p2.1 - p2.0 * p1.1;
+        area += factor;
+        cx += (p1.0 + p2.0) * factor;
+        cy += (p1.1 + p2.1) * factor;
+    }
+    area *= 0.5;
+    let unsigned_area = area.abs();
+
+    let centroid = if area.abs() > 1e-9 {
+        (cx / (6.0 * area), cy / (6.0 * area))
+    } else {
+        let mut sx = 0.0;
+        let mut sy = 0.0;
+        for &(x, y) in points {
+            sx += x;
+            sy += y;
+        }
+        (sx / n as f64, sy / n as f64)
+    };
+
+    (
+        Bbox {
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+        },
+        centroid,
+        unsigned_area,
+    )
+}
+
+/// Computes the bounding box, centroid, and area of a Shape.
+///
+/// Uses closed-form formulas for primitives and polygon formulas for paths.
+fn get_shape_geom(shape: &Shape, arcs: bool) -> (Bbox, (f64, f64), f64) {
+    match shape {
+        Shape::Primitive(prim) => match prim {
+            Primitive::Circle { cx, cy, r } => {
+                let bbox = Bbox {
+                    x_min: cx - r,
+                    x_max: cx + r,
+                    y_min: cy - r,
+                    y_max: cy + r,
+                };
+                let centroid = (*cx, *cy);
+                let area = std::f64::consts::PI * r * r;
+                (bbox, centroid, area)
+            }
+            Primitive::Ellipse {
+                cx,
+                cy,
+                rx,
+                ry,
+                rotation,
+            } => {
+                let theta = *rotation;
+                let w_x = (rx * rx * theta.cos().powi(2) + ry * ry * theta.sin().powi(2)).sqrt();
+                let w_y = (rx * rx * theta.sin().powi(2) + ry * ry * theta.cos().powi(2)).sqrt();
+                let bbox = Bbox {
+                    x_min: cx - w_x,
+                    x_max: cx + w_x,
+                    y_min: cy - w_y,
+                    y_max: cy + w_y,
+                };
+                let centroid = (*cx, *cy);
+                let area = std::f64::consts::PI * rx * ry;
+                (bbox, centroid, area)
+            }
+            Primitive::Rect {
+                x,
+                y,
+                width,
+                height,
+                ..
+            } => {
+                let bbox = Bbox {
+                    x_min: *x,
+                    x_max: x + width,
+                    y_min: *y,
+                    y_max: y + height,
+                };
+                let centroid = (x + width / 2.0, y + height / 2.0);
+                let area = width * height;
+                (bbox, centroid, area)
+            }
+            Primitive::Arc {
+                cx,
+                cy,
+                rx,
+                ry,
+                rotation,
+                ..
+            } => {
+                if arcs {
+                    let theta = *rotation;
+                    let w_x =
+                        (rx * rx * theta.cos().powi(2) + ry * ry * theta.sin().powi(2)).sqrt();
+                    let w_y =
+                        (rx * rx * theta.sin().powi(2) + ry * ry * theta.cos().powi(2)).sqrt();
+                    let bbox = Bbox {
+                        x_min: cx - w_x,
+                        x_max: cx + w_x,
+                        y_min: cy - w_y,
+                        y_max: cy + w_y,
+                    };
+                    let centroid = (*cx, *cy);
+                    let area = std::f64::consts::PI * rx * ry;
+                    (bbox, centroid, area)
+                } else {
+                    // Fallback to empty if it occurs directly
+                    let bbox = Bbox {
+                        x_min: 0.0,
+                        x_max: 0.0,
+                        y_min: 0.0,
+                        y_max: 0.0,
+                    };
+                    (bbox, (0.0, 0.0), 0.0)
+                }
+            }
+        },
+        Shape::Path(segments) => {
+            let points = extract_endpoints(segments);
+            get_polygon_geom(&points)
+        }
+    }
+}
+
+/// Re-expresses a shape's coordinates relative to a new origin (cx, cy).
+fn shift_shape(shape: &mut Shape, cx: f64, cy: f64) {
+    match shape {
+        Shape::Primitive(prim) => match prim {
+            Primitive::Circle {
+                cx: pcx, cy: pcy, ..
+            } => {
+                *pcx -= cx;
+                *pcy -= cy;
+            }
+            Primitive::Ellipse {
+                cx: pcx, cy: pcy, ..
+            } => {
+                *pcx -= cx;
+                *pcy -= cy;
+            }
+            Primitive::Rect { x, y, .. } => {
+                *x -= cx;
+                *y -= cy;
+            }
+            Primitive::Arc {
+                cx: pcx, cy: pcy, ..
+            } => {
+                *pcx -= cx;
+                *pcy -= cy;
+            }
+        },
+        Shape::Path(segments) => {
+            for seg in segments {
+                match seg {
+                    PathElement::MoveTo(x, y) => {
+                        *x -= cx;
+                        *y -= cy;
+                    }
+                    PathElement::LineTo(x, y) => {
+                        *x -= cx;
+                        *y -= cy;
+                    }
+                    PathElement::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                        *x1 -= cx;
+                        *y1 -= cy;
+                        *x2 -= cx;
+                        *y2 -= cy;
+                        *x3 -= cx;
+                        *y3 -= cy;
+                    }
+                    PathElement::ClosePath => {}
+                }
+            }
+        }
+    }
+}
+
+/// Formats a float coordinate rounded to the given precision, handling negative zero.
+fn format_coord(v: f64, precision: usize) -> String {
+    let factor = 10_f64.powi(precision as i32);
+    let mut rounded = (v * factor).round() / factor;
+    if rounded == -0.0 {
+        rounded = 0.0;
+    }
+    format!("{:.1$}", rounded, precision)
+}
+
+/// Formats path segments into an SVG path data string using absolute commands.
+fn format_path_data(segments: &[PathElement], precision: usize) -> String {
+    let mut d = String::new();
+    for (idx, seg) in segments.iter().enumerate() {
+        if idx > 0 {
+            d.push(' ');
+        }
+        match seg {
+            PathElement::MoveTo(x, y) => {
+                write!(
+                    d,
+                    "M {} {}",
+                    format_coord(*x, precision),
+                    format_coord(*y, precision)
+                )
+                .unwrap();
+            }
+            PathElement::LineTo(x, y) => {
+                write!(
+                    d,
+                    "L {} {}",
+                    format_coord(*x, precision),
+                    format_coord(*y, precision)
+                )
+                .unwrap();
+            }
+            PathElement::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                write!(
+                    d,
+                    "C {} {} {} {} {} {}",
+                    format_coord(*x1, precision),
+                    format_coord(*y1, precision),
+                    format_coord(*x2, precision),
+                    format_coord(*y2, precision),
+                    format_coord(*x3, precision),
+                    format_coord(*y3, precision)
+                )
+                .unwrap();
+            }
+            PathElement::ClosePath => {
+                d.push('Z');
+            }
+        }
+    }
+    d
+}
+
+/// Escapes HTML special characters in string values to prevent code injection.
+fn escape_html(s: &str) -> String {
+    let mut escaped = String::new();
+    for c in s.chars() {
+        match c {
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '&' => escaped.push_str("&amp;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+/// Serializes the scene graph into an SVG string according to conversion options.
+fn serialize_svg(scene: &SceneGraph, width: u32, height: u32, opts: &ConvertOptions) -> String {
+    let precision = opts.precision as usize;
+    let pretty = matches!(opts.output, OutputFormat::SvgPretty | OutputFormat::Jsx);
+    let is_jsx = matches!(opts.output, OutputFormat::Jsx);
+
+    let mut out = String::new();
+    let fill_rule_attr = if is_jsx { "fillRule" } else { "fill-rule" };
+
+    if pretty {
+        writeln!(out, "<svg viewBox=\"0 0 {} {}\">", width, height).unwrap();
+    } else {
+        write!(out, "<svg viewBox=\"0 0 {} {}\">", width, height).unwrap();
+    }
+
+    for group in &scene.groups {
+        let use_group = !matches!(opts.grouping, Grouping::Flat);
+
+        if use_group {
+            let indent = if pretty { "  " } else { "" };
+            let mut g_attrs = String::new();
+            if !matches!(opts.id_style, IdStyle::None) && !group.id.is_empty() {
+                write!(g_attrs, " id=\"{}\"", escape_html(&group.id)).unwrap();
+            }
+            if pretty {
+                writeln!(out, "{}<g{}>", indent, g_attrs).unwrap();
+            } else {
+                write!(out, "<g{}>", g_attrs).unwrap();
+            }
+        }
+
+        for node in &group.nodes {
+            let indent = if pretty {
+                if use_group {
+                    "    "
+                } else {
+                    "  "
+                }
+            } else {
+                ""
+            };
+
+            let mut node_attrs = String::new();
+            if !matches!(opts.id_style, IdStyle::None) && !node.id.is_empty() {
+                write!(node_attrs, " id=\"{}\"", escape_html(&node.id)).unwrap();
+            }
+
+            match &node.fill {
+                Some(rgb) => {
+                    write!(
+                        node_attrs,
+                        " fill=\"#{:02x}{:02x}{:02x}\"",
+                        rgb.r, rgb.g, rgb.b
+                    )
+                    .unwrap();
+                }
+                None => {
+                    write!(node_attrs, " fill=\"none\"").unwrap();
+                }
+            }
+
+            let tx = node.transform.translate_x;
+            let ty = node.transform.translate_y;
+            if tx != 0.0 || ty != 0.0 {
+                write!(
+                    node_attrs,
+                    " transform=\"translate({}, {})\"",
+                    format_coord(tx, precision),
+                    format_coord(ty, precision)
+                )
+                .unwrap();
+            }
+
+            match &node.shape {
+                Shape::Primitive(prim) => match prim {
+                    Primitive::Circle { cx, cy, r } => {
+                        if pretty {
+                            writeln!(
+                                out,
+                                "{}<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{} />",
+                                indent,
+                                format_coord(*cx, precision),
+                                format_coord(*cy, precision),
+                                format_coord(*r, precision),
+                                node_attrs
+                            )
+                            .unwrap();
+                        } else {
+                            write!(
+                                out,
+                                "<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{}/>",
+                                format_coord(*cx, precision),
+                                format_coord(*cy, precision),
+                                format_coord(*r, precision),
+                                node_attrs
+                            )
+                            .unwrap();
+                        }
+                    }
+                    Primitive::Ellipse {
+                        cx,
+                        cy,
+                        rx,
+                        ry,
+                        rotation: _,
+                    } => {
+                        // Rotation is ignored for now as a documented limitation.
+                        let rot_attr = String::new();
+                        if pretty {
+                            writeln!(
+                                out,
+                                "{}<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{} />",
+                                indent,
+                                format_coord(*cx, precision),
+                                format_coord(*cy, precision),
+                                format_coord(*rx, precision),
+                                format_coord(*ry, precision),
+                                rot_attr,
+                                node_attrs
+                            )
+                            .unwrap();
+                        } else {
+                            write!(
+                                out,
+                                "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{}/>",
+                                format_coord(*cx, precision),
+                                format_coord(*cy, precision),
+                                format_coord(*rx, precision),
+                                format_coord(*ry, precision),
+                                rot_attr,
+                                node_attrs
+                            )
+                            .unwrap();
+                        }
+                    }
+                    Primitive::Rect {
+                        x,
+                        y,
+                        width,
+                        height,
+                        rx,
+                        ry,
+                    } => {
+                        let mut rx_ry_attrs = String::new();
+                        if let Some(val_rx) = rx {
+                            write!(rx_ry_attrs, " rx=\"{}\"", format_coord(*val_rx, precision))
+                                .unwrap();
+                        }
+                        if let Some(val_ry) = ry {
+                            write!(rx_ry_attrs, " ry=\"{}\"", format_coord(*val_ry, precision))
+                                .unwrap();
+                        }
+                        if pretty {
+                            writeln!(
+                                out,
+                                "{}<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{} />",
+                                indent,
+                                format_coord(*x, precision),
+                                format_coord(*y, precision),
+                                format_coord(*width, precision),
+                                format_coord(*height, precision),
+                                rx_ry_attrs,
+                                node_attrs
+                            )
+                            .unwrap();
+                        } else {
+                            write!(
+                                out,
+                                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{}/>",
+                                format_coord(*x, precision),
+                                format_coord(*y, precision),
+                                format_coord(*width, precision),
+                                format_coord(*height, precision),
+                                rx_ry_attrs,
+                                node_attrs
+                            )
+                            .unwrap();
+                        }
+                    }
+                    Primitive::Arc {
+                        cx,
+                        cy,
+                        rx,
+                        ry,
+                        start_angle,
+                        end_angle,
+                        rotation,
+                    } => {
+                        let cx = *cx;
+                        let cy = *cy;
+                        let rx = *rx;
+                        let ry = *ry;
+                        let start_angle = *start_angle;
+                        let end_angle = *end_angle;
+                        let rot = *rotation;
+
+                        let point_on_ellipse = |angle: f64| -> (f64, f64) {
+                            let x_local = rx * angle.cos();
+                            let y_local = ry * angle.sin();
+                            let x_rot = x_local * rot.cos() - y_local * rot.sin();
+                            let y_rot = x_local * rot.sin() + y_local * rot.cos();
+                            (cx + x_rot, cy + y_rot)
+                        };
+
+                        let (x1, y1) = point_on_ellipse(start_angle);
+                        let (x2, y2) = point_on_ellipse(end_angle);
+
+                        let angle_diff = (end_angle - start_angle).abs();
+                        let large_arc_flag = if angle_diff > std::f64::consts::PI {
+                            1
+                        } else {
+                            0
+                        };
+                        let sweep_flag = if end_angle > start_angle { 1 } else { 0 };
+
+                        let d_str = format!(
+                            "M {} {} A {} {} {} {} {} {} {}",
+                            format_coord(x1, precision),
+                            format_coord(y1, precision),
+                            format_coord(rx, precision),
+                            format_coord(ry, precision),
+                            format_coord(rot.to_degrees(), precision),
+                            large_arc_flag,
+                            sweep_flag,
+                            format_coord(x2, precision),
+                            format_coord(y2, precision)
+                        );
+
+                        if pretty {
+                            writeln!(
+                                out,
+                                "{}<path d=\"{}\" {}=\"evenodd\"{} />",
+                                indent, d_str, fill_rule_attr, node_attrs
+                            )
+                            .unwrap();
+                        } else {
+                            write!(
+                                out,
+                                "<path d=\"{}\" {}=\"evenodd\"{}/>",
+                                d_str, fill_rule_attr, node_attrs
+                            )
+                            .unwrap();
+                        }
+                    }
+                },
+                Shape::Path(segments) => {
+                    let d_str = format_path_data(segments, precision);
+                    if pretty {
+                        writeln!(
+                            out,
+                            "{}<path d=\"{}\" {}=\"evenodd\"{} />",
+                            indent, d_str, fill_rule_attr, node_attrs
+                        )
+                        .unwrap();
+                    } else {
+                        write!(
+                            out,
+                            "<path d=\"{}\" {}=\"evenodd\"{}/>",
+                            d_str, fill_rule_attr, node_attrs
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        }
+
+        if use_group {
+            let indent = if pretty { "  " } else { "" };
+            if pretty {
+                writeln!(out, "{}</g>", indent).unwrap();
+            } else {
+                write!(out, "</g>").unwrap();
+            }
+        }
+    }
+
+    if pretty {
+        writeln!(out, "</svg>").unwrap();
+    } else {
+        write!(out, "</svg>").unwrap();
+    }
+
+    out
+}
+
+/// Builds a `SceneGraph` from a `CurveSet`.
+///
+/// ## Parameters
+/// - `curves`: The input `CurveSet` containing curves to group and convert.
+/// - `id_style`: The ID generation style (Hash, Sequential, or None).
+/// - `transform_origin`: Controls whether shape coordinates are relative to centroid or absolute.
+/// - `fills`: An additional slice of RGB fill colors, one per curve in `curves.curves`.
+///   Must be ordered the same way. If missing, the fill is set to `None`.
+/// - `arcs`: If false, and a `Primitive::Arc` appears, it will fall back to its raw path representation.
+///
+/// ## Grouping Simplification
+/// Per the Phase 1 roadmap, "connected component" grouping is simplified: we produce
+/// one group (`<g>`) per curve. This is because the flattened `CurveSet` does not carry
+/// the parent/child nesting relationships needed to group nested holes/contours.
+pub fn build_scene_graph(
+    curves: &CurveSet,
+    id_style: &IdStyle,
+    transform_origin: &TOrigin,
+    fills: &[Rgb],
+    arcs: bool,
+) -> SceneGraph {
+    let mut groups = Vec::new();
+
+    let mut ids = Vec::new();
+    for (i, curve) in curves.curves.iter().enumerate() {
+        let fill = fills.get(i).copied();
+        let id = match id_style {
+            IdStyle::Hash => {
+                let points = extract_endpoints(&curve.segments);
+                stable_id(&points, fill, i)
+            }
+            IdStyle::Sequential => {
+                format!("s-{}", i)
+            }
+            IdStyle::None => "".to_string(),
+        };
+        ids.push(id);
+    }
+
+    if !matches!(id_style, IdStyle::None) {
+        dedupe_ids(&mut ids);
+    }
+
+    for (i, curve) in curves.curves.iter().enumerate() {
+        let fill = fills.get(i).copied();
+        let id = ids[i].clone();
+
+        let is_arc_fallback = match &curve.primitive {
+            Some(Primitive::Arc { .. }) => !arcs,
+            _ => false,
+        };
+
+        let mut shape = if is_arc_fallback {
+            Shape::Path(curve.segments.clone())
+        } else {
+            match &curve.primitive {
+                Some(prim) => Shape::Primitive(prim.clone()),
+                None => Shape::Path(curve.segments.clone()),
+            }
+        };
+
+        let (_, centroid, _) = get_shape_geom(&shape, arcs);
+
+        let transform = match transform_origin {
+            TOrigin::Centroid => {
+                shift_shape(&mut shape, centroid.0, centroid.1);
+                Transform {
+                    translate_x: centroid.0,
+                    translate_y: centroid.1,
+                }
+            }
+            TOrigin::Baked => Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+        };
+
+        let node = Node {
+            id: id.clone(),
+            fill,
+            stroke: None,
+            transform,
+            shape,
+        };
+
+        let group_id = if id.is_empty() {
+            "".to_string()
+        } else {
+            format!("g-{}", id)
+        };
+
+        let group = Group {
+            id: group_id,
+            nodes: vec![node],
+            groups: vec![],
+        };
+
+        groups.push(group);
+    }
+
+    SceneGraph { groups }
+}
+
+/// Walks the `SceneGraph`, emits the SVG string, and builds the `Meta` sidecar.
+pub fn emit_svg(
+    scene: &SceneGraph,
+    width: u32,
+    height: u32,
+    opts: &ConvertOptions,
+) -> ConvertResult {
+    let mut nodes_meta = Vec::new();
+    let mut node_index = 0;
+    let mut path_count = 0;
+
+    for group in &scene.groups {
+        for node in &group.nodes {
+            let (rel_bbox, rel_centroid, area) = get_shape_geom(&node.shape, opts.arcs);
+
+            let tx = node.transform.translate_x;
+            let ty = node.transform.translate_y;
+
+            let bbox = Bbox {
+                x_min: rel_bbox.x_min + tx,
+                x_max: rel_bbox.x_max + tx,
+                y_min: rel_bbox.y_min + ty,
+                y_max: rel_bbox.y_max + ty,
+            };
+
+            let centroid = (rel_centroid.0 + tx, rel_centroid.1 + ty);
+
+            let is_path = match &node.shape {
+                Shape::Path(_) => true,
+                Shape::Primitive(Primitive::Arc { .. }) => !opts.arcs,
+                _ => false,
+            };
+            if is_path {
+                path_count += 1;
+            }
+
+            nodes_meta.push(NodeMeta {
+                id: node.id.clone(),
+                bbox,
+                centroid,
+                area,
+                fill: node.fill,
+                group: group.id.clone(),
+                z_order: node_index,
+                suggested_draw_order: node_index,
+            });
+
+            node_index += 1;
+        }
+    }
+
+    let svg = serialize_svg(scene, width, height, opts);
+    let byte_count = svg.len();
+
+    let stats = Stats {
+        node_count: node_index,
+        path_count,
+        byte_count,
+    };
+
+    let meta = Meta {
+        nodes: nodes_meta,
+        stats,
+    };
+
+    ConvertResult { svg, meta }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spryteo_core::ir::{Curve, CurveSet, PathElement, Primitive, Rgb, Shape};
+    use spryteo_core::options::{ConvertOptions, IdStyle, OutputFormat, TOrigin};
+
+    fn make_test_options() -> ConvertOptions {
+        ConvertOptions::default()
+    }
+
+    fn assert_all_numbers_finite(svg: &str) {
+        let mut s = String::new();
+        for c in svg.chars() {
+            if c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E' {
+                s.push(c);
+            } else {
+                s.push(' ');
+            }
+        }
+        for token in s.split_whitespace() {
+            if token == "-" || token == "+" || token == "." || token == "e" || token == "E" {
+                continue;
+            }
+            if let Ok(val) = token.parse::<f64>() {
+                assert!(
+                    val.is_finite(),
+                    "Found non-finite number: {} in token: {}",
+                    val,
+                    token
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_two_curves_distinct_groups() {
+        let curve1 = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curve2 = Curve {
+            segments: vec![
+                PathElement::MoveTo(20.0, 20.0),
+                PathElement::LineTo(30.0, 20.0),
+                PathElement::LineTo(30.0, 30.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve1, curve2],
+        };
+        let fills = vec![Rgb { r: 255, g: 0, b: 0 }, Rgb { r: 0, g: 0, b: 255 }];
+
+        let scene = build_scene_graph(&curves, &IdStyle::Hash, &TOrigin::Centroid, &fills, false);
+
+        assert_eq!(scene.groups.len(), 2);
+        assert_eq!(scene.groups[0].nodes.len(), 1);
+        assert_eq!(scene.groups[1].nodes.len(), 1);
+        assert_ne!(scene.groups[0].nodes[0].id, scene.groups[1].nodes[0].id);
+
+        assert_ne!(scene.groups[0].nodes[0].transform.translate_x, 0.0);
+        assert_ne!(scene.groups[0].nodes[0].transform.translate_y, 0.0);
+    }
+
+    #[test]
+    fn test_emit_primitive_circle() {
+        let curve = Curve {
+            segments: vec![],
+            primitive: Some(Primitive::Circle {
+                cx: 50.0,
+                cy: 50.0,
+                r: 10.0,
+            }),
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let fills = vec![Rgb { r: 0, g: 255, b: 0 }];
+
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::Sequential;
+
+        let res = emit_svg(&scene, 100, 100, &opts);
+        assert!(res.svg.contains("<circle"));
+        assert!(res.svg.contains("cx=\"50.00\""));
+        assert!(res.svg.contains("cy=\"50.00\""));
+        assert!(res.svg.contains("r=\"10.00\""));
+        assert!(!res.svg.contains("<path"));
+        assert_all_numbers_finite(&res.svg);
+    }
+
+    #[test]
+    fn test_emit_path() {
+        let curve = Curve {
+            segments: vec![
+                PathElement::MoveTo(1.0, 2.0),
+                PathElement::LineTo(3.0, 4.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let fills = vec![Rgb {
+            r: 128,
+            g: 128,
+            b: 128,
+        }];
+
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::Sequential;
+
+        let res = emit_svg(&scene, 100, 100, &opts);
+        assert!(res.svg.contains("<path"));
+        assert!(res.svg.contains("d=\"M 1.00 2.00 L 3.00 4.00 Z\""));
+        assert_all_numbers_finite(&res.svg);
+    }
+
+    #[test]
+    fn test_id_styles() {
+        let curve = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let fills = vec![Rgb { r: 255, g: 0, b: 0 }];
+
+        let scene_hash = build_scene_graph(&curves, &IdStyle::Hash, &TOrigin::Baked, &fills, false);
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::Hash;
+        let res_hash = emit_svg(&scene_hash, 100, 100, &opts);
+        assert!(res_hash.svg.contains("id=\"s-"));
+
+        let scene_none = build_scene_graph(&curves, &IdStyle::None, &TOrigin::Baked, &fills, false);
+        opts.id_style = IdStyle::None;
+        let res_none = emit_svg(&scene_none, 100, 100, &opts);
+        assert!(!res_none.svg.contains("id="));
+
+        let scene_seq = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+        opts.id_style = IdStyle::Sequential;
+        let res_seq = emit_svg(&scene_seq, 100, 100, &opts);
+        assert!(res_seq.svg.contains("id=\"s-0\""));
+    }
+
+    #[test]
+    fn test_precision() {
+        let curve = Curve {
+            segments: vec![
+                PathElement::MoveTo(12.3456, 78.91011),
+                PathElement::LineTo(0.0001, -0.0),
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let fills = vec![Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        }];
+
+        let scene = build_scene_graph(&curves, &IdStyle::None, &TOrigin::Baked, &fills, false);
+
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::None;
+        opts.precision = 1;
+
+        let res = emit_svg(&scene, 100, 100, &opts);
+        assert!(res.svg.contains("12.3"));
+        assert!(res.svg.contains("78.9"));
+        assert!(res.svg.contains("0.0"));
+        assert!(!res.svg.contains("12.35"));
+        assert_all_numbers_finite(&res.svg);
+    }
+
+    #[test]
+    fn test_pretty_vs_minified() {
+        let curve = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let fills = vec![Rgb { r: 0, g: 0, b: 0 }];
+
+        let scene = build_scene_graph(&curves, &IdStyle::None, &TOrigin::Baked, &fills, false);
+
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::None;
+
+        opts.output = OutputFormat::Svg;
+        let res_min = emit_svg(&scene, 100, 100, &opts);
+
+        opts.output = OutputFormat::SvgPretty;
+        let res_pretty = emit_svg(&scene, 100, 100, &opts);
+
+        assert!(res_pretty.svg.contains('\n'));
+        assert!(res_min.svg.len() < res_pretty.svg.len());
+        assert_all_numbers_finite(&res_min.svg);
+        assert_all_numbers_finite(&res_pretty.svg);
+    }
+
+    #[test]
+    fn test_viewbox() {
+        let curves = CurveSet { curves: vec![] };
+        let scene = build_scene_graph(&curves, &IdStyle::None, &TOrigin::Baked, &[], false);
+
+        let opts = make_test_options();
+        let res = emit_svg(&scene, 412, 927, &opts);
+        assert!(res.svg.contains("viewBox=\"0 0 412 927\""));
+    }
+
+    #[test]
+    fn test_sanitize_injection() {
+        let node = Node {
+            id: "<script>alert('hack')</script>".to_string(),
+            fill: Some(Rgb { r: 0, g: 0, b: 0 }),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 1.0,
+                cy: 1.0,
+                r: 1.0,
+            }),
+        };
+        let group = Group {
+            id: "<script>alert('group')</script>".to_string(),
+            nodes: vec![node],
+            groups: vec![],
+        };
+        let scene = SceneGraph {
+            groups: vec![group],
+        };
+
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::Hash;
+
+        let res = emit_svg(&scene, 100, 100, &opts);
+        assert!(!res.svg.contains("<script>"));
+        assert!(res.svg.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn test_determinism() {
+        let curve = Curve {
+            segments: vec![
+                PathElement::MoveTo(1.23, 4.56),
+                PathElement::LineTo(7.89, 0.12),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let fills = vec![Rgb {
+            r: 255,
+            g: 100,
+            b: 50,
+        }];
+
+        let scene = build_scene_graph(&curves, &IdStyle::Hash, &TOrigin::Centroid, &fills, false);
+
+        let opts = make_test_options();
+        let res1 = emit_svg(&scene, 500, 500, &opts);
+        let res2 = emit_svg(&scene, 500, 500, &opts);
+
+        assert_eq!(res1.svg, res2.svg);
+    }
+}

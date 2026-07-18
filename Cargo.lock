@@ -395,6 +395,8 @@ name = "spryteo-svg"
 version = "0.0.1"
 dependencies = [
  "serde",
+ "spryteo-core",
+ "spryteo-geom",
  "thiserror",
 ]
 

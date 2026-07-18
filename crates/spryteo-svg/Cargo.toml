@@ -7,5 +7,7 @@ authors.workspace = true
 description = "SceneGraph to SVG emission, optimizer, metadata sidecar."
 
 [dependencies]
+spryteo-core = { path = "../spryteo-core" }
+spryteo-geom = { path = "../spryteo-geom" }
 serde.workspace = true
 thiserror.workspace = true
