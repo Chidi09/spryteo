@@ -11,18 +11,21 @@ Standing rule for building the engine in `crates/`: **deepseek does the implemen
 
 ## Prerequisites
 
-- `opencode` CLI at `/root/.opencode/bin/opencode`, `agy` CLI at `/root/.local/bin/agy`.
-- Confirm available deepseek models before assuming a model string is valid:
+- **Primary dispatch tool for crate-implementation work in this project: `agy`, model `"Gemini 3.5 Flash (Medium)"`** — user directive (2026-07-18), chosen explicitly over `opencode`/deepseek for this workspace's Phase 1+ crate dispatches.
+  ```bash
+  agy --dangerously-skip-permissions --add-dir <absolute-repo-path> --model "Gemini 3.5 Flash (Medium)" -p "$(cat instructions.txt)"
+  ```
+  `--add-dir` is mandatory even when already `cd`'d into the repo, or `agy` has zero file access. Confirm the exact model string with `agy models 2>&1 | grep -i gemini` before assuming it's still valid — other tiers available if this one proves too weak/slow for a given task: `"Gemini 3.5 Flash (High)"` (more effort, same family — reach for this if Medium stalls or produces a wrong/incomplete result twice on the same scope) or `"Gemini 3.1 Pro (High)"` (larger model, likely slower per-call, worth trying if Flash genuinely can't handle a particularly tricky piece of geometry/algorithm work).
+  `agy` is synchronous (no separate headless-server step, no `--format json` event stream) — Steps 1, 3, and 4 below (headless server, `opencode run` invocation, JSONL event-based monitoring) are `opencode`-specific and don't apply when dispatching via `agy`. Launch it in the background (`run_in_background: true`) and monitor via `ps` liveness (CPU time climbing = alive) plus periodic `git status --short`/`git diff --stat` polling instead of grepping a JSONL event stream, since `agy` doesn't emit one to a redirected file the same way.
+- `opencode` CLI at `/root/.opencode/bin/opencode` remains available as a fallback if `agy`/Gemini stalls or is unavailable — the mechanics below (headless server, deepseek model fallback chain) still apply in that case:
   ```bash
   /root/.opencode/bin/opencode models 2>&1 | grep -i deepseek
   ```
-- **Model fallback chain** (carried from other projects on this same `opencode` install — reconfirm on first use here, provider availability can drift):
-  1. `opencode-go/deepseek-v4-flash` — start here.
-  2. `opencode/deepseek-v4-flash-free` — swap only the `-m` flag if step 1 stalls with zero output for 60-80s+.
-  3. `deepseek/deepseek-v4-flash` — last resort; has been seen silently broken (10+ minutes, zero writes, no launch-time error) elsewhere. Try it, don't assume it's still broken.
-  4. `agy --model "GPT-OSS 120B (Medium)"` for small, tightly-specified single-item mechanical edits — `--add-dir <absolute-repo-path>` is mandatory even when already `cd`'d into the repo, or it has zero file access.
+  1. `opencode-go/deepseek-v4-flash` — hit a billing error (no payment method) on first use in this project; likely still blocked, confirm before relying on it.
+  2. `opencode/deepseek-v4-flash-free` — confirmed working here as the practical default when using opencode.
+  3. `deepseek/deepseek-v4-flash` — last resort; has been seen silently broken (10+ minutes, zero writes, no launch-time error) elsewhere.
 
-If all deepseek models stall on the same prompt/scope, split the task smaller rather than keep cycling models.
+If the current tool/model stalls or produces bad results twice on the same scope, split the task smaller rather than keep cycling models.
 
 ## Step 1 — Start a headless server once per session
 

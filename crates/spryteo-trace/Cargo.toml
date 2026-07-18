@@ -7,5 +7,10 @@ authors.workspace = true
 description = "Contour extraction: Suzuki-Abe border following, marching squares."
 
 [dependencies]
+spryteo-core = { path = "../spryteo-core" }
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
