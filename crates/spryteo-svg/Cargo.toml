@@ -1,0 +1,11 @@
+[package]
+name = "spryteo-svg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "SceneGraph to SVG emission, optimizer, metadata sidecar."
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root, body {
+    --bg:#0B0B0A; --surface:#151513; --border:#26241F;
+    --text:#F5F4EF; --muted:#A3A199; --accent:#C6FF4B; --accent-ink:#0B0B0A;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:'Inter',system-ui,sans-serif; -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; text-underline-offset:3px; }
+  ::selection { background:var(--accent); color:var(--accent-ink); }
+  @keyframes sc-draw { from { stroke-dashoffset:100; } to { stroke-dashoffset:0; } }
+  @keyframes sc-fill { from { fill-opacity:0; } to { fill-opacity:1; } }
+  @keyframes sc-spry { 0%{transform:scale(1);} 30%{transform:scale(1.16) rotate(-3deg);} 60%{transform:scale(0.95) rotate(1deg);} 100%{transform:scale(1) rotate(0);} }
+  @keyframes sc-enter { from { opacity:0; transform:translateY(8px) scale(0.96);} to { opacity:1; transform:none; } }
+  @keyframes sc-flicker { 0%,100%{opacity:1;} 45%{opacity:.55;} }
+</style>
+</helmet>
+<div style="min-height:100vh;display:flex;flex-direction:column;">
+
+  <header style="position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:18px 32px;border-bottom:1px solid var(--border);background:rgba(11,11,10,0.82);backdrop-filter:blur(10px);">
+    <a href="#" onClick="{{ goHome }}" style="display:flex;align-items:center;gap:10px;color:var(--text);text-decoration:none;" style-hover="text-decoration:none;">
+      <span style="display:inline-flex;color:var(--accent);animation:sc-enter 420ms cubic-bezier(0.34,1.56,0.64,1) both;">
+        <svg width="26" height="26" viewBox="0 0 1254 1254" aria-hidden="true"><path fill="currentColor" d="M6481 9038 c-213 -14 -468 -83 -676 -183 -232 -112 -423 -264 -643 -513 -239 -271 -734 -853 -805 -947 -125 -165 -196 -342 -217 -539 l-9 -90 10 -102 c21 -227 119 -461 272 -650 196 -243 486 -407 782 -443 l90 -11 785 0 c456 0 810 4 844 10 95 15 116 51 77 128 -22 42 -144 163 -211 209 -62 42 -191 105 -278 137 -112 40 -211 63 -443 101 -248 42 -340 64 -462 111 -323 124 -509 347 -546 652 l-10 82 10 83 c32 272 178 507 424 682 154 110 357 192 585 237 l115 22 940 6 940 6 55 18 c30 10 86 34 124 54 l69 36 72 70 c63 63 726 818 733 835 3 9 -2490 8 -2627 -1z M5900 6963 c-61 -10 -122 -36 -137 -59 l-15 -24 6 -31 c14 -72 149 -209 283 -287 166 -97 334 -148 689 -207 263 -44 374 -72 491 -123 347 -149 526 -442 484 -790 -21 -175 -95 -340 -215 -483 -186 -222 -447 -359 -811 -426 l-90 -17 -955 -6 -955 -6 -65 -21 c-68 -23 -168 -79 -209 -116 -13 -12 -94 -103 -180 -202 -180 -207 -276 -310 -485 -523 l-151 -153 1390 4 1390 3 75 13 c217 37 460 123 630 223 226 133 374 270 620 573 85 105 231 280 325 390 292 341 334 392 402 492 170 250 233 523 192 819 -67 482 -464 875 -959 950 l-95 14 -815 -1 c-448 -1 -826 -4 -840 -6z" transform="translate(0,1254) scale(0.1,-0.1)"></path></svg>
+      </span>
+      <span style="font-size:18px;font-weight:500;letter-spacing:-0.01em;">spryteo</span>
+    </a>
+    <nav style="display:flex;align-items:center;gap:8px;">
+      <a href="#" onClick="{{ goDocs }}" style="padding:8px 12px;border-radius:4px;font-size:14px;color:{{ docsColor }};text-decoration:none;transition:color 160ms;" style-hover="text-decoration:none;color:var(--text);">docs</a>
+      <a href="https://github.com" target="_blank" rel="noopener" style="padding:8px 12px;border-radius:4px;font-size:14px;color:var(--muted);text-decoration:none;" style-hover="text-decoration:none;color:var(--text);">github</a>
+      <a href="#" onClick="{{ ctaHeader }}" style="margin-left:6px;padding:9px 16px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent-ink);background:var(--accent);clip-path:polygon(11px 0,100% 0,100% 100%,0 100%,0 11px);transition:transform 180ms cubic-bezier(0.34,1.56,0.64,1);text-decoration:none;" style-hover="transform:translateY(-2px);text-decoration:none;" style-active="transform:translateY(0) scale(0.97);">convert an icon</a>
+    </nav>
+  </header>
+
+  <main style="flex:1;">
+
+    <!-- ===================== HOME ===================== -->
+    <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+    <div>
+      <!-- HERO -->
+      <section style="position:relative;overflow:hidden;max-width:1200px;margin:0 auto;padding:72px 32px 40px;display:grid;grid-template-columns:1.05fr 1fr;gap:56px;align-items:center;">
+        <div aria-hidden="true" style="position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;">
+          <img src="{{ gifSrc }}" alt="" style="position:absolute;right:-4%;top:50%;transform:translateY(-50%);height:118%;max-width:none;opacity:0.14;filter:invert(1) grayscale(1) contrast(1.1);mix-blend-mode:screen;transition:opacity 400ms ease;"/>
+        </div>
+        <div style="position:relative;z-index:1;">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent);letter-spacing:0.02em;margin-bottom:22px;">v1.0 — free &amp; open source</div>
+          <h1 style="font-size:60px;line-height:1.03;letter-spacing:-0.03em;font-weight:500;margin:0 0 22px;text-wrap:balance;">Turn any icon into a clean, animateable SVG.</h1>
+          <p style="font-size:18px;line-height:1.6;color:var(--muted);max-width:520px;margin:0 0 30px;text-wrap:pretty;">Spryteo traces raster images and icons into single continuous paths — semantically grouped and ready to animate. Built for developers, and for the agents that call them.</p>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:26px;flex-wrap:wrap;">
+            <button onClick="{{ ctaHero }}" style="border:0;cursor:pointer;padding:13px 22px;font-family:'Inter',sans-serif;font-size:15px;font-weight:500;color:var(--accent-ink);background:var(--accent);clip-path:polygon(13px 0,100% 0,100% 100%,0 100%,0 13px);transition:transform 180ms cubic-bezier(0.34,1.56,0.64,1);" style-hover="transform:translateY(-2px);" style-active="transform:translateY(0) scale(0.97);">convert an icon</button>
+            <button onClick="{{ goDocs }}" style="cursor:pointer;padding:13px 22px;font-family:'Inter',sans-serif;font-size:15px;font-weight:500;color:var(--text);background:transparent;border:1px solid var(--border);border-radius:4px;transition:border-color 160ms,transform 180ms cubic-bezier(0.34,1.56,0.64,1);" style-hover="border-color:var(--muted);transform:translateY(-2px);" style-active="transform:translateY(0) scale(0.98);">read the docs</button>
+          </div>
+          <div style="display:inline-flex;align-items:center;gap:14px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:11px 14px;font-family:'JetBrains Mono',monospace;font-size:14px;">
+            <span style="color:var(--muted);">$</span>
+            <span>npm install spryteo</span>
+            <button onClick="{{ copyInstall }}" style="cursor:pointer;border:0;background:transparent;color:{{ copyColor }};font-family:'JetBrains Mono',monospace;font-size:12px;padding:2px 6px;transition:color 160ms;" style-hover="color:var(--accent);">{{ copyLabel }}</button>
+          </div>
+        </div>
+
+        <!-- LIVE DEMO FRAME (sliced corner) -->
+        <div style="position:relative;z-index:1;background:var(--surface);border:1px solid var(--border);clip-path:polygon(26px 0,100% 0,100% 100%,0 100%,0 26px);padding:26px;min-height:360px;display:flex;flex-direction:column;">
+          <div style="display:flex;align-items:center;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);margin-bottom:18px;">
+            <span>live demo</span>
+            <span>trace → group → animate</span>
+          </div>
+          <div onClick="{{ runDemo }}" onDragOver="{{ onDragOver }}" onDrop="{{ runDemo }}" style="flex:1;border:1px dashed var(--border);border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:26px;cursor:pointer;transition:border-color 160ms;" style-hover="border-color:var(--accent);">
+            {{ demoStage }}
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;">
+            <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);">{{ demoCaption }}</span>
+            <button onClick="{{ runDemo }}" style="cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:4px;font-size:12px;padding:6px 12px;transition:border-color 160ms;" style-hover="border-color:var(--muted);">run again</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- FEATURES -->
+      <section style="max-width:1200px;margin:0 auto;padding:64px 32px;">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:24px;">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;">CLI · API · lib</div>
+            <h3 style="font-size:18px;font-weight:500;margin:0 0 8px;">One engine, every surface</h3>
+            <p style="font-size:14px;line-height:1.55;color:var(--muted);margin:0;">Run it from the terminal, call the API, or import the library. Same output wherever you work.</p>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:24px;">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;">&lt;g&gt; groups</div>
+            <h3 style="font-size:18px;font-weight:500;margin:0 0 8px;">Actually animateable</h3>
+            <p style="font-size:14px;line-height:1.55;color:var(--muted);margin:0;">Single continuous paths, not one flattened blob. Semantic groups you can target and tween.</p>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:24px;">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;">MIT</div>
+            <h3 style="font-size:18px;font-weight:500;margin:0 0 8px;">Free and open</h3>
+            <p style="font-size:14px;line-height:1.55;color:var(--muted);margin:0;">Runs locally — no upload, no account. The source is on GitHub under an MIT license.</p>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:24px;">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;">MCP</div>
+            <h3 style="font-size:18px;font-weight:500;margin:0 0 8px;">Ready for agents</h3>
+            <p style="font-size:14px;line-height:1.55;color:var(--muted);margin:0;">Ships an MCP server so agents can convert icons without leaving the chat.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- HOW IT WORKS -->
+      <section style="max-width:1200px;margin:0 auto;padding:64px 32px;">
+        <h2 style="font-size:32px;font-weight:500;letter-spacing:-0.02em;margin:0 0 6px;">How it works</h2>
+        <p style="font-size:16px;color:var(--muted);margin:0 0 34px;">Five deterministic steps, from pixels to a path you can animate.</p>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;">
+          <sc-for list="{{ pipeline }}" as="step" hint-placeholder-count="5">
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:20px;">
+              <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:12px;">{{ step.n }}</div>
+              <div style="font-size:15px;font-weight:500;margin-bottom:6px;">{{ step.title }}</div>
+              <div style="font-size:13px;line-height:1.5;color:var(--muted);">{{ step.desc }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <!-- CTA BAND -->
+      <section style="max-width:1200px;margin:0 auto;padding:48px 32px 96px;">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:48px;display:flex;align-items:center;justify-content:space-between;gap:32px;flex-wrap:wrap;">
+          <div>
+            <h2 style="font-size:28px;font-weight:500;letter-spacing:-0.02em;margin:0 0 8px;">Read the docs, or star it on GitHub.</h2>
+            <p style="font-size:15px;color:var(--muted);margin:0;">Everything you need to wire Spryteo into a build step, a service, or an agent.</p>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <button onClick="{{ goDocs }}" style="border:0;cursor:pointer;padding:13px 22px;font-size:15px;font-weight:500;color:var(--accent-ink);background:var(--accent);clip-path:polygon(13px 0,100% 0,100% 100%,0 100%,0 13px);transition:transform 180ms cubic-bezier(0.34,1.56,0.64,1);" style-hover="transform:translateY(-2px);" style-active="transform:scale(0.97);">read the docs</button>
+            <a href="https://github.com" target="_blank" rel="noopener" style="padding:13px 22px;font-size:15px;font-weight:500;color:var(--text);border:1px solid var(--border);border-radius:4px;transition:border-color 160ms,transform 180ms cubic-bezier(0.34,1.56,0.64,1);" style-hover="border-color:var(--muted);text-decoration:none;transform:translateY(-2px);">github</a>
+          </div>
+        </div>
+      </section>
+    </div>
+    </sc-if>
+
+    <!-- ===================== DOCS ===================== -->
+    <sc-if value="{{ isDocs }}" hint-placeholder-val="{{ false }}">
+    <div style="max-width:820px;margin:0 auto;padding:64px 32px 96px;">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent);margin-bottom:14px;">docs · v1.0</div>
+      <h1 style="font-size:44px;font-weight:500;letter-spacing:-0.02em;margin:0 0 16px;">Documentation</h1>
+      <p style="font-size:17px;line-height:1.65;color:var(--muted);margin:0 0 48px;">Spryteo converts raster images and icons into clean, animateable SVG. Install it, then reach for whichever surface fits your workflow — CLI, HTTP API, library, or MCP.</p>
+
+      <h2 style="font-size:24px;font-weight:500;margin:0 0 12px;scroll-margin-top:90px;">Install</h2>
+      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Requires Node 18 or newer. Install globally for the CLI, or as a dependency for the library.</p>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:16px 18px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:1.7;overflow-x:auto;margin:0 0 44px;"><span style="color:var(--muted);">$</span> npm install -g spryteo<br><span style="color:var(--muted);"># or, as a project dependency</span><br><span style="color:var(--muted);">$</span> npm install spryteo</div>
+
+      <h2 style="font-size:24px;font-weight:500;margin:0 0 12px;">Quick start — CLI</h2>
+      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Point it at a raster file. It writes a grouped, animateable SVG next to the source.</p>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:16px 18px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:1.7;overflow-x:auto;margin:0 0 44px;"><span style="color:var(--muted);">$</span> spryteo ./icon.png <span style="color:var(--accent);">--groups</span> <span style="color:var(--accent);">--out</span> ./icon.svg<br><span style="color:var(--muted);">  traced 1 path · 3 groups · 2.1 kb → ./icon.svg</span></div>
+
+      <h2 style="font-size:24px;font-weight:500;margin:0 0 12px;">HTTP API</h2>
+      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">POST an image, get SVG back. The body is the raw file; the response is <code style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent);">image/svg+xml</code>.</p>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:16px 18px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:1.7;overflow-x:auto;margin:0 0 44px;"><span style="color:var(--muted);">$</span> curl <span style="color:var(--accent);">-X</span> POST https://api.spryteo.dev/v1/convert \<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--accent);">-H</span> "content-type: image/png" \<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--accent);">--data-binary</span> @icon.png</div>
+
+      <h2 style="font-size:24px;font-weight:500;margin:0 0 12px;">Library</h2>
+      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Import the async <code style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent);">convert()</code> function. It returns an SVG string plus the group map.</p>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:16px 18px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:1.7;overflow-x:auto;margin:0 0 44px;"><span style="color:var(--accent);">import</span> { convert } <span style="color:var(--accent);">from</span> <span style="color:var(--muted);">'spryteo'</span><br><br><span style="color:var(--accent);">const</span> { svg, groups } = <span style="color:var(--accent);">await</span> convert(buffer, {<br>&nbsp;&nbsp;groups: <span style="color:var(--accent);">true</span>,<br>&nbsp;&nbsp;simplify: <span style="color:var(--muted);">0.4</span>,<br>})</div>
+
+      <h2 style="font-size:24px;font-weight:500;margin:0 0 12px;">MCP server</h2>
+      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Register Spryteo as an MCP server and agents can convert icons in-conversation. Add this to your client config:</p>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:16px 18px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:1.7;overflow-x:auto;margin:0 0 44px;">{<br>&nbsp;&nbsp;<span style="color:var(--muted);">"mcpServers"</span>: {<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--muted);">"spryteo"</span>: { <span style="color:var(--muted);">"command"</span>: <span style="color:var(--accent);">"spryteo-mcp"</span> }<br>&nbsp;&nbsp;}<br>}</div>
+
+      <div style="border-top:1px solid var(--border);padding-top:28px;display:flex;align-items:center;gap:12px;">
+        <span style="font-size:15px;color:var(--muted);">Full reference lives in the</span>
+        <a href="https://github.com" target="_blank" rel="noopener" style="font-size:15px;">GitHub README →</a>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ===================== TERMS ===================== -->
+    <sc-if value="{{ isTerms }}" hint-placeholder-val="{{ false }}">
+    <div style="max-width:720px;margin:0 auto;padding:64px 32px 96px;">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--muted);margin-bottom:14px;">last updated — 18 july 2026</div>
+      <h1 style="font-size:40px;font-weight:500;letter-spacing:-0.02em;margin:0 0 28px;">Terms and conditions</h1>
+      <sc-for list="{{ terms }}" as="s" hint-placeholder-count="7">
+        <section style="margin-bottom:32px;">
+          <h2 style="font-size:20px;font-weight:500;margin:0 0 10px;">{{ s.h }}</h2>
+          <p style="font-size:15px;line-height:1.7;color:var(--muted);margin:0;text-wrap:pretty;">{{ s.p }}</p>
+        </section>
+      </sc-for>
+    </div>
+    </sc-if>
+
+    <!-- ===================== PRIVACY ===================== -->
+    <sc-if value="{{ isPrivacy }}" hint-placeholder-val="{{ false }}">
+    <div style="max-width:720px;margin:0 auto;padding:64px 32px 96px;">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--muted);margin-bottom:14px;">last updated — 18 july 2026</div>
+      <h1 style="font-size:40px;font-weight:500;letter-spacing:-0.02em;margin:0 0 28px;">Privacy policy</h1>
+      <sc-for list="{{ privacy }}" as="s" hint-placeholder-count="6">
+        <section style="margin-bottom:32px;">
+          <h2 style="font-size:20px;font-weight:500;margin:0 0 10px;">{{ s.h }}</h2>
+          <p style="font-size:15px;line-height:1.7;color:var(--muted);margin:0;text-wrap:pretty;">{{ s.p }}</p>
+        </section>
+      </sc-for>
+    </div>
+    </sc-if>
+
+  </main>
+
+  <!-- ===================== FOOTER ===================== -->
+  <footer style="border-top:1px solid var(--border);background:var(--bg);">
+    <div style="max-width:1200px;margin:0 auto;padding:48px 32px 28px;display:grid;grid-template-columns:1.4fr 1fr 1fr 1.2fr;gap:32px;">
+      <div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;color:var(--text);">
+          <span style="display:inline-flex;color:var(--accent);"><svg width="22" height="22" viewBox="0 0 1254 1254" aria-hidden="true"><path fill="currentColor" d="M6481 9038 c-213 -14 -468 -83 -676 -183 -232 -112 -423 -264 -643 -513 -239 -271 -734 -853 -805 -947 -125 -165 -196 -342 -217 -539 l-9 -90 10 -102 c21 -227 119 -461 272 -650 196 -243 486 -407 782 -443 l90 -11 785 0 c456 0 810 4 844 10 95 15 116 51 77 128 -22 42 -144 163 -211 209 -62 42 -191 105 -278 137 -112 40 -211 63 -443 101 -248 42 -340 64 -462 111 -323 124 -509 347 -546 652 l-10 82 10 83 c32 272 178 507 424 682 154 110 357 192 585 237 l115 22 940 6 940 6 55 18 c30 10 86 34 124 54 l69 36 72 70 c63 63 726 818 733 835 3 9 -2490 8 -2627 -1z M5900 6963 c-61 -10 -122 -36 -137 -59 l-15 -24 6 -31 c14 -72 149 -209 283 -287 166 -97 334 -148 689 -207 263 -44 374 -72 491 -123 347 -149 526 -442 484 -790 -21 -175 -95 -340 -215 -483 -186 -222 -447 -359 -811 -426 l-90 -17 -955 -6 -955 -6 -65 -21 c-68 -23 -168 -79 -209 -116 -13 -12 -94 -103 -180 -202 -180 -207 -276 -310 -485 -523 l-151 -153 1390 4 1390 3 75 13 c217 37 460 123 630 223 226 133 374 270 620 573 85 105 231 280 325 390 292 341 334 392 402 492 170 250 233 523 192 819 -67 482 -464 875 -959 950 l-95 14 -815 -1 c-448 -1 -826 -4 -840 -6z" transform="translate(0,1254) scale(0.1,-0.1)"></path></svg></span>
+          <span style="font-size:16px;font-weight:500;">spryteo</span>
+        </div>
+        <p style="font-size:13px;line-height:1.6;color:var(--muted);margin:0;max-width:260px;">Raster in, animateable SVG out. Built for developers and the agents that call them.</p>
+      </div>
+      <div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);margin-bottom:14px;">product</div>
+        <div style="display:flex;flex-direction:column;gap:9px;font-size:14px;">
+          <a href="#" onClick="{{ goDocs }}" style="color:var(--text);" style-hover="color:var(--accent);text-decoration:none;">docs</a>
+          <a href="https://github.com" target="_blank" rel="noopener" style="color:var(--text);" style-hover="color:var(--accent);text-decoration:none;">github</a>
+          <a href="https://www.npmjs.com" target="_blank" rel="noopener" style="color:var(--text);" style-hover="color:var(--accent);text-decoration:none;">npm</a>
+        </div>
+      </div>
+      <div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);margin-bottom:14px;">legal</div>
+        <div style="display:flex;flex-direction:column;gap:9px;font-size:14px;">
+          <a href="#" onClick="{{ goTerms }}" style="color:var(--text);" style-hover="color:var(--accent);text-decoration:none;">terms &amp; conditions</a>
+          <a href="#" onClick="{{ goPrivacy }}" style="color:var(--text);" style-hover="color:var(--accent);text-decoration:none;">privacy policy</a>
+        </div>
+      </div>
+      <div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);margin-bottom:14px;">advertisement</div>
+        <div style="border:1px solid var(--border);border-radius:4px;background:var(--surface);height:96px;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">ad · 300×90</div>
+      </div>
+    </div>
+    <div style="max-width:1200px;margin:0 auto;padding:0 32px 40px;display:flex;align-items:center;justify-content:space-between;gap:16px;border-top:1px solid var(--border);padding-top:22px;flex-wrap:wrap;">
+      <span style="font-size:13px;color:var(--muted);">© {{ year }} spryteo · MIT licensed</span>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);">made for developers &amp; agents</span>
+    </div>
+  </footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1200,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { page: 'home', runId: 1, copied: false, playing: false, gifIndex: 0, gifTick: 0 };
+
+  GIFS = [
+    { src: 'assets/hero-1.gif', dur: 2040 },
+    { src: 'assets/hero-2.gif', dur: 2480 },
+    { src: 'assets/hero-3.gif', dur: 1170 },
+    { src: 'assets/hero-4.gif', dur: 1040 },
+  ];
+
+  componentDidMount() { this.play(); this.cycleGif(); }
+
+  componentWillUnmount() { clearTimeout(this._t); clearTimeout(this._c); clearTimeout(this._g); }
+
+  cycleGif() {
+    clearTimeout(this._g);
+    const cur = this.GIFS[this.state.gifIndex] || this.GIFS[0];
+    this._g = setTimeout(() => {
+      this.setState(s => ({
+        gifIndex: (s.gifIndex + 1) % this.GIFS.length,
+        gifTick: s.gifTick + 1,
+      }), () => this.cycleGif());
+    }, cur.dur);
+  }
+
+  componentDidUpdate() {
+    if (this._lastPage !== this.state.page) {
+      this._lastPage = this.state.page;
+      if (typeof window !== 'undefined') window.scrollTo(0, 0);
+    }
+  }
+
+  go(page) { return (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({ page }); }; }
+
+  play() {
+    this.setState(s => ({ runId: s.runId + 1, playing: true }));
+    clearTimeout(this._t);
+    this._t = setTimeout(() => this.setState({ playing: false }), 2600);
+  }
+
+  runDemo = (e) => { if (e && e.preventDefault) e.preventDefault(); this.play(); };
+  onDragOver = (e) => { if (e && e.preventDefault) e.preventDefault(); };
+
+  copyInstall = () => {
+    try { navigator.clipboard && navigator.clipboard.writeText('npm install spryteo'); } catch (_) {}
+    this.setState({ copied: true });
+    clearTimeout(this._c);
+    this._c = setTimeout(() => this.setState({ copied: false }), 1600);
+  };
+
+  bolt() {
+    const R = React.createElement;
+    const D = 'M13 2 L4 14 L11 14 L9 22 L20 9 L13 9 Z';
+    return R('div', { key: this.state.runId, style: {
+        display: 'flex', alignItems: 'center', gap: 24, animation: 'sc-enter 300ms ease both' } },
+      // raster "before" chip
+      R('div', { style: { position: 'relative', width: 92, height: 92, borderRadius: 4,
+          border: '1px solid #26241F', background: '#0B0B0A', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', overflow: 'hidden' } },
+        R('div', { style: { position: 'absolute', inset: 0, opacity: 0.5,
+          backgroundImage: 'linear-gradient(#26241F 1px,transparent 1px),linear-gradient(90deg,#26241F 1px,transparent 1px)',
+          backgroundSize: '8px 8px' } }),
+        R('svg', { viewBox: '0 0 24 24', width: 54, height: 54, style: { position: 'relative', imageRendering: 'pixelated' } },
+          R('path', { d: D, fill: '#A3A199' })),
+        R('span', { style: { position: 'absolute', bottom: 5, left: 6, fontFamily: "'JetBrains Mono',monospace",
+          fontSize: 9, color: '#A3A199' } }, 'png')
+      ),
+      // arrow
+      R('span', { style: { fontFamily: "'JetBrains Mono',monospace", color: '#A3A199', fontSize: 20 } }, '→'),
+      // vector "after"
+      R('div', { style: { position: 'relative', width: 92, height: 92, borderRadius: 4,
+          border: '1px solid #26241F', background: '#0B0B0A', display: 'flex',
+          alignItems: 'center', justifyContent: 'center' } },
+        R('svg', { viewBox: '0 0 24 24', width: 54, height: 54,
+            style: { animation: 'sc-spry 640ms cubic-bezier(0.34,1.56,0.64,1) 900ms both', transformOrigin: 'center' } },
+          R('path', { d: D, pathLength: 100, fill: '#C6FF4B', stroke: '#C6FF4B', strokeWidth: 1,
+            strokeLinejoin: 'round', style: {
+              fillOpacity: 0, strokeDasharray: 100,
+              animation: 'sc-draw 800ms ease forwards, sc-fill 400ms ease 700ms forwards' } })),
+        R('span', { style: { position: 'absolute', bottom: 5, left: 6, fontFamily: "'JetBrains Mono',monospace",
+          fontSize: 9, color: '#C6FF4B' } }, 'svg')
+      )
+    );
+  }
+
+  idlePrompt() {
+    const R = React.createElement;
+    return R('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, color: '#A3A199' } },
+      R('svg', { width: 34, height: 34, viewBox: '0 0 24 24', fill: 'none', stroke: '#A3A199', strokeWidth: 1.4 },
+        R('path', { d: 'M12 16V4M12 4L7 9M12 4l5 5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+        R('path', { d: 'M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3', strokeLinecap: 'round' })),
+      R('span', { style: { fontFamily: "'JetBrains Mono',monospace", fontSize: 12 } }, 'drop a .png — or click to run'));
+  }
+
+  renderVals() {
+    const page = this.state.page;
+    return {
+      page,
+      isHome: page === 'home',
+      isDocs: page === 'docs',
+      isTerms: page === 'terms',
+      isPrivacy: page === 'privacy',
+      goHome: this.go('home'),
+      goDocs: this.go('docs'),
+      goTerms: this.go('terms'),
+      goPrivacy: this.go('privacy'),
+      ctaHeader: this.go('home'),
+      ctaHero: this.runDemo,
+      docsColor: page === 'docs' ? 'var(--accent)' : 'var(--muted)',
+      runDemo: this.runDemo,
+      onDragOver: this.onDragOver,
+      demoStage: this.bolt(),
+      gifSrc: (this.GIFS[this.state.gifIndex] || this.GIFS[0]).src,
+      demoCaption: 'icon.png → icon.svg · 1 path · 3 groups',
+      copyInstall: this.copyInstall,
+      copyLabel: this.state.copied ? 'copied' : 'copy',
+      copyColor: this.state.copied ? 'var(--accent)' : 'var(--muted)',
+      year: new Date().getFullYear(),
+      pipeline: [
+        { n: '01', title: 'Ingest', desc: 'Decode the raster at native resolution.' },
+        { n: '02', title: 'Trace', desc: 'Fit edges to continuous Bézier paths.' },
+        { n: '03', title: 'Group', desc: 'Cluster paths into semantic groups.' },
+        { n: '04', title: 'Optimize', desc: 'Merge, simplify, drop redundant nodes.' },
+        { n: '05', title: 'Emit', desc: 'Write clean, animateable SVG.' },
+      ],
+      terms: [
+        { h: 'Acceptance of terms', p: 'By accessing or using Spryteo — the website, the CLI, the API, the library, or the MCP server — you agree to these terms. If you do not agree, do not use the service.' },
+        { h: 'Use of the service', p: 'Spryteo converts raster images you supply into SVG. You are responsible for having the rights to any image you convert. Do not use the service to process content you are not permitted to use, or to break the law.' },
+        { h: 'Ad-supported free tier', p: 'The hosted web tool is free and supported by advertising. You agree not to block, obscure, or interfere with the operation of the service, including its advertising, in a way that circumvents its intended use.' },
+        { h: 'Open-source components', p: 'The Spryteo engine is released under the MIT license. Your use of the source code is governed by that license; these terms cover the hosted service and website.' },
+        { h: 'Intellectual property', p: 'You retain all rights to the images you upload and to the SVG output Spryteo produces from them. We claim no ownership over your content. The Spryteo name, logo, and site design remain ours.' },
+        { h: 'No warranty', p: 'The service is provided "as is," without warranties of any kind. Conversion is deterministic but automated; we do not guarantee that output will meet your requirements for every input.' },
+        { h: 'Limitation of liability', p: 'To the fullest extent permitted by law, Spryteo and its contributors are not liable for any indirect, incidental, or consequential damages arising from use of the service.' },
+        { h: 'Changes to these terms', p: 'We may update these terms as the service evolves. Material changes will be reflected in the "last updated" date above; continued use after a change constitutes acceptance.' },
+      ],
+      privacy: [
+        { h: 'Local-first processing', p: 'The CLI and library convert images entirely on your machine — nothing is uploaded. Images submitted to the hosted API or web demo are processed in memory to produce SVG and are not stored after the response is returned.' },
+        { h: 'What we collect', p: 'We collect the minimum needed to run the service: basic request metadata (timestamp, status, approximate region) and, on the website, standard server logs. We do not require an account and do not collect your name or address.' },
+        { h: 'Cookies and advertising', p: 'The free web tool serves ads and may use cookies set by our advertising partners to measure and display them. You can control cookies through your browser settings; blocking them may affect ad relevance but not the converter.' },
+        { h: 'Analytics', p: 'We use privacy-respecting, aggregate analytics to understand which features are used. These figures are not tied to individual identities.' },
+        { h: 'Your rights', p: 'You may request information about the limited data associated with your requests, or ask us to delete server logs tied to your activity, by contacting us. Because conversions are not stored, there is typically no image data to retrieve or remove.' },
+        { h: 'Contact', p: 'Questions about this policy can be sent to privacy@spryteo.dev. Material changes will be reflected in the "last updated" date above.' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

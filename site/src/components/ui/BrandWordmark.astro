@@ -1,0 +1,25 @@
+---
+import Logo from './Logo.astro';
+
+interface Props {
+  size?: number;
+  fontSize?: string;
+}
+
+const { fontSize = '18px' } = Astro.props;
+---
+
+<a href="#" id="goHome" class="wordmark" style={`font-size: ${fontSize};`}>
+  <Logo />
+  <span>spryteo</span>
+</a>
+
+<style>
+  .wordmark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text);
+    text-decoration: none;
+  }
+</style>

@@ -1,0 +1,25 @@
+---
+import Base from '../layouts/Base.astro';
+import Header from '../components/layout/Header.astro';
+import Footer from '../components/layout/Footer.astro';
+import Hero from '../components/sections/Hero.astro';
+import Features from '../components/sections/Features.astro';
+import HowItWorks from '../components/sections/HowItWorks.astro';
+import CTABand from '../components/sections/CTABand.astro';
+import ClientScript from '../components/ClientScript.astro';
+---
+
+<Base title="Spryteo — Raster to animateable SVG">
+  <Header />
+
+  <main style="flex: 1;">
+    <Hero />
+    <Features />
+    <HowItWorks />
+    <CTABand />
+  </main>
+
+  <Footer />
+</Base>
+
+<ClientScript />

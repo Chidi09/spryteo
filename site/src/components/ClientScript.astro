@@ -1,0 +1,270 @@
+<script>
+(function () {
+  interface GifFrame {
+    src: string;
+    dur: number;
+  }
+
+  const heroGifs: GifFrame[] = [
+    { src: '/assets/hero-1.gif', dur: 2040 },
+    { src: '/assets/hero-2.gif', dur: 2480 },
+    { src: '/assets/hero-3.gif', dur: 1170 },
+    { src: '/assets/hero-4.gif', dur: 1040 },
+  ];
+  let gifIndex = 0;
+  let gifTimer: ReturnType<typeof setTimeout>;
+
+  function cycleGif(): void {
+    clearTimeout(gifTimer);
+    const cur = heroGifs[gifIndex];
+    const el = document.getElementById('heroGif') as HTMLImageElement | null;
+    if (el) el.src = cur.src;
+    gifTimer = setTimeout(() => {
+      gifIndex = (gifIndex + 1) % heroGifs.length;
+      cycleGif();
+    }, cur.dur);
+  }
+  cycleGif();
+
+  function bind(id: string, fn: (this: HTMLElement, ev: MouseEvent) => void): void {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', fn);
+  }
+
+  const demoArea = document.getElementById('demoArea');
+  const demoContent = document.getElementById('demoContent');
+  const demoCaption = document.getElementById('demoCaption');
+  const fileInput = document.getElementById('fileInput') as HTMLInputElement | null;
+  const idleMarkup = demoContent ? demoContent.innerHTML : '';
+  const idleCaption = demoCaption ? demoCaption.textContent ?? '' : '';
+  const TRACE_PATH = 'M13 2 L4 14 L11 14 L9 22 L20 9 L13 9 Z';
+
+  let playing = false;
+  let playTimer: ReturnType<typeof setTimeout>;
+  let currentFile: File | null = null;
+
+  function traceMarkup(previewHtml: string): string {
+    return (
+      '<div style="display:flex;align-items:center;gap:24px;animation:sc-enter 300ms ease both;">' +
+        '<div style="position:relative;width:92px;height:92px;border-radius:4px;border:1px solid #26241F;background:#0B0B0A;display:flex;align-items:center;justify-content:center;overflow:hidden;">' +
+          previewHtml +
+        '</div>' +
+        '<span style="font-family:\'JetBrains Mono\',monospace;color:#A3A199;font-size:20px;">&#8594;</span>' +
+        '<div style="position:relative;width:92px;height:92px;border-radius:4px;border:1px solid #26241F;background:#0B0B0A;display:flex;align-items:center;justify-content:center;">' +
+          '<svg viewBox="0 0 24 24" width="54" height="54" style="animation:sc-spry 640ms cubic-bezier(0.34,1.56,0.64,1) 900ms both;transform-origin:center;">' +
+            '<path d="' + TRACE_PATH + '" pathLength="100" fill="#C6FF4B" stroke="#C6FF4B" stroke-width="1" stroke-linejoin="round" style="fill-opacity:0;stroke-dasharray:100;animation:sc-draw 800ms ease forwards, sc-fill 400ms ease 700ms forwards;"/>' +
+          '</svg>' +
+          '<span style="position:absolute;bottom:5px;left:6px;font-family:\'JetBrains Mono\',monospace;font-size:9px;color:#C6FF4B;">svg</span>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function runDemo(): void {
+    if (playing || !demoContent) return;
+    playing = true;
+    const pngPreview =
+      '<div style="position:absolute;inset:0;opacity:0.5;background-image:linear-gradient(#26241F 1px,transparent 1px),linear-gradient(90deg,#26241F 1px,transparent 1px);background-size:8px 8px;"></div>' +
+      '<svg viewBox="0 0 24 24" width="54" height="54" style="position:relative;image-rendering:pixelated;"><path d="' + TRACE_PATH + '" fill="#A3A199"/></svg>' +
+      '<span style="position:absolute;bottom:5px;left:6px;font-family:\'JetBrains Mono\',monospace;font-size:9px;color:#A3A199;">png</span>';
+    demoContent.innerHTML = traceMarkup(pngPreview);
+    if (demoCaption) demoCaption.textContent = idleCaption;
+    clearTimeout(playTimer);
+    playTimer = setTimeout(() => {
+      playing = false;
+    }, 2600);
+  }
+
+  // --- Real drag-and-drop upload -------------------------------------
+
+  const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/gif', 'image/webp'];
+  const MAX_SIZE_BYTES = 8 * 1024 * 1024;
+  const EXT_BY_TYPE: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/svg+xml': 'svg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+  };
+
+  interface ConvertResult {
+    svg?: string;
+  }
+
+  async function convertIcon(file: File): Promise<ConvertResult> {
+    // Wire the real backend here once it exists, e.g.:
+    //   const formData = new FormData();
+    //   formData.append('file', file);
+    //   const res = await fetch('/api/convert', { method: 'POST', body: formData });
+    //   if (!res.ok) throw new Error('conversion failed');
+    //   return res.json();
+    return new Promise((resolve) => setTimeout(() => resolve({}), 900));
+  }
+
+  function validateFile(file: File): string | null {
+    if (!ACCEPTED_TYPES.includes(file.type)) return 'unsupported file — use png, jpg, svg, gif or webp';
+    if (file.size > MAX_SIZE_BYTES) return 'file too large — 8MB max';
+    return null;
+  }
+
+  function showError(message: string): void {
+    if (!demoArea || !demoContent) return;
+    demoArea.classList.add('demo-error');
+    demoContent.innerHTML = '<span class="demo-idle-text demo-error-text">' + message + '</span>';
+    setTimeout(() => {
+      demoArea.classList.remove('demo-error');
+      if (demoContent) demoContent.innerHTML = idleMarkup;
+      if (demoCaption) demoCaption.textContent = idleCaption;
+    }, 2200);
+  }
+
+  function renderPreview(file: File): void {
+    if (!demoContent) return;
+    playing = true;
+    const objectUrl = URL.createObjectURL(file);
+    const ext = EXT_BY_TYPE[file.type] ?? 'img';
+    const imgPreview =
+      '<img src="' + objectUrl + '" alt="" style="max-width:70%;max-height:70%;position:relative;" />' +
+      '<span style="position:absolute;bottom:5px;left:6px;font-family:\'JetBrains Mono\',monospace;font-size:9px;color:#A3A199;">' + ext + '</span>';
+    demoContent.innerHTML = traceMarkup(imgPreview);
+    if (demoCaption) demoCaption.textContent = file.name + ' → converting…';
+
+    clearTimeout(playTimer);
+    playTimer = setTimeout(() => {
+      playing = false;
+    }, 2600);
+
+    convertIcon(file)
+      .then((result) => {
+        if (!demoCaption) return;
+        demoCaption.textContent = result.svg
+          ? file.name + ' → ' + file.name.replace(/\.[^.]+$/, '.svg')
+          : file.name + ' → ready for the API';
+      })
+      .catch(() => {
+        if (demoCaption) demoCaption.textContent = file.name + ' → conversion failed';
+      });
+  }
+
+  function handleFile(file: File): void {
+    const error = validateFile(file);
+    if (error) {
+      showError(error);
+      return;
+    }
+    currentFile = file;
+    stopAutoplay();
+    renderPreview(file);
+  }
+
+  function openFilePicker(): void {
+    fileInput?.click();
+  }
+
+  if (demoArea) {
+    ['dragenter', 'dragover'].forEach((evt) => {
+      demoArea.addEventListener(evt, (e) => {
+        e.preventDefault();
+        demoArea.classList.add('dragover');
+      });
+    });
+    ['dragleave', 'dragend'].forEach((evt) => {
+      demoArea.addEventListener(evt, (e) => {
+        e.preventDefault();
+        demoArea.classList.remove('dragover');
+      });
+    });
+    demoArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      demoArea.classList.remove('dragover');
+      const file = (e as DragEvent).dataTransfer?.files?.[0];
+      if (file) handleFile(file);
+    });
+    demoArea.addEventListener('click', () => openFilePicker());
+    demoArea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openFilePicker();
+      }
+    });
+  }
+
+  if (fileInput) {
+    fileInput.addEventListener('click', (e) => e.stopPropagation());
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      if (file) handleFile(file);
+      fileInput.value = '';
+    });
+  }
+
+  bind('ctaHero', () => {
+    demoArea?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    openFilePicker();
+  });
+  bind('heroDocs', () => { window.location.href = '/docs'; });
+  bind('ctaDocs', () => { window.location.href = '/docs'; });
+  bind('runDemo', () => {
+    if (currentFile) {
+      renderPreview(currentFile);
+    } else {
+      runDemo();
+    }
+  });
+
+  // --- Idle showcase autoplay (stops for good once a real file lands) -
+
+  let autoplayTimer: ReturnType<typeof setInterval> | undefined;
+
+  function stopAutoplay(): void {
+    clearInterval(autoplayTimer);
+  }
+
+  const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  if (!reduceMotion) {
+    const startAutoplay = (): void => {
+      clearInterval(autoplayTimer);
+      autoplayTimer = setInterval(() => {
+        if (!playing && !currentFile) runDemo();
+      }, 6800);
+    };
+    startAutoplay();
+    setTimeout(runDemo, 1100);
+
+    if (demoArea) {
+      demoArea.addEventListener('mouseenter', () => clearInterval(autoplayTimer));
+      demoArea.addEventListener('mouseleave', () => {
+        if (!currentFile) startAutoplay();
+      });
+    }
+  }
+
+  bind('copyInstall', () => {
+    try {
+      navigator.clipboard?.writeText('npm install spryteo');
+    } catch {
+      // clipboard unavailable — copy button becomes a no-op
+    }
+    const btn = document.getElementById('copyInstall');
+    if (!btn) return;
+    btn.textContent = 'copied';
+    btn.style.color = 'var(--accent)';
+    setTimeout(() => {
+      btn.textContent = 'copy';
+      btn.style.color = 'var(--muted)';
+    }, 1600);
+  });
+
+  const yearEl = document.getElementById('year');
+  if (yearEl) yearEl.textContent = String(new Date().getFullYear());
+
+  document.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+    b.addEventListener('mouseenter', () => {
+      b.style.transform = 'translateY(-2px)';
+    });
+    b.addEventListener('mouseleave', () => {
+      b.style.transform = '';
+    });
+  });
+})();
+</script>

@@ -1,0 +1,11 @@
+[package]
+name = "spryteo-raster"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Decode (PNG/JPEG/GIF/WebP/BMP), EXIF orientation, ICC to sRGB, preprocessing."
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true

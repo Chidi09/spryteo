@@ -1,0 +1,11 @@
+[package]
+name = "spryteo-geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Primitive recognition, geometry utilities, stable-ID hashing."
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true

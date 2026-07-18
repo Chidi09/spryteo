@@ -1,0 +1,75 @@
+---
+interface Step {
+  n: string;
+  title: string;
+  desc: string;
+}
+
+const steps: Step[] = [
+  { n: '01', title: 'Ingest', desc: 'Decode the raster at native resolution.' },
+  { n: '02', title: 'Trace', desc: 'Fit edges to continuous B&eacute;zier paths.' },
+  { n: '03', title: 'Group', desc: 'Cluster paths into semantic groups.' },
+  { n: '04', title: 'Optimize', desc: 'Merge, simplify, drop redundant nodes.' },
+  { n: '05', title: 'Emit', desc: 'Write clean, animateable SVG.' },
+];
+---
+
+<section class="section">
+  <h2 class="title">How it works</h2>
+  <p class="subtitle">Five deterministic steps, from pixels to a path you can animate.</p>
+  <div class="grid">
+    {steps.map((s) => (
+      <div class="card">
+        <div class="card-n">{s.n}</div>
+        <div class="card-title">{s.title}</div>
+        <div class="card-desc" set:html={s.desc} />
+      </div>
+    ))}
+  </div>
+</section>
+
+<style>
+  .section {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 64px 32px;
+  }
+  .title {
+    font-size: 32px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0 0 6px;
+  }
+  .subtitle {
+    font-size: 16px;
+    color: var(--muted);
+    margin: 0 0 34px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 20px;
+  }
+  .card-n {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+  .card-title {
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .card-desc {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+</style>

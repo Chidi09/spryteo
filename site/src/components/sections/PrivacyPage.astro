@@ -1,0 +1,61 @@
+---
+interface Section {
+  h: string;
+  p: string;
+}
+
+const sections: Section[] = [
+  { h: 'Local-first processing', p: 'The CLI and library convert images entirely on your machine &#8212; nothing is uploaded. Images submitted to the hosted API or web demo are processed in memory to produce SVG and are not stored after the response is returned.' },
+  { h: 'What we collect', p: 'We collect the minimum needed to run the service: basic request metadata (timestamp, status, approximate region) and, on the website, standard server logs. We do not require an account and do not collect your name or address.' },
+  { h: 'Cookies and advertising', p: 'The free web tool serves ads and may use cookies set by our advertising partners to measure and display them. You can control cookies through your browser settings; blocking them may affect ad relevance but not the converter.' },
+  { h: 'Analytics', p: 'We use privacy-respecting, aggregate analytics to understand which features are used. These figures are not tied to individual identities.' },
+  { h: 'Your rights', p: 'You may request information about the limited data associated with your requests, or ask us to delete server logs tied to your activity, by contacting us. Because conversions are not stored, there is typically no image data to retrieve or remove.' },
+  { h: 'Contact', p: 'Questions about this policy can be sent to privacy@spryteo.dev. Material changes will be reflected in the &ldquo;last updated&rdquo; date above.' },
+];
+---
+
+<div class="page">
+  <div class="meta">last updated &#8212; 18 july 2026</div>
+  <h1 class="title">Privacy policy</h1>
+  {sections.map((s) => (
+    <section class="section">
+      <h2 class="heading">{s.h}</h2>
+      <p class="para" set:html={s.p} />
+    </section>
+  ))}
+</div>
+
+<style>
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 64px 32px 96px;
+  }
+  .meta {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .title {
+    font-size: 40px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0 0 28px;
+  }
+  .section {
+    margin-bottom: 32px;
+  }
+  .heading {
+    font-size: 20px;
+    font-weight: 500;
+    margin: 0 0 10px;
+  }
+  .para {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--muted);
+    margin: 0;
+    text-wrap: pretty;
+  }
+</style>

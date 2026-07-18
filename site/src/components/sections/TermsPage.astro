@@ -1,0 +1,63 @@
+---
+interface Section {
+  h: string;
+  p: string;
+}
+
+const sections: Section[] = [
+  { h: 'Acceptance of terms', p: 'By accessing or using Spryteo &#8212; the website, the CLI, the API, the library, or the MCP server &#8212; you agree to these terms. If you do not agree, do not use the service.' },
+  { h: 'Use of the service', p: 'Spryteo converts raster images you supply into SVG. You are responsible for having the rights to any image you convert. Do not use the service to process content you are not permitted to use, or to break the law.' },
+  { h: 'Ad-supported free tier', p: 'The hosted web tool is free and supported by advertising. You agree not to block, obscure, or interfere with the operation of the service, including its advertising, in a way that circumvents its intended use.' },
+  { h: 'Open-source components', p: 'The Spryteo engine is released under the MIT license. Your use of the source code is governed by that license; these terms cover the hosted service and website.' },
+  { h: 'Intellectual property', p: 'You retain all rights to the images you upload and to the SVG output Spryteo produces from them. We claim no ownership over your content. The Spryteo name, logo, and site design remain ours.' },
+  { h: 'No warranty', p: 'The service is provided &ldquo;as is,&rdquo; without warranties of any kind. Conversion is deterministic but automated; we do not guarantee that output will meet your requirements for every input.' },
+  { h: 'Limitation of liability', p: 'To the fullest extent permitted by law, Spryteo and its contributors are not liable for any indirect, incidental, or consequential damages arising from use of the service.' },
+  { h: 'Changes to these terms', p: 'We may update these terms as the service evolves. Material changes will be reflected in the &ldquo;last updated&rdquo; date above; continued use after a change constitutes acceptance.' },
+];
+---
+
+<div class="page">
+  <div class="meta">last updated &#8212; 18 july 2026</div>
+  <h1 class="title">Terms and conditions</h1>
+  {sections.map((s) => (
+    <section class="section">
+      <h2 class="heading">{s.h}</h2>
+      <p class="para" set:html={s.p} />
+    </section>
+  ))}
+</div>
+
+<style>
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 64px 32px 96px;
+  }
+  .meta {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .title {
+    font-size: 40px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0 0 28px;
+  }
+  .section {
+    margin-bottom: 32px;
+  }
+  .heading {
+    font-size: 20px;
+    font-weight: 500;
+    margin: 0 0 10px;
+  }
+  .para {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--muted);
+    margin: 0;
+    text-wrap: pretty;
+  }
+</style>

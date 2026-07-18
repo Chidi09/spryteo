@@ -1,0 +1,123 @@
+---
+import Logo from '../ui/Logo.astro';
+---
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div>
+      <div class="footer-brand">
+        <Logo size={22} />
+        <span class="footer-brand-name">spryteo</span>
+      </div>
+      <p class="footer-desc">Raster in, animateable SVG out. Built for developers and the agents that call them.</p>
+    </div>
+    <div>
+      <div class="footer-label">product</div>
+      <div class="footer-links">
+        <a href="/docs" class="footer-link">docs</a>
+        <a href="https://github.com" target="_blank" rel="noopener" class="footer-link">github</a>
+        <a href="https://www.npmjs.com" target="_blank" rel="noopener" class="footer-link">npm</a>
+      </div>
+    </div>
+    <div>
+      <div class="footer-label">legal</div>
+      <div class="footer-links">
+        <a href="/terms" class="footer-link">terms &amp; conditions</a>
+        <a href="/privacy" class="footer-link">privacy policy</a>
+      </div>
+    </div>
+    <div>
+      <div class="footer-label">advertisement</div>
+      <div class="ad-placeholder">ad &middot; 300&times;90</div>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span class="footer-muted">&copy; <span id="year"></span> spryteo &middot; MIT licensed</span>
+    <span class="footer-mono">made for developers &amp; agents</span>
+  </div>
+</footer>
+
+<style>
+  .footer {
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .footer-grid {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 48px 32px 28px;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1fr 1.2fr;
+    gap: 32px;
+  }
+  .footer-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    color: var(--text);
+  }
+  .footer-brand-name {
+    font-size: 16px;
+    font-weight: 500;
+  }
+  .footer-desc {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--muted);
+    margin: 0;
+    max-width: 260px;
+  }
+  .footer-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .footer-links {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    font-size: 14px;
+  }
+  .footer-link {
+    color: var(--text);
+  }
+  .footer-link:hover {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .ad-placeholder {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    height: 96px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .footer-bottom {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 32px 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    border-top: 1px solid var(--border);
+    padding-top: 22px;
+    flex-wrap: wrap;
+  }
+  .footer-muted {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .footer-mono {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+</style>

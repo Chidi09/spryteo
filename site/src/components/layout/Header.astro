@@ -1,0 +1,126 @@
+---
+import BrandWordmark from '../ui/BrandWordmark.astro';
+import ClippedButton from '../ui/ClippedButton.astro';
+---
+
+<header class="header">
+  <a href="/" id="goHome" style="text-decoration:none;">
+    <BrandWordmark />
+  </a>
+
+  <button id="navToggle" class="nav-toggle" type="button" aria-label="Toggle menu" aria-expanded="false" aria-controls="siteNav">
+    <span></span><span></span><span></span>
+  </button>
+
+  <nav class="nav" id="siteNav">
+    <a href="/docs" class="nav-link">docs</a>
+    <a href="https://github.com" target="_blank" rel="noopener" class="nav-link">github</a>
+    <ClippedButton id="ctaHeader" variant="primary" tag="a" href="/#demoArea">convert an icon</ClippedButton>
+  </nav>
+</header>
+
+<script>
+  const toggle = document.getElementById('navToggle');
+  const nav = document.getElementById('siteNav');
+  if (toggle && nav) {
+    toggle.addEventListener('click', () => {
+      const open = nav.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', String(open));
+    });
+    nav.querySelectorAll('a').forEach((link) => {
+      link.addEventListener('click', () => {
+        nav.classList.remove('open');
+        toggle.setAttribute('aria-expanded', 'false');
+      });
+    });
+  }
+</script>
+
+<style>
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(11, 11, 10, 0.82);
+    backdrop-filter: blur(10px);
+  }
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .nav-link {
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 14px;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+  }
+  .nav-link:hover {
+    color: var(--text);
+    text-decoration: none;
+  }
+  .nav-toggle {
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+  .nav-toggle span {
+    display: block;
+    width: 15px;
+    height: 1.5px;
+    background: var(--text);
+    border-radius: 1px;
+    transition: transform var(--transition-fast), opacity var(--transition-fast);
+  }
+  .nav-toggle[aria-expanded='true'] span:nth-child(1) {
+    transform: translateY(5.5px) rotate(45deg);
+  }
+  .nav-toggle[aria-expanded='true'] span:nth-child(2) {
+    opacity: 0;
+  }
+  .nav-toggle[aria-expanded='true'] span:nth-child(3) {
+    transform: translateY(-5.5px) rotate(-45deg);
+  }
+
+  @media (max-width: 720px) {
+    .nav-toggle {
+      display: flex;
+    }
+    .nav {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 2px;
+      padding: 12px 20px 20px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      display: none;
+    }
+    .nav.open {
+      display: flex;
+    }
+    .nav-link {
+      padding: 12px 10px;
+    }
+  }
+</style>

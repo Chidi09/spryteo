@@ -1,0 +1,58 @@
+---
+interface Props {
+  id?: string;
+  tag?: 'button' | 'a';
+  href?: string;
+  target?: string;
+  rel?: string;
+  variant?: 'primary' | 'secondary';
+}
+
+const { id, tag: Tag = 'button', href, target, rel, variant = 'primary' } = Astro.props;
+
+const isPrimary = variant === 'primary';
+const clipSize = isPrimary ? '13px' : '11px';
+---
+
+<Tag {id} href={href || undefined} {target} {rel} class={`btn btn-${variant}`}>
+  <slot />
+</Tag>
+
+<style>
+  .btn {
+    border: 0;
+    cursor: pointer;
+    padding: 13px 22px;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--accent-ink);
+    background: var(--accent);
+    clip-path: polygon(13px 0, 100% 0, 100% 100%, 0 100%, 0 13px);
+    transition: transform var(--transition-bounce);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+  }
+  .btn:hover {
+    transform: translateY(-2px);
+  }
+  .btn:active {
+    transform: translateY(0) scale(0.97);
+  }
+  .btn-secondary {
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    clip-path: none;
+    transition: border-color var(--transition-fast), transform var(--transition-bounce);
+  }
+  .btn-secondary:hover {
+    border-color: var(--muted);
+    transform: translateY(-2px);
+  }
+  .btn-secondary:active {
+    transform: translateY(0) scale(0.98);
+  }
+</style>

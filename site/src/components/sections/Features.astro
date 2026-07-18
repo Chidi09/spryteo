@@ -1,0 +1,62 @@
+---
+interface Feature {
+  tag: string;
+  title: string;
+  desc: string;
+}
+
+const features: Feature[] = [
+  { tag: 'CLI &middot; API &middot; lib', title: 'One engine, every surface', desc: 'Run it from the terminal, call the API, or import the library. Same output wherever you work.' },
+  { tag: '&lt;g&gt; groups', title: 'Actually animateable', desc: 'Single continuous paths, not one flattened blob. Semantic groups you can target and tween.' },
+  { tag: 'MIT', title: 'Free and open', desc: 'Runs locally &#8212; no upload, no account. The source is on GitHub under an MIT license.' },
+  { tag: 'MCP', title: 'Ready for agents', desc: 'Ships an MCP server so agents can convert icons without leaving the chat.' },
+];
+---
+
+<section class="section">
+  <div class="grid">
+    {features.map((f) => (
+      <div class="card">
+        <div class="card-tag" set:html={f.tag} />
+        <h3 class="card-title">{f.title}</h3>
+        <p class="card-desc" set:html={f.desc} />
+      </div>
+    ))}
+  </div>
+</section>
+
+<style>
+  .section {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 64px 32px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 24px;
+  }
+  .card-tag {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+  .card-title {
+    font-size: 18px;
+    font-weight: 500;
+    margin: 0 0 8px;
+  }
+  .card-desc {
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--muted);
+    margin: 0;
+  }
+</style>

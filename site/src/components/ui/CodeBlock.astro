@@ -1,0 +1,19 @@
+---
+const { html } = Astro.props;
+---
+
+<div class="code-block" set:html={html} />
+
+<style>
+  .code-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px 18px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1.7;
+    overflow-x: auto;
+    margin: 0 0 44px;
+  }
+</style>

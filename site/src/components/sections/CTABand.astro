@@ -1,0 +1,68 @@
+---
+import ClippedButton from '../ui/ClippedButton.astro';
+---
+
+<section class="section">
+  <div class="band">
+    <div>
+      <h2 class="title">Read the docs, or star it on GitHub.</h2>
+      <p class="subtitle">Everything you need to wire Spryteo into a build step, a service, or an agent.</p>
+    </div>
+    <div class="actions">
+      <ClippedButton id="ctaDocs" variant="primary">read the docs</ClippedButton>
+      <a href="https://github.com" target="_blank" rel="noopener" class="btn-ghost">github</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .section {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 48px 32px 96px;
+  }
+  .band {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 32px;
+    flex-wrap: wrap;
+  }
+  .title {
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+  }
+  .subtitle {
+    font-size: 15px;
+    color: var(--muted);
+    margin: 0;
+  }
+  .actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .btn-ghost {
+    padding: 13px 22px;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    transition: border-color var(--transition-fast), transform var(--transition-bounce);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+  }
+  .btn-ghost:hover {
+    border-color: var(--muted);
+    transform: translateY(-2px);
+    text-decoration: none;
+  }
+</style>

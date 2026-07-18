@@ -1,0 +1,91 @@
+---
+import CodeBlock from '../ui/CodeBlock.astro';
+---
+
+<div class="page">
+  <div class="docs-meta">docs &#183; v1.0</div>
+  <h1 class="docs-title">Documentation</h1>
+  <p class="docs-desc">Spryteo converts raster images and icons into clean, animateable SVG. Install it, then reach for whichever surface fits your workflow &#8212; CLI, HTTP API, library, or MCP.</p>
+
+  <h2 class="heading">Install</h2>
+  <p class="para">Requires Node 18 or newer. Install globally for the CLI, or as a dependency for the library.</p>
+  <CodeBlock html='<span style="color:var(--muted);">$</span> npm install -g spryteo<br><span style="color:var(--muted);"># or, as a project dependency</span><br><span style="color:var(--muted);">$</span> npm install spryteo' />
+
+  <h2 class="heading">Quick start &#8212; CLI</h2>
+  <p class="para">Point it at a raster file. It writes a grouped, animateable SVG next to the source.</p>
+  <CodeBlock html='<span style="color:var(--muted);">$</span> spryteo ./icon.png <span style="color:var(--accent);">--groups</span> <span style="color:var(--accent);">--out</span> ./icon.svg<br><span style="color:var(--muted);">  traced 1 path &#183; 3 groups &#183; 2.1 kb &#8594; ./icon.svg</span>' />
+
+  <h2 class="heading">HTTP API</h2>
+  <p class="para">POST an image, get SVG back. The body is the raw file; the response is <code class="inline-code">image/svg+xml</code>.</p>
+  <CodeBlock html='<span style="color:var(--muted);">$</span> curl <span style="color:var(--accent);">-X</span> POST https://api.spryteo.dev/v1/convert \<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--accent);">-H</span> "content-type: image/png" \<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--accent);">--data-binary</span> @icon.png' />
+
+  <h2 class="heading">Library</h2>
+  <p class="para">Import the async <code class="inline-code">convert()</code> function. It returns an SVG string plus the group map.</p>
+  <CodeBlock html='<span style="color:var(--accent);">import</span> { convert } <span style="color:var(--accent);">from</span> <span style="color:var(--muted);">&#39;spryteo&#39;</span><br><br><span style="color:var(--accent);">const</span> { svg, groups } = <span style="color:var(--accent);">await</span> convert(buffer, {<br>&nbsp;&nbsp;groups: <span style="color:var(--accent);">true</span>,<br>&nbsp;&nbsp;simplify: <span style="color:var(--muted);">0.4</span>,<br>})' />
+
+  <h2 class="heading">MCP server</h2>
+  <p class="para">Register Spryteo as an MCP server and agents can convert icons in-conversation. Add this to your client config:</p>
+  <CodeBlock html='{<br>&nbsp;&nbsp;<span style="color:var(--muted);">&quot;mcpServers&quot;</span>: {<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--muted);">&quot;spryteo&quot;</span>: { <span style="color:var(--muted);">&quot;command&quot;</span>: <span style="color:var(--accent);">&quot;spryteo-mcp&quot;</span> }<br>&nbsp;&nbsp;}<br>}' />
+
+  <div class="docs-footer">
+    <span class="docs-footer-text">Full reference lives in the</span>
+    <a href="https://github.com" target="_blank" rel="noopener" class="docs-footer-link">GitHub README &#8594;</a>
+  </div>
+</div>
+
+<style>
+  .page {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 64px 32px 96px;
+  }
+  .docs-meta {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+  .docs-title {
+    font-size: 44px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0 0 16px;
+  }
+  .docs-desc {
+    font-size: 17px;
+    line-height: 1.65;
+    color: var(--muted);
+    margin: 0 0 48px;
+  }
+  .heading {
+    font-size: 24px;
+    font-weight: 500;
+    margin: 0 0 12px;
+    scroll-margin-top: 90px;
+  }
+  .para {
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+  .inline-code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+  }
+  .docs-footer {
+    border-top: 1px solid var(--border);
+    padding-top: 28px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .docs-footer-text {
+    font-size: 15px;
+    color: var(--muted);
+  }
+  .docs-footer-link {
+    font-size: 15px;
+  }
+</style>
