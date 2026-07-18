@@ -9,3 +9,5 @@ description = "Primitive recognition, geometry utilities, stable-ID hashing."
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+blake3 = "1"
+spryteo-core = { path = "../spryteo-core" }

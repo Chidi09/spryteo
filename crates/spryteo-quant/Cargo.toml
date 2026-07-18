@@ -7,5 +7,9 @@ authors.workspace = true
 description = "Color quantization, layering, palette handling."
 
 [dependencies]
+spryteo-core = { path = "../spryteo-core" }
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

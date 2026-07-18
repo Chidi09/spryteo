@@ -7,5 +7,5 @@ authors.workspace = true
 description = "Decode (PNG/JPEG/GIF/WebP/BMP), EXIF orientation, ICC to sRGB, preprocessing."
 
 [dependencies]
-serde.workspace = true
-thiserror.workspace = true
+spryteo-core = { path = "../spryteo-core" }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
