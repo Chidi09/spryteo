@@ -33,7 +33,7 @@ name = "pipeline"
 harness = false
 
 [dev-dependencies]
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 criterion = "0.5"
 resvg = "0.44"
 tiny-skia = "0.11"

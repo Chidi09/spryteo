@@ -76,7 +76,10 @@ fn test_corpus_quality_harness() {
     let corpus_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/corpus");
     let expected_dir = corpus_dir.join("expected");
 
-    let categories = ["icons", "pixel-art", "line-art", "photos"];
+    // "real" holds user-supplied evaluation images (png/gif, converted in
+    // Auto mode). Its SSIM gate starts looser than the synthetic categories;
+    // raise it as the engine improves rather than treating 0.80 as the goal.
+    let categories = ["icons", "pixel-art", "line-art", "photos", "real"];
 
     let mut current_budgets: BTreeMap<String, Budget> = BTreeMap::new();
     let budgets_path = expected_dir.join("budgets.json");
@@ -96,7 +99,11 @@ fn test_corpus_quality_harness() {
         let mut entries: Vec<_> = fs::read_dir(&cat_dir)
             .unwrap()
             .map(|e| e.unwrap())
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|ext| ext == "png" || ext == "gif")
+            })
             .collect();
         entries.sort_by_key(|e| e.path());
 
@@ -105,11 +112,10 @@ fn test_corpus_quality_harness() {
             let name = png_path.file_stem().unwrap().to_str().unwrap();
             let key = format!("{}/{}", category, name);
 
-            let png_bytes = fs::read(&png_path).expect("failed to read png");
-            let input_img =
-                image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png)
-                    .expect("failed to decode input png")
-                    .to_rgba8();
+            let png_bytes = fs::read(&png_path).expect("failed to read fixture");
+            let input_img = image::load_from_memory(&png_bytes)
+                .expect("failed to decode input fixture")
+                .to_rgba8();
             let width = input_img.width() as usize;
             let height = input_img.height() as usize;
 
@@ -239,6 +245,7 @@ fn test_corpus_quality_harness() {
                 "pixel-art" => 0.92,
                 "photos" => 0.85,
                 "line-art" => 0.90,
+                "real" => 0.80,
                 _ => 0.0,
             };
 

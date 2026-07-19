@@ -102,5 +102,13 @@
   "pixel-art/star_32": {
     "bytes": 774,
     "nodes": 2
+  },
+  "real/dj_logo_1024": {
+    "bytes": 213118,
+    "nodes": 409
+  },
+  "real/runner_lineart_480": {
+    "bytes": 230710,
+    "nodes": 699
   }
 }
