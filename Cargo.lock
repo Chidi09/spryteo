@@ -1129,6 +1129,8 @@ name = "spryteo-semantic"
 version = "0.0.1"
 dependencies = [
  "serde",
+ "serde_json",
+ "spryteo-core",
  "thiserror",
 ]
 
