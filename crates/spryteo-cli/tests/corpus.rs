@@ -240,6 +240,39 @@ fn test_corpus_quality_harness() {
 
             let ssim = compute_ssim(&input_luma, &output_luma, width, height);
 
+            let mut total_mae = 0.0f64;
+            for y in 0..height {
+                for x in 0..width {
+                    let pixel = input_img.get_pixel(x as u32, y as u32);
+                    let r_in_orig = pixel[0] as f32;
+                    let g_in_orig = pixel[1] as f32;
+                    let b_in_orig = pixel[2] as f32;
+                    let a_in_orig = pixel[3] as f32;
+
+                    let alpha_frac = a_in_orig / 255.0;
+                    let r_in = r_in_orig * alpha_frac + 255.0 * (1.0 - alpha_frac);
+                    let g_in = g_in_orig * alpha_frac + 255.0 * (1.0 - alpha_frac);
+                    let b_in = b_in_orig * alpha_frac + 255.0 * (1.0 - alpha_frac);
+
+                    let idx = (y * width + x) * 4;
+                    let r_out_orig = pixmap_data[idx] as f32;
+                    let g_out_orig = pixmap_data[idx + 1] as f32;
+                    let b_out_orig = pixmap_data[idx + 2] as f32;
+                    let a_out_orig = pixmap_data[idx + 3] as f32;
+
+                    let r_out = r_out_orig + (255.0 - a_out_orig);
+                    let g_out = g_out_orig + (255.0 - a_out_orig);
+                    let b_out = b_out_orig + (255.0 - a_out_orig);
+
+                    let dr = (r_in - r_out).abs();
+                    let dg = (g_in - g_out).abs();
+                    let db = (b_in - b_out).abs();
+
+                    total_mae += ((dr + dg + db) / 3.0) as f64;
+                }
+            }
+            let mae = total_mae / (width * height) as f64;
+
             let gate = match category {
                 "icons" => 0.92,
                 "pixel-art" => 0.92,
@@ -250,6 +283,7 @@ fn test_corpus_quality_harness() {
             };
 
             eprintln!("SSIM for {}: {:.4} (gate: {:.2})", key, ssim, gate);
+            eprintln!("MAE for {}: {:.4}", key, mae);
             assert!(
                 ssim >= gate,
                 "SSIM gate failure for {}: got {:.4}, expected >= {:.2}\nSVG content: {:?}",

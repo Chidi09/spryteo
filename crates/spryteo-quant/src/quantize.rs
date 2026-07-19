@@ -99,13 +99,42 @@ pub fn quantize(
     }
 
     // Check exact-histogram shortcut
-    let mut stack = if let Some(unique) = unique_rgb_up_to(&pixel_data, target) {
-        build_exact_layers(pixels, width, height, &unique, target)
+    let mut clusters = if let Some(unique) = unique_rgb_up_to(&pixel_data, target) {
+        get_exact_clusters(pixels, width, height, &unique)
     } else {
         // k-means clustering
         let assignments = kmeans_pp(&pixel_data, target, seed);
-        build_kmeans_layers(pixels, width, height, &pixel_data, &assignments, target)
+        get_kmeans_clusters(width, height, &pixel_data, &assignments, target)
     };
+
+    dissolve_blend_clusters(&mut clusters, &pixel_data, total);
+
+    let mut surviving_clusters: Vec<Cluster> = clusters.into_iter().filter(|c| c.active).collect();
+
+    // Sort by first-appearance scan order
+    let mut order: Vec<usize> = (0..surviving_clusters.len()).collect();
+    order.sort_by_key(|&idx| {
+        let mut first = total;
+        for i in 0..total {
+            if surviving_clusters[idx].mask[i] != 0 {
+                first = i;
+                break;
+            }
+        }
+        first
+    });
+
+    let layers: Vec<Layer> = order
+        .into_iter()
+        .enumerate()
+        .map(|(z, idx)| Layer {
+            mask: std::mem::take(&mut surviving_clusters[idx].mask),
+            color: surviving_clusters[idx].color,
+            z_order: z,
+        })
+        .collect();
+
+    let mut stack = LayerStack { layers };
 
     if let Layering::Stacked = layering {
         apply_stacked_layering(&mut stack);
@@ -140,6 +169,33 @@ struct PixelInfo {
     pixel_index: usize,
     rgb: Rgb,
     lab: Lab,
+}
+
+/// The maximum population fraction of total assigned pixels for a cluster to
+/// qualify as a blend of two larger clusters. If a cluster's population
+/// fraction is equal to or greater than this, it is considered too large/significant
+/// to be dissolved as a minor blend (anti-aliasing halo layer).
+const BLEND_MAX_FRACTION: f64 = 0.10;
+
+/// The maximum CIELAB distance from a candidate blend cluster's centroid to
+/// the line segment connecting the centroids of two larger clusters. A lower
+/// distance ensures that only clusters that lie very close to the interpolation
+/// line are dissolved, while a higher distance is more permissive of noisy/curved blends.
+const BLEND_LINE_DIST: f64 = 4.0;
+
+/// The maximum CIELAB distance below which a smaller cluster is merged fully
+/// into a larger cluster. This is set around the "just-noticeable difference"
+/// (JND) threshold of 2.3 Lab units to deduplicate visually indistinguishable
+/// color layers.
+const DEDUPE_DIST: f64 = 2.3;
+
+#[derive(Debug, Clone)]
+struct Cluster {
+    index: usize,
+    centroid: Lab,
+    color: Rgb,
+    mask: Vec<u8>,
+    active: bool,
 }
 
 /// A simple deterministic PRNG (xorshift64*) for k-means++ initialisation.
@@ -411,81 +467,48 @@ fn kmeans_pp(data: &[PixelInfo], k: usize, seed: u64) -> Vec<usize> {
     assignments
 }
 
-// ── LayerStack builders ──────────────────────────────────────────────────────
+// ── LayerStack builders and Dissolution ──────────────────────────────────────
 
-/// Build a `LayerStack` from an exact colour histogram.
-///
-/// Each unique colour becomes one layer.  If `unique.len() < target`, the
-/// colour count is used as-is.
-#[allow(clippy::needless_range_loop)] // strided flat-pixel-buffer indexing (idx = i * 4) and per-cluster mask lookup
-fn build_exact_layers(
-    pixels: &[u8],
-    width: u32,
-    height: u32,
-    unique: &[Rgb],
-    _target: usize,
-) -> LayerStack {
+fn get_exact_clusters(pixels: &[u8], width: u32, height: u32, unique: &[Rgb]) -> Vec<Cluster> {
     let total = (width * height) as usize;
     let k = unique.len();
-    let mut masks = vec![vec![0u8; total]; k];
+    let mut clusters = Vec::with_capacity(k);
+    for (ci, &color) in unique.iter().enumerate().take(k) {
+        let centroid = color::srgb_to_lab(&color);
+        clusters.push(Cluster {
+            index: ci,
+            centroid,
+            color,
+            mask: vec![0u8; total],
+            active: true,
+        });
+    }
 
     for i in 0..total {
         let idx = i * 4;
+        let a = pixels[idx + 3];
+        if a == 0 {
+            continue;
+        }
         let c = Rgb {
             r: pixels[idx],
             g: pixels[idx + 1],
             b: pixels[idx + 2],
         };
-        // Exclude fully transparent pixels from all masks
-        let a = pixels[idx + 3];
-        if a == 0 {
-            continue;
-        }
-        // Find which unique colour this pixel matches
         if let Some(ci) = unique.iter().position(|u| *u == c) {
-            masks[ci][i] = 255;
+            clusters[ci].mask[i] = 255;
         }
     }
-
-    // Sort by first-appearance scan order
-    let mut order: Vec<usize> = (0..k).collect();
-    order.sort_by_key(|&ci| {
-        let mut first = total;
-        for i in 0..total {
-            if masks[ci][i] != 0 {
-                first = i;
-                break;
-            }
-        }
-        first
-    });
-
-    let layers: Vec<Layer> = order
-        .into_iter()
-        .enumerate()
-        .map(|(z, ci)| Layer {
-            mask: std::mem::take(&mut masks[ci]),
-            color: unique[ci],
-            z_order: z,
-        })
-        .collect();
-
-    LayerStack { layers }
+    clusters
 }
 
-/// Build a `LayerStack` from k-means cluster assignments.
-///
-/// Each cluster becomes one layer.  The cluster colour is the k-means
-/// centroid (mean Lab → sRGB).
-#[allow(clippy::needless_range_loop)] // indexes small (k-length) colour/mask vectors
-fn build_kmeans_layers(
-    _pixels: &[u8],
+fn get_kmeans_clusters(
     width: u32,
     height: u32,
     data: &[PixelInfo],
     assignments: &[usize],
     k: usize,
-) -> LayerStack {
+) -> Vec<Cluster> {
     let total = (width * height) as usize;
     let mut masks = vec![vec![0u8; total]; k];
     let mut lab_sums = vec![(0.0_f64, 0.0_f64, 0.0_f64); k];
@@ -500,49 +523,201 @@ fn build_kmeans_layers(
         counts[cluster] += 1;
     }
 
-    // Also need to mark pixels that were excluded (alpha = 0)
-    // They already have mask = 0 for all clusters, which is correct.
-
-    // Compute cluster colours (mean Lab → sRGB)
-    let mut colors: Vec<Rgb> = Vec::with_capacity(k);
+    let mut clusters = Vec::with_capacity(k);
     for c in 0..k {
-        if counts[c] > 0 {
+        let centroid = if counts[c] > 0 {
             let n = counts[c] as f64;
-            let lab = Lab {
+            Lab {
                 l: lab_sums[c].0 / n,
                 a: lab_sums[c].1 / n,
                 b: lab_sums[c].2 / n,
-            };
-            colors.push(color::lab_to_srgb(&lab));
+            }
         } else {
-            colors.push(Rgb { r: 0, g: 0, b: 0 });
-        }
+            color::srgb_to_lab(&Rgb { r: 0, g: 0, b: 0 })
+        };
+        let color = color::lab_to_srgb(&centroid);
+        clusters.push(Cluster {
+            index: c,
+            centroid,
+            color,
+            mask: std::mem::take(&mut masks[c]),
+            active: true,
+        });
+    }
+    clusters
+}
+
+#[allow(clippy::needless_range_loop)]
+fn dissolve_blend_clusters(clusters: &mut [Cluster], pixel_data: &[PixelInfo], total: usize) {
+    let total_assigned_pixels = pixel_data.len();
+    if total_assigned_pixels == 0 {
+        return;
     }
 
-    // Sort by first-appearance scan order
-    let mut order: Vec<usize> = (0..k).collect();
-    order.sort_by_key(|&ci| {
-        let mut first = total;
-        for i in 0..total {
-            if masks[ci][i] != 0 {
-                first = i;
-                break;
+    // Lookup table for pixel Lab colors
+    let mut pixel_labs = vec![None; total];
+    for pi in pixel_data {
+        pixel_labs[pi.pixel_index] = Some(pi.lab);
+    }
+
+    for _iter in 0..8 {
+        // 1. Compute populations of active clusters
+        let mut active_indices: Vec<usize> = (0..clusters.len())
+            .filter(|&idx| clusters[idx].active)
+            .collect();
+
+        if active_indices.len() <= 1 {
+            break;
+        }
+
+        let mut populations = vec![0; clusters.len()];
+        for &idx in &active_indices {
+            populations[idx] = clusters[idx].mask.iter().filter(|&&v| v == 255).count();
+        }
+
+        // Sort active indices from smallest population to largest
+        // Tie-break: lower cluster index first
+        active_indices.sort_by(|&i1, &i2| {
+            let p1 = populations[i1];
+            let p2 = populations[i2];
+            if p1 != p2 {
+                p1.cmp(&p2)
+            } else {
+                clusters[i1].index.cmp(&clusters[i2].index)
+            }
+        });
+
+        let mut changed = false;
+
+        // Process from smallest population to largest
+        for i in 0..active_indices.len() {
+            let c_idx = active_indices[i];
+            if !clusters[c_idx].active {
+                continue;
+            }
+
+            let c_pop = populations[c_idx];
+            let c_lab = clusters[c_idx].centroid;
+
+            // d. Deduplication: if c's centroid is within DEDUPE_DIST of a LARGER cluster a, merge fully into a
+            let mut best_merge_idx = None;
+            let mut min_merge_dist = f64::MAX;
+
+            for &a_idx in active_indices.iter().skip(i + 1) {
+                if !clusters[a_idx].active {
+                    continue;
+                }
+                let a_lab = clusters[a_idx].centroid;
+                let dist = color::lab_distance_sq(&c_lab, &a_lab).sqrt();
+                if dist < DEDUPE_DIST && dist < min_merge_dist {
+                    min_merge_dist = dist;
+                    best_merge_idx = Some(a_idx);
+                }
+            }
+
+            if let Some(a_idx) = best_merge_idx {
+                for p in 0..total {
+                    if clusters[c_idx].mask[p] > 0 {
+                        clusters[a_idx].mask[p] = 255;
+                        clusters[c_idx].mask[p] = 0;
+                    }
+                }
+                clusters[c_idx].active = false;
+                changed = true;
+                continue;
+            }
+
+            // b. Blend dissolution: c with population fraction < BLEND_MAX_FRACTION
+            let c_frac = c_pop as f64 / total_assigned_pixels as f64;
+            if c_frac < BLEND_MAX_FRACTION {
+                let mut best_pair = None;
+                let mut min_segment_dist = f64::MAX;
+
+                for j in (i + 1)..active_indices.len() {
+                    let a_idx = active_indices[j];
+                    if !clusters[a_idx].active {
+                        continue;
+                    }
+                    let a_lab = clusters[a_idx].centroid;
+
+                    for &b_idx in active_indices.iter().skip(j + 1) {
+                        if !clusters[b_idx].active {
+                            continue;
+                        }
+                        let b_lab = clusters[b_idx].centroid;
+
+                        let v_l = b_lab.l - a_lab.l;
+                        let v_a = b_lab.a - a_lab.a;
+                        let v_b = b_lab.b - a_lab.b;
+                        let len_sq = v_l * v_l + v_a * v_a + v_b * v_b;
+
+                        if len_sq > 1e-9 {
+                            let t = ((c_lab.l - a_lab.l) * v_l
+                                + (c_lab.a - a_lab.a) * v_a
+                                + (c_lab.b - a_lab.b) * v_b)
+                                / len_sq;
+
+                            if t > 0.10 && t < 0.90 {
+                                let p_l = a_lab.l + t * v_l;
+                                let p_a = a_lab.a + t * v_a;
+                                let p_b = a_lab.b + t * v_b;
+
+                                let dist = ((c_lab.l - p_l).powi(2)
+                                    + (c_lab.a - p_a).powi(2)
+                                    + (c_lab.b - p_b).powi(2))
+                                .sqrt();
+
+                                if dist < BLEND_LINE_DIST && dist < min_segment_dist {
+                                    min_segment_dist = dist;
+                                    best_pair = Some((a_idx, b_idx));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some((a_idx, b_idx)) = best_pair {
+                    let a_lab = clusters[a_idx].centroid;
+                    let b_lab = clusters[b_idx].centroid;
+
+                    let v_l = b_lab.l - a_lab.l;
+                    let v_a = b_lab.a - a_lab.a;
+                    let v_b = b_lab.b - a_lab.b;
+                    let len_sq = v_l * v_l + v_a * v_a + v_b * v_b;
+
+                    for p in 0..total {
+                        if clusters[c_idx].mask[p] > 0 {
+                            let p_lab = pixel_labs[p].unwrap();
+                            let t_p = if len_sq > 1e-9 {
+                                (((p_lab.l - a_lab.l) * v_l
+                                    + (p_lab.a - a_lab.a) * v_a
+                                    + (p_lab.b - a_lab.b) * v_b)
+                                    / len_sq)
+                                    .clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            };
+
+                            let mask_val = clusters[c_idx].mask[p] as f64;
+                            let val_a = ((1.0 - t_p) * mask_val).round() as u8;
+                            let val_b = (t_p * mask_val).round() as u8;
+
+                            clusters[a_idx].mask[p] = clusters[a_idx].mask[p].saturating_add(val_a);
+                            clusters[b_idx].mask[p] = clusters[b_idx].mask[p].saturating_add(val_b);
+                            clusters[c_idx].mask[p] = 0;
+                        }
+                    }
+
+                    clusters[c_idx].active = false;
+                    changed = true;
+                }
             }
         }
-        first
-    });
 
-    let layers: Vec<Layer> = order
-        .into_iter()
-        .enumerate()
-        .map(|(z, ci)| Layer {
-            mask: std::mem::take(&mut masks[ci]),
-            color: colors[ci],
-            z_order: z,
-        })
-        .collect();
-
-    LayerStack { layers }
+        if !changed {
+            break;
+        }
+    }
 }
 
 /// Build a `LayerStack` by assigning each pixel to the nearest palette
