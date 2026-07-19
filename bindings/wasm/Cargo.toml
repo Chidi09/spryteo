@@ -1,0 +1,29 @@
+[package]
+name = "spryteo-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "wasm-bindgen browser build of the Spryteo engine; powers the hero demo."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+spryteo-core = { path = "../../crates/spryteo-core" }
+spryteo-raster = { path = "../../crates/spryteo-raster" }
+spryteo-quant = { path = "../../crates/spryteo-quant" }
+spryteo-trace = { path = "../../crates/spryteo-trace" }
+spryteo-fit = { path = "../../crates/spryteo-fit" }
+spryteo-stroke = { path = "../../crates/spryteo-stroke" }
+spryteo-svg = { path = "../../crates/spryteo-svg" }
+
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+serde-wasm-bindgen = "0.6"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
