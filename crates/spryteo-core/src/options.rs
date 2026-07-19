@@ -207,6 +207,13 @@ pub struct ConvertOptions {
     /// even when arcs are detected in geometry.
     pub arcs: bool,
 
+    /// Force monochrome fill color to inherit via `currentColor`.
+    /// When enabled and the output contains exactly one flat fill color
+    /// (excluding any background rect), that fill color is written as
+    /// `currentColor` instead of a hex value.
+    #[serde(alias = "currentColor")]
+    pub current_color: bool,
+
     /// Output markup format (§3.13).  Controls whether the SVG string
     /// is minified, pretty-printed, or transformed for React JSX.
     pub output: OutputFormat,
@@ -246,6 +253,7 @@ impl Default for ConvertOptions {
             background: Background::Keep,
             alpha_mode: AlphaMode::Keep,
             arcs: false,
+            current_color: false,
             output: OutputFormat::Svg,
             emit_css: None,
             max_pixels: 16_000_000,

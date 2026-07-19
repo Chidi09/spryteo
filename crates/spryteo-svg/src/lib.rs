@@ -443,6 +443,42 @@ fn serialize_defs(grads: &[(String, &Fill)], opts: &ConvertOptions) -> String {
     out
 }
 
+fn analyze_scene_fills(scene: &SceneGraph) -> (Option<Rgb>, bool) {
+    let mut flat_fills = Vec::new();
+    let mut has_gradient = false;
+
+    fn traverse_group(group: &Group, flat_fills: &mut Vec<Rgb>, has_gradient: &mut bool) {
+        for node in &group.nodes {
+            match &node.fill {
+                Some(Fill::Solid(rgb)) => {
+                    if !flat_fills.contains(rgb) {
+                        flat_fills.push(*rgb);
+                    }
+                }
+                Some(Fill::LinearGradient { .. }) | Some(Fill::RadialGradient { .. }) => {
+                    *has_gradient = true;
+                }
+                None => {}
+            }
+        }
+        for child in &group.groups {
+            traverse_group(child, flat_fills, has_gradient);
+        }
+    }
+
+    for group in &scene.groups {
+        traverse_group(group, &mut flat_fills, &mut has_gradient);
+    }
+
+    if has_gradient {
+        (None, false)
+    } else if flat_fills.len() == 1 {
+        (Some(flat_fills[0]), true)
+    } else {
+        (None, false)
+    }
+}
+
 /// Serializes the scene graph into an SVG string according to conversion options.
 fn serialize_svg(
     scene: &SceneGraph,
@@ -450,6 +486,7 @@ fn serialize_svg(
     height: u32,
     opts: &ConvertOptions,
     background_rect_color: Option<Rgb>,
+    current_color_applied: bool,
 ) -> String {
     let precision = opts.precision as usize;
     let pretty = matches!(opts.output, OutputFormat::SvgPretty | OutputFormat::Jsx);
@@ -530,12 +567,16 @@ fn serialize_svg(
 
             match &node.fill {
                 Some(Fill::Solid(rgb)) => {
-                    write!(
-                        node_attrs,
-                        " fill=\"#{:02x}{:02x}{:02x}\"",
-                        rgb.r, rgb.g, rgb.b
-                    )
-                    .unwrap();
+                    if current_color_applied {
+                        write!(node_attrs, " fill=\"currentColor\"").unwrap();
+                    } else {
+                        write!(
+                            node_attrs,
+                            " fill=\"#{:02x}{:02x}{:02x}\"",
+                            rgb.r, rgb.g, rgb.b
+                        )
+                        .unwrap();
+                    }
                 }
                 Some(Fill::LinearGradient { .. }) | Some(Fill::RadialGradient { .. }) => {
                     let grad_id = format!("grad-{}", node.id);
@@ -932,7 +973,20 @@ pub fn emit_svg(
         }
     }
 
-    let svg = serialize_svg(scene, width, height, opts, background_rect_color);
+    let (_target_color, current_color_applied) = if opts.current_color {
+        analyze_scene_fills(scene)
+    } else {
+        (None, false)
+    };
+
+    let svg = serialize_svg(
+        scene,
+        width,
+        height,
+        opts,
+        background_rect_color,
+        current_color_applied,
+    );
     let byte_count = svg.len();
 
     let stats = Stats {
@@ -944,6 +998,7 @@ pub fn emit_svg(
     let meta = Meta {
         nodes: nodes_meta,
         stats,
+        current_color_applied,
     };
 
     ConvertResult { svg, meta }
@@ -1450,6 +1505,7 @@ pub fn emit_stroke_svg(
     let meta = Meta {
         nodes: nodes_meta,
         stats,
+        current_color_applied: false,
     };
 
     ConvertResult { svg, meta }
@@ -2180,5 +2236,125 @@ mod tests {
             res_two.svg, res_two_second.svg,
             "SVG outputs must be byte-identical"
         );
+    }
+
+    #[test]
+    fn test_current_color_behavior() {
+        // 1. Single-color scene + flag -> currentColor and meta flag true
+        let curves_single = CurveSet {
+            curves: vec![Curve {
+                segments: vec![
+                    PathElement::MoveTo(0.0, 0.0),
+                    PathElement::LineTo(10.0, 0.0),
+                    PathElement::ClosePath,
+                ],
+                primitive: None,
+            }],
+        };
+        let fills_single = vec![Fill::Solid(Rgb { r: 255, g: 0, b: 0 })];
+        let scene_single = build_scene_graph(
+            &curves_single,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills_single,
+            false,
+        );
+        let mut opts = make_test_options();
+        opts.current_color = true;
+
+        let res_single = emit_svg(
+            &scene_single,
+            100,
+            100,
+            &opts,
+            Some(Rgb { r: 0, g: 255, b: 0 }),
+        );
+        assert!(res_single.svg.contains("fill=\"currentColor\""));
+        // background rect keeps its real color
+        assert!(res_single.svg.contains("fill=\"#00ff00\""));
+        assert!(res_single.meta.current_color_applied);
+
+        // 2. Two-color scene + flag -> hex fills unchanged and meta flag false
+        let curves_two = CurveSet {
+            curves: vec![
+                Curve {
+                    segments: vec![
+                        PathElement::MoveTo(0.0, 0.0),
+                        PathElement::LineTo(10.0, 0.0),
+                        PathElement::ClosePath,
+                    ],
+                    primitive: None,
+                },
+                Curve {
+                    segments: vec![
+                        PathElement::MoveTo(10.0, 10.0),
+                        PathElement::LineTo(20.0, 20.0),
+                        PathElement::ClosePath,
+                    ],
+                    primitive: None,
+                },
+            ],
+        };
+        let fills_two = vec![
+            Fill::Solid(Rgb { r: 255, g: 0, b: 0 }),
+            Fill::Solid(Rgb { r: 0, g: 0, b: 255 }),
+        ];
+        let scene_two = build_scene_graph(
+            &curves_two,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills_two,
+            false,
+        );
+        let res_two = emit_svg(&scene_two, 100, 100, &opts, None);
+        assert!(!res_two.svg.contains("fill=\"currentColor\""));
+        assert!(res_two.svg.contains("fill=\"#ff0000\""));
+        assert!(res_two.svg.contains("fill=\"#0000ff\""));
+        assert!(!res_two.meta.current_color_applied);
+
+        // 3. Gradient present + flag -> unchanged/false
+        let curves_grad = CurveSet {
+            curves: vec![Curve {
+                segments: vec![
+                    PathElement::MoveTo(0.0, 0.0),
+                    PathElement::LineTo(10.0, 0.0),
+                    PathElement::ClosePath,
+                ],
+                primitive: None,
+            }],
+        };
+        let fills_grad = vec![Fill::LinearGradient {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 1.0,
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: Rgb { r: 255, g: 0, b: 0 },
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: Rgb { r: 0, g: 0, b: 255 },
+                },
+            ],
+        }];
+        let scene_grad = build_scene_graph(
+            &curves_grad,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills_grad,
+            false,
+        );
+        let res_grad = emit_svg(&scene_grad, 100, 100, &opts, None);
+        assert!(!res_grad.svg.contains("fill=\"currentColor\""));
+        assert!(!res_grad.meta.current_color_applied);
+
+        // 4. Flag off -> unchanged/false even for single color
+        opts.current_color = false;
+        let res_off = emit_svg(&scene_single, 100, 100, &opts, None);
+        assert!(!res_off.svg.contains("fill=\"currentColor\""));
+        assert!(res_off.svg.contains("fill=\"#ff0000\""));
+        assert!(!res_off.meta.current_color_applied);
     }
 }

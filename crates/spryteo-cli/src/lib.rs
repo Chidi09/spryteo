@@ -382,6 +382,7 @@ mod tests {
                         path_count: 0,
                         byte_count: 12,
                     },
+                    current_color_applied: false,
                 },
             })
         });
@@ -672,6 +673,7 @@ mod tests {
                 path_count: 1,
                 byte_count: 42,
             },
+            current_color_applied: false,
         };
 
         let report = format_meta_report(&meta);
@@ -801,5 +803,74 @@ mod tests {
         if let Some(g_idx) = res_rect.svg.find("<g") {
             assert!(rect_idx < g_idx, "rect should come before group");
         }
+    }
+
+    #[test]
+    fn test_e2e_current_color_synthetic_image() {
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+        use spryteo_core::Background;
+        use std::io::Cursor;
+
+        // Generate synthetic PNG: 32x32 white background with red circle
+        let mut img = RgbaImage::new(32, 32);
+        for pixel in img.pixels_mut() {
+            *pixel = Rgba([255, 255, 255, 255]);
+        }
+        for y in 0..32 {
+            for x in 0..32 {
+                let dx = x as f32 - 15.5;
+                let dy = y as f32 - 15.5;
+                if dx * dx + dy * dy <= 8.0 * 8.0 {
+                    img.put_pixel(x, y, Rgba([255, 0, 0, 255]));
+                }
+            }
+        }
+
+        let mut png_bytes = Vec::new();
+        DynamicImage::ImageRgba8(img)
+            .write_to(&mut Cursor::new(&mut png_bytes), ImageFormat::Png)
+            .unwrap();
+
+        // Convert with current_color = true, background = Drop so no background rect is present
+        let opts = ConvertOptions {
+            current_color: true,
+            background: Background::Drop,
+            ..ConvertOptions::default()
+        };
+        let res = run_convert(&png_bytes, &opts).unwrap();
+
+        assert!(
+            res.svg.contains("fill=\"currentColor\""),
+            "SVG should use currentColor: {}",
+            res.svg
+        );
+        assert!(
+            !res.svg.contains("fill=\"#ff0000\""),
+            "SVG should not contain the original red fill: {}",
+            res.svg
+        );
+        assert!(
+            res.meta.current_color_applied,
+            "meta.current_color_applied should be true"
+        );
+
+        // Convert with background = Rect to verify background rect keeps its color
+        let opts_rect = ConvertOptions {
+            current_color: true,
+            background: Background::Rect,
+            ..ConvertOptions::default()
+        };
+        let res_rect = run_convert(&png_bytes, &opts_rect).unwrap();
+        assert!(
+            res_rect.svg.contains("fill=\"currentColor\""),
+            "SVG should still use currentColor: {}",
+            res_rect.svg
+        );
+        // The background rect is white (since original background was white) -> #ffffff
+        assert!(
+            res_rect.svg.contains("fill=\"#ffffff\""),
+            "Background rect should keep its original color: {}",
+            res_rect.svg
+        );
     }
 }

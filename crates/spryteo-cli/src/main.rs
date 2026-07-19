@@ -87,6 +87,10 @@ struct ConvertArgs {
     #[arg(long)]
     pretty: bool,
 
+    /// Force monochrome fill color to inherit via currentColor
+    #[arg(long)]
+    current_color: bool,
+
     /// Write the metadata sidecar as JSON to this path
     #[arg(long)]
     json: Option<std::path::PathBuf>,
@@ -122,6 +126,7 @@ fn main() {
                 smoothness: args.smoothness.unwrap_or(default_opts.smoothness),
                 turdsize: args.turdsize.unwrap_or(default_opts.turdsize),
                 precision: args.precision.unwrap_or(default_opts.precision),
+                current_color: args.current_color,
                 output: if args.pretty {
                     OutputFormat::SvgPretty
                 } else {

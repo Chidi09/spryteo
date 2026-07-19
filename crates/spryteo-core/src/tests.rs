@@ -21,6 +21,7 @@ fn default_options() {
     assert!(matches!(opts.background, Background::Keep));
     assert!(matches!(opts.alpha_mode, AlphaMode::Keep));
     assert!(!opts.arcs);
+    assert!(!opts.current_color);
     assert!(matches!(opts.output, OutputFormat::Svg));
     assert!(opts.emit_css.is_none());
     assert_eq!(opts.max_pixels, 16_000_000);
@@ -51,6 +52,7 @@ fn convert_options_serde_round_trip() {
             b: 255,
         }),
         arcs: true,
+        current_color: true,
         output: OutputFormat::SvgPretty,
         emit_css: Some(Preset::Draw),
         max_pixels: 4_000_000,
@@ -86,6 +88,7 @@ fn convert_options_serde_round_trip() {
         })
     ));
     assert!(deserialized.arcs);
+    assert!(deserialized.current_color);
     assert!(matches!(deserialized.output, OutputFormat::SvgPretty));
     assert!(matches!(deserialized.emit_css, Some(Preset::Draw)));
     assert_eq!(deserialized.max_pixels, 4_000_000);
@@ -208,6 +211,7 @@ fn meta_serde_round_trip() {
             path_count: 1,
             byte_count: 4096,
         },
+        current_color_applied: true,
     };
 
     let json = serde_json::to_string(&meta).unwrap();
@@ -219,6 +223,21 @@ fn meta_serde_round_trip() {
     assert_eq!(deserialized.stats.node_count, 2);
     assert_eq!(deserialized.stats.path_count, 1);
     assert_eq!(deserialized.stats.byte_count, 4096);
+    assert!(deserialized.current_color_applied);
+}
+
+#[test]
+fn meta_deserialization_defaults() {
+    let json = r#"{
+        "nodes": [],
+        "stats": {
+            "node_count": 0,
+            "path_count": 0,
+            "byte_count": 0
+        }
+    }"#;
+    let deserialized: Meta = serde_json::from_str(json).unwrap();
+    assert!(!deserialized.current_color_applied);
 }
 
 #[test]
@@ -272,4 +291,15 @@ fn scene_graph_deterministic_serialization() {
     let bytes_a = serde_json::to_vec(&sg).unwrap();
     let bytes_b = serde_json::to_vec(&sg).unwrap();
     assert_eq!(bytes_a, bytes_b);
+}
+
+#[test]
+fn test_camel_case_alias() {
+    let mut default_val = serde_json::to_value(ConvertOptions::default()).unwrap();
+    if let Some(obj) = default_val.as_object_mut() {
+        obj.insert("currentColor".to_string(), serde_json::Value::Bool(true));
+        obj.remove("current_color");
+    }
+    let deserialized: ConvertOptions = serde_json::from_value(default_val).unwrap();
+    assert!(deserialized.current_color);
 }

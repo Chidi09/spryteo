@@ -301,6 +301,8 @@ pub struct NodeMeta {
 pub struct Meta {
     pub nodes: Vec<NodeMeta>,
     pub stats: Stats,
+    #[serde(default)]
+    pub current_color_applied: bool,
 }
 
 /// The top-level result returned by every conversion surface.

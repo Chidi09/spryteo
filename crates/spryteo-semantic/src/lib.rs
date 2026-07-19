@@ -546,6 +546,7 @@ mod tests {
                 path_count: 3,
                 byte_count: 0,
             },
+            current_color_applied: false,
         };
 
         let (nested_scene, updated_meta) = group_by_containment(&scene, &meta);
@@ -617,6 +618,7 @@ mod tests {
                 path_count: 2,
                 byte_count: 0,
             },
+            current_color_applied: false,
         };
 
         let (nested_scene, updated_meta) = group_by_containment(&scene, &meta);
@@ -683,6 +685,7 @@ mod tests {
                 path_count: 2,
                 byte_count: 0,
             },
+            current_color_applied: false,
         };
 
         let mask_a = Mask {
@@ -759,6 +762,7 @@ mod tests {
                 path_count: 1,
                 byte_count: 0,
             },
+            current_color_applied: false,
         };
 
         // Mask only has 25% overlap with the layer
