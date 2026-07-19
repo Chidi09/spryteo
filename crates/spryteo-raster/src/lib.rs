@@ -3,5 +3,5 @@
 pub mod decode;
 pub mod preprocess;
 
-pub use decode::decode;
+pub use decode::{decode, is_jpeg};
 pub use preprocess::{bilateral_filter, deblock, estimate_jpeg_quality, preprocess};

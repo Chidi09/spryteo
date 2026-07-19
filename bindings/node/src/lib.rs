@@ -3,8 +3,8 @@
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use spryteo_core::{
-    Contour, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode, RasterImage,
-    SpryteoError, Tri,
+    ClassifiedInput, Contour, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode,
+    RasterImage, SpryteoError, Tri,
 };
 
 fn count_contour_and_children(c: &Contour) -> usize {
@@ -66,8 +66,16 @@ fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, Spr
     let raster_image = spryteo_raster::decode(bytes, opts)?;
     let width = raster_image.width;
     let height = raster_image.height;
+    let was_jpeg = spryteo_raster::is_jpeg(bytes);
 
     let classified = spryteo_quant::classify(raster_image, &opts.mode);
+    let preprocessed_image =
+        spryteo_raster::preprocess(classified.image, &classified.mode, was_jpeg);
+    let classified = ClassifiedInput {
+        image: preprocessed_image,
+        mode: classified.mode,
+        background_color: classified.background_color,
+    };
     let layer_stack =
         spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
     let contour_set = spryteo_trace::extract_contours(&layer_stack, width, height, opts.turdsize);

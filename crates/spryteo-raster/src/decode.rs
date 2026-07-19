@@ -100,3 +100,12 @@ pub fn decode(bytes: &[u8], opts: &ConvertOptions) -> Result<RasterImage, Spryte
         pixels,
     })
 }
+
+/// Whether `bytes` sniffs (by magic bytes, same as `decode`) as JPEG.
+///
+/// Exposed so callers can decide whether to run JPEG-specific
+/// preprocessing (deblocking) without re-implementing format sniffing
+/// or depending on the `image` crate directly.
+pub fn is_jpeg(bytes: &[u8]) -> bool {
+    matches!(image::guess_format(bytes), Ok(ImageFormat::Jpeg))
+}
