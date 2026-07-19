@@ -8,6 +8,12 @@
 
 use spryteo_core::ir::{Contour, ContourSet, Curve, CurveSet, PathElement};
 
+/// Maximum perpendicular deviation (px) of contour points from a chord for
+/// the run to be emitted as a straight `LineTo` instead of a fitted cubic.
+/// Matches the polygon stage's 0.5px straightness spirit; straight edges
+/// force-fit through Beziers waste bytes and look subtly melted.
+const STRAIGHT_TOL: f64 = 0.5;
+
 /// Fits the contours in a `ContourSet` into a flat `CurveSet` of fitted vector paths.
 ///
 /// This is the public entry point for the curve fitting pipeline.
@@ -233,7 +239,7 @@ fn fit_single_contour(contour: &Contour, tolerance: f32, smoothness: f32) -> Cur
                 let mut straight = true;
                 for &idx in &span_indices[1..span_indices.len() - 1] {
                     let pt = points[idx];
-                    if perpendicular_distance(pt, q0, q_last) > tolerance as f64 {
+                    if perpendicular_distance(pt, q0, q_last) > STRAIGHT_TOL {
                         straight = false;
                         break;
                     }
@@ -304,6 +310,58 @@ fn fit_single_contour(contour: &Contour, tolerance: f32, smoothness: f32) -> Cur
         raw_elements.extend(merged);
     }
     raw_elements.push(PathElement::ClosePath);
+
+    // Merge consecutive collinear LineTos: straight-run recovery splits at
+    // recursion midpoints, so one physical edge can arrive as several
+    // collinear pieces. Greedily extend each merged chord while every
+    // dropped vertex stays within STRAIGHT_TOL of it.
+    let raw_elements = {
+        let mut out: Vec<PathElement> = Vec::with_capacity(raw_elements.len());
+        let mut prev_pt = start_pt;
+        let mut i = 0;
+        while i < raw_elements.len() {
+            if matches!(raw_elements[i], PathElement::LineTo(_, _)) {
+                let mut run: Vec<(f64, f64)> = Vec::new();
+                while i < raw_elements.len() {
+                    if let PathElement::LineTo(x, y) = raw_elements[i] {
+                        run.push((x, y));
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let mut base = prev_pt;
+                let mut s = 0;
+                while s < run.len() {
+                    let mut e = s;
+                    'extend: while e + 1 < run.len() {
+                        let cand = run[e + 1];
+                        for &v in &run[s..=e] {
+                            if perpendicular_distance(v, base, cand) > STRAIGHT_TOL {
+                                break 'extend;
+                            }
+                        }
+                        e += 1;
+                    }
+                    out.push(PathElement::LineTo(run[e].0, run[e].1));
+                    base = run[e];
+                    s = e + 1;
+                }
+                prev_pt = base;
+            } else {
+                let elem = raw_elements[i].clone();
+                prev_pt = match elem {
+                    PathElement::MoveTo(x, y) => (x, y),
+                    PathElement::LineTo(x, y) => (x, y),
+                    PathElement::CurveTo(_, _, _, _, x, y) => (x, y),
+                    PathElement::ClosePath => start_pt,
+                };
+                out.push(elem);
+                i += 1;
+            }
+        }
+        out
+    };
 
     // Stage 4: Numeric hygiene & sanitization
     let mut sanitized_elements = Vec::new();
@@ -498,6 +556,24 @@ fn fit_recursive(
     elements: &mut Vec<(PathElement, usize, usize)>,
 ) {
     let points: Vec<(f64, f64)> = indices.iter().map(|&idx| contour_points[idx]).collect();
+
+    // Straight-run recovery: if every point sits within STRAIGHT_TOL of the
+    // chord, a LineTo represents the run exactly — no cubic needed. The
+    // chord test needs distinct endpoints (a closed loop entering here has
+    // a degenerate chord and must recurse instead).
+    let q_first = points[0];
+    let q_last = *points.last().unwrap();
+    let chord_len_sq = (q_last.0 - q_first.0).powi(2) + (q_last.1 - q_first.1).powi(2);
+    if points.len() >= 2 && chord_len_sq > 1e-12 {
+        let is_straight = points[1..points.len() - 1]
+            .iter()
+            .all(|&p| perpendicular_distance(p, q_first, q_last) <= STRAIGHT_TOL);
+        if is_straight {
+            elements.push((PathElement::LineTo(q_last.0, q_last.1), start_pos, end_pos));
+            return;
+        }
+    }
+
     let start_tangent = if constrain_start {
         Some(contour_tangents[indices[0]])
     } else {
@@ -512,8 +588,6 @@ fn fit_recursive(
     let (c1, c2) = fit_bezier_segment(&points, start_tangent, end_tangent);
 
     let max_dev = evaluate_bezier_error(&points, c1, c2);
-
-    let q_last = *points.last().unwrap();
 
     // If the fit exceeds tolerance, we split at the midpoint.
     if max_dev <= tolerance || indices.len() <= 2 {
@@ -570,7 +644,13 @@ pub(crate) fn merge_bezier_segments(
         let mut current_elem = elements[i].clone();
         let mut j = i;
 
-        while j + 1 < elements.len() {
+        // Straight runs stay straight: merging re-fits a cubic across the
+        // combined range, which would melt a recovered LineTo back into a
+        // Bezier — never merge from or across one.
+        while j + 1 < elements.len()
+            && !matches!(current_elem.0, PathElement::LineTo(_, _))
+            && !matches!(elements[j + 1].0, PathElement::LineTo(_, _))
+        {
             let next_end = elements[j + 1].2;
             let start_pos = current_elem.1;
             let end_pos = next_end;
@@ -1044,20 +1124,22 @@ mod tests {
             layers: vec![vec![contour]],
         };
 
-        // Very high smoothness (1.3) should treat corners as smooth and round them, introducing CurveTo
+        // Very high smoothness (1.3) treats corners as smooth, but
+        // straight-run recovery still represents the square's exactly
+        // straight edges as LineTos rather than melting them into cubics.
         let curve_set = fit_contours(&set, 0.5, 1.3);
         assert_eq!(curve_set.curves.len(), 1);
         let curve = &curve_set.curves[0];
 
-        let mut curve_to_count = 0;
+        let mut line_to_count = 0;
         for elem in &curve.segments {
-            if let PathElement::CurveTo(_, _, _, _, _, _) = elem {
-                curve_to_count += 1;
+            if let PathElement::LineTo(_, _) = elem {
+                line_to_count += 1;
             }
         }
         assert!(
-            curve_to_count > 0,
-            "high smoothness should introduce curve elements"
+            line_to_count >= 3,
+            "straight edges should be recovered as lines even without detected corners"
         );
         assert_finite_elements(&curve.segments);
     }

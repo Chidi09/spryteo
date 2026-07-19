@@ -1,6 +1,6 @@
 {
   "icons/chevron_48": {
-    "bytes": 1455,
+    "bytes": 942,
     "nodes": 3
   },
   "icons/circle_256": {
@@ -8,11 +8,11 @@
     "nodes": 5
   },
   "icons/circle_48": {
-    "bytes": 2355,
+    "bytes": 1724,
     "nodes": 5
   },
   "icons/overlapping_256": {
-    "bytes": 4519,
+    "bytes": 1308,
     "nodes": 3
   },
   "icons/ring_256": {
@@ -32,35 +32,35 @@
     "nodes": 3
   },
   "icons/star_256": {
-    "bytes": 9058,
+    "bytes": 2476,
     "nodes": 3
   },
   "icons/traffic_light_256": {
-    "bytes": 5190,
+    "bytes": 3734,
     "nodes": 19
   },
   "line-art/arcs_256": {
-    "bytes": 7072,
+    "bytes": 2134,
     "nodes": 3
   },
   "line-art/segments_256": {
-    "bytes": 1921,
+    "bytes": 1217,
     "nodes": 2
   },
   "line-art/spiral_256": {
-    "bytes": 17524,
+    "bytes": 5747,
     "nodes": 2
   },
   "line-art/squiggle_256": {
-    "bytes": 14256,
+    "bytes": 3451,
     "nodes": 2
   },
   "line-art/zigzag_256": {
-    "bytes": 20691,
+    "bytes": 3466,
     "nodes": 2
   },
   "photos/gradient_d_256": {
-    "bytes": 6036,
+    "bytes": 4045,
     "nodes": 8
   },
   "photos/gradient_h_256": {
@@ -80,7 +80,7 @@
     "nodes": 5
   },
   "photos/landscape_256": {
-    "bytes": 2007,
+    "bytes": 1010,
     "nodes": 2
   },
   "pixel-art/brick_32": {
@@ -96,19 +96,19 @@
     "nodes": 5
   },
   "pixel-art/sprite_32": {
-    "bytes": 1889,
+    "bytes": 1457,
     "nodes": 4
   },
   "pixel-art/star_32": {
-    "bytes": 774,
+    "bytes": 686,
     "nodes": 2
   },
   "real/dj_logo_1024": {
-    "bytes": 180002,
+    "bytes": 128053,
     "nodes": 313
   },
   "real/runner_lineart_480": {
-    "bytes": 21049,
+    "bytes": 13238,
     "nodes": 18
   }
 }
