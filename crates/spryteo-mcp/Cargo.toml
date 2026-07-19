@@ -1,0 +1,33 @@
+[package]
+name = "spryteo-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "MCP server exposing the Spryteo engine as agent-callable tools (convert_image, inspect_svg)."
+
+[[bin]]
+name = "spryteo-mcp"
+path = "src/main.rs"
+
+[dependencies]
+spryteo-core = { path = "../spryteo-core" }
+spryteo-raster = { path = "../spryteo-raster" }
+spryteo-quant = { path = "../spryteo-quant" }
+spryteo-trace = { path = "../spryteo-trace" }
+spryteo-fit = { path = "../spryteo-fit" }
+spryteo-stroke = { path = "../spryteo-stroke" }
+spryteo-svg = { path = "../spryteo-svg" }
+
+serde.workspace = true
+serde_json.workspace = true
+rmcp = { version = "2", features = ["server", "macros", "transport-io", "schemars"] }
+schemars = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "signal"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
