@@ -138,13 +138,15 @@ const FIXED_SEED: u64 = 42;
 
 pub fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, SpryteoError> {
     let raster_image = spryteo_raster::decode(bytes, opts)?;
-    let width = raster_image.width;
-    let height = raster_image.height;
     let was_jpeg = spryteo_raster::is_jpeg(bytes);
 
     let classified = spryteo_quant::classify(raster_image, &opts.mode);
+    let downscaled_image =
+        spryteo_raster::downscale_large_photo(classified.image, &classified.mode);
+    let width = downscaled_image.width;
+    let height = downscaled_image.height;
     let preprocessed_image =
-        spryteo_raster::preprocess(classified.image, &classified.mode, was_jpeg);
+        spryteo_raster::preprocess(downscaled_image, &classified.mode, was_jpeg);
     let classified = ClassifiedInput {
         image: preprocessed_image,
         mode: classified.mode,
@@ -190,6 +192,34 @@ pub fn run_convert_stroke(
     Ok(result)
 }
 
+/// Runs `f`, converting a caught panic into `SpryteoError::Internal` instead
+/// of unwinding out of the CLI process. Mirrors the `catch_unwind` pattern
+/// already used in `bindings/wasm`, `bindings/node`, and `crates/spryteo-mcp`
+/// -- extracted as its own function so the panic-to-error conversion is
+/// directly unit-testable without needing a real panic trigger somewhere
+/// deep in the pipeline.
+fn catch_pipeline_panic<F>(f: F) -> Result<ConvertResult, SpryteoError>
+where
+    F: FnOnce() -> Result<ConvertResult, SpryteoError>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(panic_payload) => {
+            let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic".to_string()
+            };
+            Err(SpryteoError::Internal(format!(
+                "Pipeline panicked: {}",
+                msg
+            )))
+        }
+    }
+}
+
 pub fn run_pipeline(
     input_path: &std::path::Path,
     output_path: &std::path::Path,
@@ -201,11 +231,13 @@ pub fn run_pipeline(
         source,
     })?;
 
-    let result = if opts.stroke {
-        run_convert_stroke(&bytes, opts)?
-    } else {
-        run_convert(&bytes, opts)?
-    };
+    let result = catch_pipeline_panic(|| {
+        if opts.stroke {
+            run_convert_stroke(&bytes, opts)
+        } else {
+            run_convert(&bytes, opts)
+        }
+    })?;
 
     std::fs::write(output_path, &result.svg).map_err(|source| CliError::OutputIo {
         path: output_path.to_path_buf(),
@@ -306,6 +338,51 @@ pub fn derive_svg_summary(svg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_catch_pipeline_panic_converts_to_internal_error() {
+        let result: Result<ConvertResult, SpryteoError> =
+            catch_pipeline_panic(|| -> Result<ConvertResult, SpryteoError> {
+                panic!("deliberate test panic");
+            });
+
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            SpryteoError::Internal(msg) => assert!(msg.contains("deliberate test panic")),
+            other => panic!("Expected SpryteoError::Internal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_catch_pipeline_panic_maps_to_exit_code_3() {
+        let result: Result<ConvertResult, SpryteoError> =
+            catch_pipeline_panic(|| -> Result<ConvertResult, SpryteoError> {
+                panic!("deliberate test panic");
+            });
+        let cli_err: CliError = result.unwrap_err().into();
+        assert_eq!(cli_err.exit_code(), 3);
+    }
+
+    #[test]
+    fn test_catch_pipeline_panic_passes_through_ok() {
+        use spryteo_core::{Meta, Stats};
+
+        let result = catch_pipeline_panic(|| {
+            Ok(ConvertResult {
+                svg: "<svg></svg>".to_string(),
+                meta: Meta {
+                    nodes: vec![],
+                    stats: Stats {
+                        node_count: 0,
+                        path_count: 0,
+                        byte_count: 12,
+                    },
+                },
+            })
+        });
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().svg, "<svg></svg>");
+    }
 
     #[test]
     fn test_fills_building() {

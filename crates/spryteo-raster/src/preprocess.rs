@@ -231,6 +231,64 @@ pub fn deblock(image: &RasterImage) -> RasterImage {
     }
 }
 
+/// Long-edge threshold above which photo-mode inputs are downscaled
+/// before the expensive quantize/trace/fit stages (ROADMAP.md §8:
+/// "2048^2 photo (auto-downscaled to 1024) < 2s"). Icon/pixel-art/
+/// line-art modes are never downscaled -- fidelity at native
+/// resolution matters more for those and they're cheap regardless.
+const PHOTO_DOWNSCALE_THRESHOLD: u32 = 1600;
+const PHOTO_DOWNSCALE_TARGET: u32 = 1024;
+
+pub fn downscale_large_photo(image: RasterImage, mode: &Mode) -> RasterImage {
+    if !matches!(mode, Mode::Photo) {
+        return image;
+    }
+    let max_dim = image.width.max(image.height);
+    if max_dim <= PHOTO_DOWNSCALE_THRESHOLD {
+        return image;
+    }
+
+    let (new_width, new_height) = if image.width >= image.height {
+        let new_w = PHOTO_DOWNSCALE_TARGET;
+        let new_h = ((image.height as f64 * PHOTO_DOWNSCALE_TARGET as f64) / image.width as f64)
+            .round() as u32;
+        (new_w, new_h.max(1))
+    } else {
+        let new_h = PHOTO_DOWNSCALE_TARGET;
+        let new_w = ((image.width as f64 * PHOTO_DOWNSCALE_TARGET as f64) / image.height as f64)
+            .round() as u32;
+        (new_w.max(1), new_h)
+    };
+
+    let width = image.width;
+    let height = image.height;
+    let pixels = image.pixels;
+
+    let rgba = match image::RgbaImage::from_raw(width, height, pixels) {
+        Some(img) => img,
+        None => {
+            return RasterImage {
+                width,
+                height,
+                pixels: Vec::new(),
+            };
+        }
+    };
+
+    let resized = image::imageops::resize(
+        &rgba,
+        new_width,
+        new_height,
+        image::imageops::FilterType::Lanczos3,
+    );
+
+    RasterImage {
+        width: new_width,
+        height: new_height,
+        pixels: resized.into_raw(),
+    }
+}
+
 /// Orchestrates image preprocessing steps.
 ///
 /// 1. Skips bilateral filter entirely if `mode` is `Mode::PixelArt` to keep details crisp.
@@ -566,5 +624,66 @@ mod tests {
             processed_was_jpeg.pixels, blocky_img.pixels,
             "Should apply deblock when was_jpeg is true and quality < 90"
         );
+    }
+
+    #[test]
+    fn test_downscale_large_photo_all_cases() {
+        // 1. A 2048x1024 photo-mode image downscales to 1024x512 (aspect preserved, exact long-edge target)
+        let pixels_2048_1024 = vec![0u8; 2048 * 1024 * 4];
+        let img_2048_1024 = RasterImage {
+            width: 2048,
+            height: 1024,
+            pixels: pixels_2048_1024,
+        };
+        let res = downscale_large_photo(img_2048_1024, &Mode::Photo);
+        assert_eq!(res.width, 1024);
+        assert_eq!(res.height, 512);
+
+        // 2. A 2048x2048 image downscales to 1024x1024
+        let pixels_2048_2048 = vec![0u8; 2048 * 2048 * 4];
+        let img_2048_2048 = RasterImage {
+            width: 2048,
+            height: 2048,
+            pixels: pixels_2048_2048,
+        };
+        let res = downscale_large_photo(img_2048_2048, &Mode::Photo);
+        assert_eq!(res.width, 1024);
+        assert_eq!(res.height, 1024);
+
+        // 3. A photo-mode image at exactly 1600 (the threshold) is NOT downscaled
+        let pixels_1600_1000 = vec![0u8; 1600 * 1000 * 4];
+        let img_1600_1000 = RasterImage {
+            width: 1600,
+            height: 1000,
+            pixels: pixels_1600_1000.clone(),
+        };
+        let res = downscale_large_photo(img_1600_1000, &Mode::Photo);
+        assert_eq!(res.width, 1600);
+        assert_eq!(res.height, 1000);
+        assert_eq!(res.pixels.len(), pixels_1600_1000.len());
+
+        // 4. An icon-mode image at 2048x2048 is NOT downscaled
+        let pixels_icon = vec![0u8; 2048 * 2048 * 4];
+        let img_icon = RasterImage {
+            width: 2048,
+            height: 2048,
+            pixels: pixels_icon.clone(),
+        };
+        let res = downscale_large_photo(img_icon, &Mode::Icon);
+        assert_eq!(res.width, 2048);
+        assert_eq!(res.height, 2048);
+        assert_eq!(res.pixels.len(), pixels_icon.len());
+
+        // 5. The function never panics on a 1x1 image
+        let pixels_1x1 = vec![0u8; 4];
+        let img_1x1 = RasterImage {
+            width: 1,
+            height: 1,
+            pixels: pixels_1x1.clone(),
+        };
+        let res = downscale_large_photo(img_1x1, &Mode::Photo);
+        assert_eq!(res.width, 1);
+        assert_eq!(res.height, 1);
+        assert_eq!(res.pixels.len(), pixels_1x1.len());
     }
 }

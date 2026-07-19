@@ -64,13 +64,15 @@ const FIXED_SEED: u64 = 42;
 
 fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, SpryteoError> {
     let raster_image = spryteo_raster::decode(bytes, opts)?;
-    let width = raster_image.width;
-    let height = raster_image.height;
     let was_jpeg = spryteo_raster::is_jpeg(bytes);
 
     let classified = spryteo_quant::classify(raster_image, &opts.mode);
+    let downscaled_image =
+        spryteo_raster::downscale_large_photo(classified.image, &classified.mode);
+    let width = downscaled_image.width;
+    let height = downscaled_image.height;
     let preprocessed_image =
-        spryteo_raster::preprocess(classified.image, &classified.mode, was_jpeg);
+        spryteo_raster::preprocess(downscaled_image, &classified.mode, was_jpeg);
     let classified = ClassifiedInput {
         image: preprocessed_image,
         mode: classified.mode,
