@@ -15,7 +15,7 @@
 //! **not implemented** — this quantizer only handles the icon path.  That
 //! split belongs in Phase 4.
 
-use spryteo_core::{ClassifiedInput, ColorSpec, Layer, LayerStack, Rgb};
+use spryteo_core::{ClassifiedInput, ColorSpec, Layer, LayerStack, Layering, Rgb};
 
 use crate::color::{self, Lab};
 
@@ -34,7 +34,12 @@ const SEED_AUTO: u64 = 42;
 /// - `ColorSpec::N(n)`: uses exactly `n` colours.
 /// - `ColorSpec::Palette(palette)`: assigns each pixel to the nearest palette
 ///   colour in Lab space, no clustering.
-pub fn quantize(input: &ClassifiedInput, colors: &ColorSpec, seed: u64) -> LayerStack {
+pub fn quantize(
+    input: &ClassifiedInput,
+    colors: &ColorSpec,
+    layering: &Layering,
+    seed: u64,
+) -> LayerStack {
     let pixels = &input.image.pixels;
     let width = input.image.width;
     let height = input.image.height;
@@ -68,7 +73,11 @@ pub fn quantize(input: &ClassifiedInput, colors: &ColorSpec, seed: u64) -> Layer
     let target = match colors {
         ColorSpec::Palette(pal) => {
             let pal_lab: Vec<Lab> = pal.iter().map(color::srgb_to_lab).collect();
-            return quantize_to_palette(pixels, width, height, &pal_lab, pal);
+            let mut stack = quantize_to_palette(pixels, width, height, &pal_lab, pal);
+            if let Layering::Stacked = layering {
+                apply_stacked_layering(&mut stack);
+            }
+            return stack;
         }
         ColorSpec::N(n) => *n as usize,
         ColorSpec::Auto => auto_color_count(&pixel_data),
@@ -80,13 +89,38 @@ pub fn quantize(input: &ClassifiedInput, colors: &ColorSpec, seed: u64) -> Layer
 
     // Check exact-histogram shortcut
     let unique = unique_rgb_from_data(&pixel_data);
-    if unique.len() <= target {
-        return build_exact_layers(pixels, width, height, &unique, target);
-    }
+    let mut stack = if unique.len() <= target {
+        build_exact_layers(pixels, width, height, &unique, target)
+    } else {
+        // k-means clustering
+        let assignments = kmeans_pp(&pixel_data, target, seed);
+        build_kmeans_layers(pixels, width, height, &pixel_data, &assignments, target)
+    };
 
-    // k-means clustering
-    let assignments = kmeans_pp(&pixel_data, target, seed);
-    build_kmeans_layers(pixels, width, height, &pixel_data, &assignments, target)
+    if let Layering::Stacked = layering {
+        apply_stacked_layering(&mut stack);
+    }
+    stack
+}
+
+/// Post-processing step to apply stacked layering per §3.4.
+/// For each layer in z_order from bottom (0) to top, sets the layer's mask
+/// to the union of its own pixels and all pixels of layers above it.
+fn apply_stacked_layering(stack: &mut LayerStack) {
+    let n = stack.layers.len();
+    if n <= 1 {
+        return;
+    }
+    for i in (0..n - 1).rev() {
+        let (left, right) = stack.layers.split_at_mut(i + 1);
+        let current_layer = &mut left[i];
+        let next_layer = &right[0];
+        for (c, &n_val) in current_layer.mask.iter_mut().zip(next_layer.mask.iter()) {
+            if n_val > *c {
+                *c = n_val;
+            }
+        }
+    }
 }
 
 // ── Data structures ──────────────────────────────────────────────────────────
@@ -560,7 +594,7 @@ mod tests {
         }
         let img = make_image(4, 4, pixels);
         let input = classified_input(img, Mode::Icon);
-        let result = quantize(&input, &ColorSpec::Auto, 42);
+        let result = quantize(&input, &ColorSpec::Auto, &Layering::Cutout, 42);
 
         assert_eq!(
             result.layers.len(),
@@ -586,7 +620,7 @@ mod tests {
         }
         let img = make_image(4, 4, pixels);
         let input = classified_input(img, Mode::Icon);
-        let result = quantize(&input, &ColorSpec::N(1), 42);
+        let result = quantize(&input, &ColorSpec::N(1), &Layering::Cutout, 42);
 
         assert_eq!(
             result.layers.len(),
@@ -616,8 +650,8 @@ mod tests {
         let input = classified_input(img, Mode::Icon);
         let seed = 12345u64;
 
-        let r1 = quantize(&input, &ColorSpec::N(4), seed);
-        let r2 = quantize(&input, &ColorSpec::N(4), seed);
+        let r1 = quantize(&input, &ColorSpec::N(4), &Layering::Cutout, seed);
+        let r2 = quantize(&input, &ColorSpec::N(4), &Layering::Cutout, seed);
 
         let json1 = serde_json::to_vec(&r1).unwrap();
         let json2 = serde_json::to_vec(&r2).unwrap();
@@ -647,7 +681,7 @@ mod tests {
         let img = make_image(4, 4, pixels);
         let input = classified_input(img, Mode::Icon);
         let palette = vec![Rgb { r: 0, g: 0, b: 255 }, Rgb { r: 0, g: 255, b: 0 }];
-        let result = quantize(&input, &ColorSpec::Palette(palette), 42);
+        let result = quantize(&input, &ColorSpec::Palette(palette), &Layering::Cutout, 42);
 
         assert_eq!(result.layers.len(), 2);
         // Both palette colours should be present
@@ -673,7 +707,7 @@ mod tests {
         }
         let img = make_image(4, 4, pixels);
         let input = classified_input(img, Mode::Icon);
-        let result = quantize(&input, &ColorSpec::Auto, 42);
+        let result = quantize(&input, &ColorSpec::Auto, &Layering::Cutout, 42);
 
         // Only red pixels are clustered → 1 layer (1 unique colour)
         assert_eq!(result.layers.len(), 1);
@@ -688,7 +722,115 @@ mod tests {
     fn empty_image_returns_empty() {
         let img = make_image(1, 1, vec![0, 0, 0, 0]); // fully transparent
         let input = classified_input(img, Mode::Icon);
-        let result = quantize(&input, &ColorSpec::Auto, 42);
+        let result = quantize(&input, &ColorSpec::Auto, &Layering::Cutout, 42);
         assert_eq!(result.layers.len(), 0);
+    }
+
+    #[test]
+    fn stacked_layering_covers_more_pixels_and_respects_transparency() {
+        let mut pixels = Vec::new();
+        // 4x4 image:
+        // Row 0-1: 2 red, 2 blue
+        // Row 2-3: 2 red, 2 transparent
+        for y in 0..4 {
+            for x in 0..4 {
+                if y < 2 {
+                    if x >= 2 {
+                        pixels.extend_from_slice(&rgb_pixel(0, 0, 255, 255)); // blue
+                    } else {
+                        pixels.extend_from_slice(&rgb_pixel(255, 0, 0, 255)); // red
+                    }
+                } else {
+                    if x >= 2 {
+                        pixels.extend_from_slice(&rgb_pixel(0, 0, 0, 0)); // transparent
+                    } else {
+                        pixels.extend_from_slice(&rgb_pixel(255, 0, 0, 255)); // red
+                    }
+                }
+            }
+        }
+        let img = make_image(4, 4, pixels);
+        let input = classified_input(img, Mode::Icon);
+
+        // Run in Cutout mode
+        let cutout_res = quantize(&input, &ColorSpec::Auto, &Layering::Cutout, 42);
+        assert_eq!(cutout_res.layers.len(), 2);
+        let red_cutout = cutout_res
+            .layers
+            .iter()
+            .find(|l| l.color == Rgb { r: 255, g: 0, b: 0 })
+            .unwrap();
+        let blue_cutout = cutout_res
+            .layers
+            .iter()
+            .find(|l| l.color == Rgb { r: 0, g: 0, b: 255 })
+            .unwrap();
+
+        // Run in Stacked mode
+        let stacked_res = quantize(&input, &ColorSpec::Auto, &Layering::Stacked, 42);
+        assert_eq!(stacked_res.layers.len(), 2);
+        let red_stacked = stacked_res
+            .layers
+            .iter()
+            .find(|l| l.color == Rgb { r: 255, g: 0, b: 0 })
+            .unwrap();
+        let blue_stacked = stacked_res
+            .layers
+            .iter()
+            .find(|l| l.color == Rgb { r: 0, g: 0, b: 255 })
+            .unwrap();
+
+        // In cutout mode:
+        // Red mask should cover 8 pixels (the red ones).
+        // Blue mask should cover 4 pixels (the blue ones).
+        let red_cutout_count = red_cutout.mask.iter().filter(|&&v| v > 0).count();
+        let blue_cutout_count = blue_cutout.mask.iter().filter(|&&v| v > 0).count();
+        assert_eq!(red_cutout_count, 8);
+        assert_eq!(blue_cutout_count, 4);
+
+        // In stacked mode, Red has z_order = 0 and Blue has z_order = 1.
+        // Red stacked mask should be union of Red disjoint and Blue disjoint -> 12 pixels.
+        // Blue stacked mask is topmost -> 4 pixels.
+        let red_stacked_count = red_stacked.mask.iter().filter(|&&v| v > 0).count();
+        let blue_stacked_count = blue_stacked.mask.iter().filter(|&&v| v > 0).count();
+
+        assert_eq!(red_stacked_count, 12);
+        assert_eq!(blue_stacked_count, 4);
+
+        // Assert the actual pixel-count difference for the bottom layer is exactly 4
+        assert_eq!(red_stacked_count - red_cutout_count, 4);
+
+        // Confirm that transparent pixels are NEVER included in any layer's mask in stacked mode either.
+        let transparent_indices = vec![10, 11, 14, 15];
+        for idx in transparent_indices {
+            assert_eq!(red_stacked.mask[idx], 0);
+            assert_eq!(blue_stacked.mask[idx], 0);
+        }
+    }
+
+    #[test]
+    fn stacked_quantize_is_deterministic() {
+        let w = 8u32;
+        let h = 8u32;
+        let mut pixels = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let r = ((x * 32) as u8).wrapping_add(10);
+                let g = ((y * 32) as u8).wrapping_add(20);
+                let b = ((x + y) * 16) as u8;
+                pixels.extend_from_slice(&rgb_pixel(r, g, b, 255));
+            }
+        }
+        let img = make_image(w, h, pixels);
+        let input = classified_input(img, Mode::Photo);
+        let seed = 98765u64;
+
+        let r1 = quantize(&input, &ColorSpec::N(4), &Layering::Stacked, seed);
+        let r2 = quantize(&input, &ColorSpec::N(4), &Layering::Stacked, seed);
+
+        let json1 = serde_json::to_vec(&r1).unwrap();
+        let json2 = serde_json::to_vec(&r2).unwrap();
+
+        assert_eq!(json1, json2);
     }
 }
