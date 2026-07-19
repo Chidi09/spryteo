@@ -1,0 +1,40 @@
+Spryteo — third-party notices and clean-room provenance
+=========================================================
+
+Spryteo is dual-licensed under MIT (LICENSE-MIT) OR Apache-2.0
+(LICENSE-APACHE), at your option.
+
+Clean-room provenance: Potrace algorithm
+-----------------------------------------
+Spryteo's polygon simplification and Bezier-fitting stage
+(`crates/spryteo-fit`) implements the algorithm described in
+Peter Selinger's paper "Potrace: a polygon-based tracing algorithm"
+(https://potrace.sourceforge.net/potrace.pdf). The algorithm as
+described in that paper is not itself copyrightable; only its
+expression in code is.
+
+No source code, object code, or documentation from the Potrace
+project (which is licensed GPL-2.0) was read, copied, ported, or
+otherwise consulted at any point during the implementation of this
+crate. The implementation was written solely from the published paper
+above and from first-principles computational geometry.
+
+Third-party dependencies of note
+----------------------------------
+- `vtracer` (MIT): read for inspiration on off-the-shelf tracer
+  behavior/output shape during design; not a source dependency and no
+  code was copied from it.
+- `image`, `resvg`/`usvg`, `rayon`, `axum`, napi-rs, wasm-bindgen: MIT
+  OR Apache-2.0, no additional obligations beyond standard attribution
+  (satisfied by Cargo.lock / this NOTICE).
+- ONNX Runtime (`ort`, planned for the deferred Phase 5 semantic-ML
+  tier, not yet a dependency of this workspace): MIT.
+- MobileSAM model weights (planned, not bundled): Apache-2.0 — verify
+  the license of the specific weight file at the point they are
+  actually integrated, since weights and code can be licensed
+  separately.
+- ICC color management: this workspace does not currently depend on
+  `lcms2` (which wraps LGPL `lcms`). If ICC profile handling is added
+  later, prefer a pure-Rust, permissively-licensed crate (e.g.
+  `moxcms`) over `lcms2` to avoid taking on an LGPL dynamic-linking
+  obligation.
