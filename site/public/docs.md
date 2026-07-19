@@ -39,7 +39,7 @@ Full flag reference:
 
 | Flag | Description |
 |---|---|
-| `--output, -o <path>` | Output SVG path. Required. |
+| `-o, --output <path>` | Output SVG path. Required. |
 | `--mode <auto\|icon\|pixel-art\|line-art\|photo>` | Override input classification. Default: auto. |
 | `--stroke` | Run the centerline tracer instead of fill-mode outlining. |
 | `--css <draw\|fade\|pop>` | Bake one of the built-in CSS animation presets into the SVG. |
@@ -51,7 +51,19 @@ Full flag reference:
 | `--turdsize <px²>` | Discard regions smaller than this area (noise suppression). |
 | `--precision <n>` | Decimal places in emitted path coordinates. |
 | `--pretty` | Pretty-print the SVG instead of minifying it. |
-| `--json <path>` | Also write the metadata sidecar (nodes, bboxes, groups, stats) as JSON. |
+| `--jsx` | Emit a React JSX component instead of plain SVG. |
+| `--current-color` | Monochrome output inherits colour via currentColor. |
+| `--background <keep\|drop\|rect>` | Background treatment: keep as a layer, drop it, or emit as `<rect>`. |
+| `--alpha-mode <keep\|matte:#rrggbb\|threshold:0-255>` | Alpha handling: preserve, matte against a colour, or hard-cut at threshold. |
+| `--grouping <component\|semantic\|flat>` | Grouping strategy: connected component, ML mask-guided, or no grouping. |
+| `--id-style <hash\|sequential\|none>` | ID generation: content-derived hash, sequential counter, or omit. |
+| `--transform-origin <centroid\|baked>` | Transform origin placement — centroid offset or baked into coordinates. |
+| `--arcs` | Emit circular-arc path commands where detected (off by default). |
+| `--max-trace-dimension <n>` | Downscale inputs larger than this dimension before tracing. |
+| `--max-pixels <n>` | Maximum pixel count accepted (decompression-bomb guard). |
+| `--max-input-bytes <n>` | Maximum input file size in bytes. |
+| `--timeout-ms <n>` | Abort conversion after this many milliseconds. |
+| `--json <path>` | Write the metadata sidecar (nodes, bboxes, groups, stats) as JSON. |
 
 A second subcommand, `spryteo inspect`, prints a human-readable summary of
 an SVG produced by `convert` — node/path counts, group tree, and (with
@@ -74,7 +86,7 @@ overridable with `--mode`.
 | `auto` | Picks a profile from the image itself — dimensions, unique-colour count, edge hardness, ink ratio. |
 | `icon` | Few unique colours (≤32 after a 1% noise floor) or a flat-fill alpha channel. Aggressive primitive recognition — circles and rects come out as `<circle>`/`<rect>`, not path soup. |
 | `pixel-art` | ≤128px, ≤64 unique colours, hard-edged (no anti-aliasing). Traces exact pixel boundaries with corner-preserving fit instead of smoothing them away. |
-| `line-art` | Low ink ratio after adaptive threshold, unimodal stroke-width histogram. Pairs with `--stroke` for true centerline output instead of outlined fills. |
+| `line-art` | Ink drawings binarize into exactly two layers — paper and ink — using a global Otsu threshold for solid strokes plus a capped Sauvola local threshold that rescues faint thin lines. A duotone validation gate falls back to full colour quantization when the image isn't genuinely two-tone. Pairs with `--stroke` for centerline output. |
 | `photo` | Everything else. K-means colour quantization, optional gradient detection, bilateral filtering + JPEG deblocking, and automatic downscaling above 1600px so a 4K photo doesn't blow the time budget. |
 
 ## Library (Node)
