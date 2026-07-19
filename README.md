@@ -164,7 +164,7 @@ overridable with `--mode`.
 | `spryteo-fit` | Polygon simplification, corner detection, Bezier curve fitting |
 | `spryteo-geom` | Primitive recognition (circle, ellipse, rect, arc), geometry hashing |
 | `spryteo-stroke` | Centerline tracing: binarization, skeletonization, Eulerian path traversal |
-| `spryteo-semantic` | ML-guided grouping via ONNX (MobileSAM), feature-gated |
+| `spryteo-semantic` | Mask-overlap grouping heuristics for externally-supplied segmentation masks (bring-your-own-model; no ONNX runtime bundled) |
 | `spryteo-svg` | Scene graph construction, SVG emission, metadata sidecar |
 | `spryteo-cli` | CLI binary (clap), pipeline wiring, error reporting |
 | `spryteo-mcp` | MCP server exposing convert_image and inspect_svg as agent tools |

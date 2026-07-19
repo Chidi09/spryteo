@@ -13,12 +13,12 @@ const modes = [
   { name: 'auto', desc: 'Picks a profile from the image itself — dimensions, unique-colour count, edge hardness, ink ratio. Every heuristic is overridable with --mode.' },
   { name: 'icon', desc: 'Few unique colours (≤32 after a 1% noise floor) or a flat-fill alpha channel. Aggressive primitive recognition — circles and rects come out as <circle>/<rect>, not path soup.' },
   { name: 'pixel-art', desc: '≤128px, ≤64 unique colours, hard-edged (no anti-aliasing). Traces exact pixel boundaries with corner-preserving fit instead of smoothing them away.' },
-  { name: 'line-art', desc: 'Low ink ratio after adaptive threshold, unimodal stroke-width histogram. Pairs with --stroke for true centerline output instead of outlined fills.' },
+  { name: 'line-art', desc: 'Ink drawings binarize into exactly two layers — paper and ink — using a global Otsu threshold for solid strokes plus a capped Sauvola local threshold that rescues faint thin lines. A duotone validation gate falls back to full colour quantization when the image isn\'t genuinely two-tone. Pairs with --stroke for centerline output.' },
   { name: 'photo', desc: 'Everything else. K-means colour quantization, optional gradient detection, bilateral filtering + JPEG deblocking, and automatic downscaling above 1600px so a 4K photo doesn\'t blow the time budget.' },
 ];
 
 const cliFlags: [string, string][] = [
-  ['--output, -o <path>', 'Output SVG path. Required.'],
+  ['-o, --output <path>', 'Output SVG path. Required.'],
   ['--mode <auto|icon|pixel-art|line-art|photo>', 'Override input classification. Default: auto.'],
   ['--stroke', 'Run the centerline tracer instead of fill-mode outlining.'],
   ['--css <draw|fade|pop>', 'Bake one of the built-in CSS animation presets into the SVG.'],
@@ -30,7 +30,48 @@ const cliFlags: [string, string][] = [
   ['--turdsize <px²>', 'Discard regions smaller than this area (noise suppression).'],
   ['--precision <n>', 'Decimal places in emitted path coordinates.'],
   ['--pretty', 'Pretty-print the SVG instead of minifying it.'],
-  ['--json <path>', 'Also write the metadata sidecar (nodes, bboxes, groups, stats) as JSON.'],
+  ['--jsx', 'Emit a React JSX component instead of plain SVG.'],
+  ['--current-color', 'Monochrome output inherits colour via currentColor.'],
+  ['--background <keep|drop|rect>', 'Background treatment: keep as a layer, drop it, or emit as <rect>.'],
+  ['--alpha-mode <keep|matte:#rrggbb|threshold:0-255>', 'Alpha handling: preserve, matte against a colour, or hard-cut at threshold.'],
+  ['--grouping <component|semantic|flat>', 'Grouping strategy: connected component, ML mask-guided, or no grouping.'],
+  ['--id-style <hash|sequential|none>', 'ID generation: content-derived hash, sequential counter, or omit.'],
+  ['--transform-origin <centroid|baked>', 'Transform origin placement — centroid offset or baked into coordinates.'],
+  ['--arcs', 'Emit circular-arc path commands where detected (off by default).'],
+  ['--max-trace-dimension <n>', 'Downscale inputs larger than this dimension before tracing.'],
+  ['--max-pixels <n>', 'Maximum pixel count accepted (decompression-bomb guard).'],
+  ['--max-input-bytes <n>', 'Maximum input file size in bytes.'],
+  ['--timeout-ms <n>', 'Abort conversion after this many milliseconds.'],
+  ['--json <path>', 'Write the metadata sidecar (nodes, bboxes, groups, stats) as JSON.'],
+];
+
+const crates: [string, string][] = [
+  ['spryteo-core', 'Shared IR types, ConvertOptions, pipeline orchestration, errors'],
+  ['spryteo-raster', 'Decode (PNG/JPEG/GIF/WebP/BMP), EXIF orientation, ICC→sRGB, downscale, preprocess'],
+  ['spryteo-quant', 'Input classification, colour quantization, line-art binarization, background detection'],
+  ['spryteo-trace', 'Contour extraction (Suzuki-Abe, marching squares), hole hierarchy'],
+  ['spryteo-fit', 'Polygon simplification, corner detection, straight-run recovery, Bezier curve fitting'],
+  ['spryteo-geom', 'Primitive recognition (circle, ellipse, rect, arc), geometry hashing'],
+  ['spryteo-stroke', 'Centerline tracing: binarization, skeletonization, Eulerian path traversal'],
+  ['spryteo-semantic', 'Mask-overlap grouping heuristics for externally-supplied segmentation masks'],
+  ['spryteo-svg', 'Scene graph construction, SVG emission, metadata sidecar'],
+  ['spryteo-cli', 'CLI binary (clap), pipeline wiring, error reporting'],
+  ['spryteo-mcp', 'MCP server exposing convert_image and inspect_svg as agent tools'],
+  ['spryteo-api', 'HTTP API stub (axum), planned not yet shipped'],
+];
+
+const pipelineStages = [
+  { name: 'decode', desc: 'PNG/JPEG/GIF/WebP/BMP → raw RGBA. EXIF orientation applied, embedded ICC profiles converted to sRGB via a pure-Rust colour stack (no LGPL dependency).' },
+  { name: 'classify', desc: 'Picks auto\'s mode: dimensions, unique-colour count (with a 1% noise floor), edge hardness, and ink ratio decide icon vs. pixel-art vs. line-art vs. photo.' },
+  { name: 'downscale', desc: 'Inputs above --max-trace-dimension (1600px default trigger, 1024px working size) are resampled with Lanczos3 before tracing; output coordinates still land on the original viewBox.' },
+  { name: 'preprocess', desc: 'Mode-specific cleanup: bilateral filtering and JPEG-deblocking for photos, Otsu + capped Sauvola local thresholding with a Lab-space duotone validation gate for line-art.' },
+  { name: 'quantize', desc: 'K-means colour reduction to the target palette (seeded, deterministic — kmeans++ with a fixed seed) or the line-art binarizer\'s two-layer paper/ink split.' },
+  { name: 'apply_background_policy', desc: 'Decides whether the base layer is kept, dropped, or flattened into a <rect> per --background.' },
+  { name: 'extract_contours', desc: 'Suzuki-Abe border following over a marching-squares field builds a parent/child hole hierarchy per connected region — a letter "O" becomes one path with a true hole subpath, not two overlapping fills.' },
+  { name: 'fit_contours', desc: 'Simplifies each contour, detects corners, then fits Bezier segments — with a chord-straightness pre-check that emits a plain LineTo (and merges consecutive collinear runs) instead of curve-fitting edges that are already straight.' },
+  { name: 'build_fills', desc: 'Resolves fill colours/gradients per shape and promotes near-circular or near-rectangular contours to real <circle>/<ellipse>/<rect> primitives instead of path soup.' },
+  { name: 'build_scene_graph', desc: 'Groups shapes into a <g> tree (containment-order by default, or mask-guided) and assigns stable content-derived or sequential IDs.' },
+  { name: 'emit_svg', desc: 'Serializes the scene graph — minified or --pretty, JSX component or plain markup — plus the JSON metadata sidecar if requested.' },
 ];
 ---
 
@@ -41,12 +82,15 @@ const cliFlags: [string, string][] = [
     <a href="#install" class="toc-link">Install</a>
     <a href="#cli" class="toc-link">CLI</a>
     <a href="#modes" class="toc-link">Modes</a>
+    <a href="#pipeline" class="toc-link">How it works</a>
+    <a href="#determinism" class="toc-link">Determinism &amp; testing</a>
     <a href="#library" class="toc-link">Library (Node)</a>
     <a href="#browser" class="toc-link">Browser (WASM)</a>
     <a href="#mcp" class="toc-link">MCP server</a>
     <a href="#api" class="toc-link">HTTP API</a>
     <a href="#options" class="toc-link">Options reference</a>
     <a href="#output" class="toc-link">Output &amp; metadata</a>
+    <a href="#architecture" class="toc-link">Crate architecture</a>
     <a href="#stack" class="toc-link">Built with</a>
   </aside>
 
@@ -85,7 +129,7 @@ const cliFlags: [string, string][] = [
 
     <h2 id="cli" class="heading">CLI</h2>
     <p class="para">Point it at a raster file. It writes a grouped, animateable SVG next to the source, plus an optional JSON metadata sidecar.</p>
-    <CodeBlock html='<span style="color:var(--muted);">$</span> spryteo ./icon.png <span style="color:var(--accent);">--groups</span> <span style="color:var(--accent);">--out</span> ./icon.svg<br><span style="color:var(--muted);">  traced 1 path &#183; 3 groups &#183; 2.1 kb &#8594; ./icon.svg</span>' />
+    <CodeBlock html='<span style="color:var(--muted);">$</span> spryteo convert ./icon.png <span style="color:var(--accent);">-o</span> ./icon.svg <span style="color:var(--accent);">--mode</span> icon <span style="color:var(--accent);">--colors</span> 8<br><span style="color:var(--muted);">  traced 1 path &#183; 3 groups &#183; 2.1 kb &#8594; ./icon.svg</span>' />
     <p class="para">Full flag reference:</p>
     <div class="flag-table">
       {cliFlags.map(([flag, desc]) => (
@@ -108,6 +152,28 @@ const cliFlags: [string, string][] = [
         </div>
       ))}
     </div>
+
+    <h2 id="pipeline" class="heading">How it works</h2>
+    <p class="para">Every surface runs the same eleven-stage pipeline over the same Rust engine &#8212; no surface has its own shortcuts or its own bugs.</p>
+    <div class="flag-table">
+      {pipelineStages.map((s) => (
+        <div class="flag-row">
+          <code class="flag-name">{s.name}</code>
+          <span class="flag-desc">{s.desc}</span>
+        </div>
+      ))}
+    </div>
+    <p class="para">A few of the pipeline's sharper edges, worth knowing if you're pushing tricky input through it:</p>
+    <h3 class="subheading">Line-art binarization</h3>
+    <p class="para">Ink drawings first get a global Otsu threshold for solid strokes, then a capped Sauvola local threshold (computed over integral images, so it's <code class="inline-code">O(n)</code> not <code class="inline-code">O(n&#183;window&#178;)</code>) to rescue faint thin lines the global threshold would drop. Before committing to two layers, a duotone validation gate projects every pixel onto the ink&#8596;paper axis in Lab space &#8212; if more than 2% of pixels fall too far off that axis, the image isn't actually two-tone and the pipeline falls back to full k-means colour quantization instead of flattening a colour photo into a black-and-white mess.</p>
+    <h3 class="subheading">Straight-run recovery</h3>
+    <p class="para">Contour fitting doesn't force every edge through a cubic Bezier. Before fitting a run between two detected corners, a chord-straightness check (0.5px tolerance) tests whether every point on the run already lies within tolerance of the straight line between its endpoints &#8212; if so, it emits a plain <code class="inline-code">LineTo</code> instead of a curve, and a merge pass afterward collapses consecutive collinear <code class="inline-code">LineTo</code>s into one. A traced square stays four straight edges at any smoothness setting, not four near-straight cubics with rounding error baked in.</p>
+    <h3 class="subheading">True holes, correct paint order</h3>
+    <p class="para">Contour extraction (Suzuki-Abe border following over a marching-squares field) builds a real parent/child hole hierarchy per region. A letter "O" or a donut shape becomes one path with an inner subpath and <code class="inline-code">fill-rule="evenodd"</code> &#8212; not two overlapping opaque fills where the hole is really just a same-colour circle painted on top. Containment nesting also drives paint order in the scene graph, so a shape enclosed by another paints after its container rather than being silently occluded.</p>
+
+    <h2 id="determinism" class="heading">Determinism &amp; testing</h2>
+    <p class="para">The same input and options produce byte-identical SVG on every run, on every machine. That's an engineering constraint, not a happy accident: no <code class="inline-code">HashMap</code> iteration reaches an output path anywhere in the pipeline, every sort is stable, and colour quantization's k-means++ seeding is fixed rather than time- or thread-seeded. You can verify it yourself &#8212; run the same conversion twice and diff the bytes.</p>
+    <p class="para">Correctness is gated by a golden-corpus test harness (<code class="inline-code">spryteo-cli/tests/corpus.rs</code>) that renders every fixture's output back to a raster and compares it against the source with SSIM, alongside byte-budget and node-budget ceilings per fixture. Per-category SSIM gates: icons and pixel-art 0.92, line-art 0.90, photos 0.85, real-world mixed images 0.80. Goldens are regenerated with <code class="inline-code">UPDATE_GOLDENS=1 cargo test -p spryteo-cli --release --test corpus</code> and every regeneration is diffed by hand before it's trusted &#8212; an aggregate similarity score passing is necessary, never sufficient, so nothing gets accepted on the metric alone without a human looking at the rendered output.</p>
 
     <h2 id="library" class="heading">Library (Node)</h2>
     <p class="para">A native addon built with napi-rs &#8212; the real Rust engine in-process, no subprocess or WASM overhead. <code class="inline-code">convert()</code> is async; <code class="inline-code">convertSync()</code> blocks. Options are a JSON string merged against sensible defaults, so you only need to specify what you're overriding.</p>
@@ -146,10 +212,10 @@ const cliFlags: [string, string][] = [
     <p class="para"><code class="inline-code">tolerance</code> is the curve-fit error budget in pixels &#8212; lower produces more path points and tighter fidelity. <code class="inline-code">smoothness</code> controls corner-preservation strength during Bezier fitting. <code class="inline-code">turdsize</code> discards regions below a minimum area (denoising). <code class="inline-code">arcs</code> allows emitting native SVG arc commands for near-circular/near-rectangular contours instead of Bezier approximations &#8212; this is what makes a traced circle come out as a real <code class="inline-code">&lt;circle&gt;</code> element.</p>
 
     <h3 class="subheading">Stroke / centerline mode</h3>
-    <p class="para">Setting <code class="inline-code">stroke: true</code> (or <code class="inline-code">--stroke</code>) switches to a dedicated centerline tracer suited to line art and hand-drawn strokes: variable-width paths with <code class="inline-code">pathLength="100"</code> normalized for animation, emitted with <code class="inline-code">fill="none"</code>.</p>
+    <p class="para">Setting <code class="inline-code">stroke: true</code> (or <code class="inline-code">--stroke</code>) bypasses colour quantization entirely and runs a dedicated centerline pipeline: binarize &#8594; skeletonize &#8594; build a stroke graph &#8594; prune spurious branches &#8594; traverse &#8594; smooth. Traversal looks for a true Eulerian path through the stroke graph via Hierholzer's algorithm &#8212; a graph with exactly two odd-degree nodes gets a virtual edge added between them to close it into a circuit first; graphs with more than two odd-degree junctions (genuine branching strokes) fall back to a greedy walk that emits separate paths per branch rather than one continuous stroke. Each path's width is the per-stroke median (variable-width splitting along a single stroke is not yet implemented). Output paths get <code class="inline-code">pathLength="100"</code> normalized for animation and are emitted with <code class="inline-code">fill="none"</code>.</p>
 
     <h3 class="subheading">Semantic grouping</h3>
-    <p class="para">Shapes are grouped into a <code class="inline-code">&lt;g&gt;</code> tree two ways: containment-based (default &#8212; a shape nested inside another's bounding region becomes its child group) and mask-guided, where you supply your own segmentation masks (e.g. from a model you're already running) and Spryteo groups traced contours by mask-overlap coverage. Spryteo does not run its own object-detection/segmentation model &#8212; mask-guided grouping is bring-your-own-masks by design, not an automatic ML segmentation feature.</p>
+    <p class="para">Shapes are grouped into a <code class="inline-code">&lt;g&gt;</code> tree two ways: containment-based (default &#8212; a shape nested inside another's bounding region becomes its child group under the smallest-area shape that fully contains it) and mask-guided, where you supply your own segmentation masks (e.g. from a model you're already running) and Spryteo groups traced contours by mask-overlap coverage. Spryteo does not bundle or run an ONNX/SAM model itself &#8212; mask-guided grouping is bring-your-own-masks by design: <code class="inline-code">spryteo-semantic</code> implements the grouping and assignment algorithm only, not segmentation inference.</p>
 
     <h3 class="subheading">Stable IDs</h3>
     <p class="para">Every shape gets a content-derived ID (<code class="inline-code">s-&lt;8 hex chars&gt;</code>, a blake3 hash of the shape's geometry and fill) via <code class="inline-code">id_style</code>. Re-running on a slightly edited source keeps unchanged shapes' IDs identical &#8212; safe to reference a shape by ID across re-exports.</p>
@@ -165,6 +231,17 @@ const cliFlags: [string, string][] = [
 
     <h2 id="output" class="heading">Output &amp; metadata</h2>
     <p class="para">Every surface returns the same shape: an <code class="inline-code">svg</code> string and a <code class="inline-code">meta</code> sidecar built for programmatic and agent consumption, not just human eyeballing. <code class="inline-code">meta.nodes</code> is a flat list &#8212; one entry per shape &#8212; each with a stable <code class="inline-code">id</code>, <code class="inline-code">bbox</code>, <code class="inline-code">centroid</code>, <code class="inline-code">area</code>, resolved <code class="inline-code">fill</code>, its <code class="inline-code">group</code> key into the SVG's <code class="inline-code">&lt;g id=...&gt;</code> tree, <code class="inline-code">zOrder</code>, and a <code class="inline-code">suggestedDrawOrder</code> for animation sequencing. <code class="inline-code">meta.stats</code> gives node/path/byte counts for a quick sanity check without walking the tree.</p>
+
+    <h2 id="architecture" class="heading">Crate architecture</h2>
+    <p class="para">The engine is a Rust workspace of small, single-purpose crates &#8212; every surface (CLI, Node addon, WASM, MCP) links the same ones, so there's exactly one place each algorithm lives.</p>
+    <div class="flag-table">
+      {crates.map(([name, desc]) => (
+        <div class="flag-row">
+          <code class="flag-name">{name}</code>
+          <span class="flag-desc">{desc}</span>
+        </div>
+      ))}
+    </div>
 
     <h2 id="stack" class="heading">Built with</h2>
     <div class="stack-row">

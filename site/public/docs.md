@@ -31,7 +31,7 @@ Point it at a raster file. It writes a grouped, animateable SVG next to the
 source, plus an optional JSON metadata sidecar.
 
 ```
-$ spryteo ./icon.png --groups --out ./icon.svg
+$ spryteo convert ./icon.png -o ./icon.svg --mode icon --colors 8
   traced 1 path · 3 groups · 2.1 kb → ./icon.svg
 ```
 
@@ -88,6 +88,81 @@ overridable with `--mode`.
 | `pixel-art` | ≤128px, ≤64 unique colours, hard-edged (no anti-aliasing). Traces exact pixel boundaries with corner-preserving fit instead of smoothing them away. |
 | `line-art` | Ink drawings binarize into exactly two layers — paper and ink — using a global Otsu threshold for solid strokes plus a capped Sauvola local threshold that rescues faint thin lines. A duotone validation gate falls back to full colour quantization when the image isn't genuinely two-tone. Pairs with `--stroke` for centerline output. |
 | `photo` | Everything else. K-means colour quantization, optional gradient detection, bilateral filtering + JPEG deblocking, and automatic downscaling above 1600px so a 4K photo doesn't blow the time budget. |
+
+## How it works
+
+Every surface runs the same eleven-stage pipeline over the same Rust engine
+— no surface has its own shortcuts or its own bugs.
+
+| Stage | What happens |
+|---|---|
+| `decode` | PNG/JPEG/GIF/WebP/BMP → raw RGBA. EXIF orientation applied, embedded ICC profiles converted to sRGB via a pure-Rust colour stack (no LGPL dependency). |
+| `classify` | Picks auto's mode: dimensions, unique-colour count (with a 1% noise floor), edge hardness, and ink ratio decide icon vs. pixel-art vs. line-art vs. photo. |
+| `downscale` | Inputs above `--max-trace-dimension` (1600px default trigger, 1024px working size) are resampled with Lanczos3 before tracing; output coordinates still land on the original viewBox. |
+| `preprocess` | Mode-specific cleanup: bilateral filtering and JPEG-deblocking for photos, Otsu + capped Sauvola local thresholding with a Lab-space duotone validation gate for line-art. |
+| `quantize` | K-means colour reduction to the target palette (seeded kmeans++, deterministic) or the line-art binarizer's two-layer paper/ink split. |
+| `apply_background_policy` | Decides whether the base layer is kept, dropped, or flattened into a `<rect>` per `--background`. |
+| `extract_contours` | Suzuki-Abe border following over a marching-squares field builds a parent/child hole hierarchy per connected region — a letter "O" becomes one path with a true hole subpath, not two overlapping fills. |
+| `fit_contours` | Simplifies each contour, detects corners, then fits Bezier segments — with a chord-straightness pre-check that emits a plain LineTo (and merges consecutive collinear runs) instead of curve-fitting edges that are already straight. |
+| `build_fills` | Resolves fill colours/gradients per shape and promotes near-circular or near-rectangular contours to real `<circle>`/`<ellipse>`/`<rect>` primitives instead of path soup. |
+| `build_scene_graph` | Groups shapes into a `<g>` tree (containment-order by default, or mask-guided) and assigns stable content-derived or sequential IDs. |
+| `emit_svg` | Serializes the scene graph — minified or `--pretty`, JSX component or plain markup — plus the JSON metadata sidecar if requested. |
+
+A few of the pipeline's sharper edges, worth knowing if you're pushing
+tricky input through it:
+
+### Line-art binarization
+
+Ink drawings first get a global Otsu threshold for solid strokes, then a
+capped Sauvola local threshold (computed over integral images, so it's
+`O(n)` not `O(n·window²)`) to rescue faint thin lines the global threshold
+would drop. Before committing to two layers, a duotone validation gate
+projects every pixel onto the ink↔paper axis in Lab space — if more than
+2% of pixels fall too far off that axis, the image isn't actually two-tone
+and the pipeline falls back to full k-means colour quantization instead of
+flattening a colour photo into a black-and-white mess.
+
+### Straight-run recovery
+
+Contour fitting doesn't force every edge through a cubic Bezier. Before
+fitting a run between two detected corners, a chord-straightness check
+(0.5px tolerance) tests whether every point on the run already lies within
+tolerance of the straight line between its endpoints — if so, it emits a
+plain `LineTo` instead of a curve, and a merge pass afterward collapses
+consecutive collinear `LineTo`s into one. A traced square stays four
+straight edges at any smoothness setting, not four near-straight cubics
+with rounding error baked in.
+
+### True holes, correct paint order
+
+Contour extraction (Suzuki-Abe border following over a marching-squares
+field) builds a real parent/child hole hierarchy per region. A letter "O"
+or a donut shape becomes one path with an inner subpath and
+`fill-rule="evenodd"` — not two overlapping opaque fills where the hole is
+really just a same-colour circle painted on top. Containment nesting also
+drives paint order in the scene graph, so a shape enclosed by another
+paints after its container rather than being silently occluded.
+
+## Determinism & testing
+
+The same input and options produce byte-identical SVG on every run, on
+every machine. That's an engineering constraint, not a happy accident: no
+`HashMap` iteration reaches an output path anywhere in the pipeline, every
+sort is stable, and colour quantization's k-means++ seeding is fixed
+rather than time- or thread-seeded. You can verify it yourself — run the
+same conversion twice and diff the bytes.
+
+Correctness is gated by a golden-corpus test harness
+(`spryteo-cli/tests/corpus.rs`) that renders every fixture's output back
+to a raster and compares it against the source with SSIM, alongside
+byte-budget and node-budget ceilings per fixture. Per-category SSIM gates:
+icons and pixel-art 0.92, line-art 0.90, photos 0.85, real-world mixed
+images 0.80. Goldens are regenerated with
+`UPDATE_GOLDENS=1 cargo test -p spryteo-cli --release --test corpus` and
+every regeneration is diffed by hand before it's trusted — an aggregate
+similarity score passing is necessary, never sufficient, so nothing gets
+accepted on the metric alone without a human looking at the rendered
+output.
 
 ## Library (Node)
 
@@ -179,20 +254,30 @@ approximations — this is what makes a traced circle come out as a real
 
 ### Stroke / centerline mode
 
-Setting `stroke: true` (or `--stroke`) switches to a dedicated centerline
-tracer suited to line art and hand-drawn strokes: variable-width paths
-with `pathLength="100"` normalized for animation, emitted with
-`fill="none"`.
+Setting `stroke: true` (or `--stroke`) bypasses colour quantization
+entirely and runs a dedicated centerline pipeline: binarize → skeletonize
+→ build a stroke graph → prune spurious branches → traverse → smooth.
+Traversal looks for a true Eulerian path through the stroke graph via
+Hierholzer's algorithm — a graph with exactly two odd-degree nodes gets a
+virtual edge added between them to close it into a circuit first; graphs
+with more than two odd-degree junctions (genuine branching strokes) fall
+back to a greedy walk that emits separate paths per branch rather than
+one continuous stroke. Each path's width is the per-stroke median
+(variable-width splitting along a single stroke is not yet implemented).
+Output paths get `pathLength="100"` normalized for animation and are
+emitted with `fill="none"`.
 
 ### Semantic grouping
 
 Shapes are grouped into a `<g>` tree two ways: containment-based (default
 — a shape nested inside another's bounding region becomes its child
-group) and mask-guided, where you supply your own segmentation masks
-(e.g. from a model you're already running) and Spryteo groups traced
-contours by mask-overlap coverage. Spryteo does not run its own
-object-detection/segmentation model — mask-guided grouping is
-bring-your-own-masks by design, not an automatic ML segmentation feature.
+group under the smallest-area shape that fully contains it) and
+mask-guided, where you supply your own segmentation masks (e.g. from a
+model you're already running) and Spryteo groups traced contours by
+mask-overlap coverage. Spryteo does not bundle or run an ONNX/SAM model
+itself — mask-guided grouping is bring-your-own-masks by design:
+`spryteo-semantic` implements the grouping and assignment algorithm only,
+not segmentation inference.
 
 ### Stable IDs
 
@@ -235,6 +320,27 @@ a stable `id`, `bbox`, `centroid`, `area`, resolved `fill`, its `group`
 key into the SVG's `<g id=...>` tree, `zOrder`, and a
 `suggestedDrawOrder` for animation sequencing. `meta.stats` gives
 node/path/byte counts for a quick sanity check without walking the tree.
+
+## Crate architecture
+
+The engine is a Rust workspace of small, single-purpose crates — every
+surface (CLI, Node addon, WASM, MCP) links the same ones, so there's
+exactly one place each algorithm lives.
+
+| Crate | Purpose |
+|---|---|
+| `spryteo-core` | Shared IR types, ConvertOptions, pipeline orchestration, errors |
+| `spryteo-raster` | Decode (PNG/JPEG/GIF/WebP/BMP), EXIF orientation, ICC→sRGB, downscale, preprocess |
+| `spryteo-quant` | Input classification, colour quantization, line-art binarization, background detection |
+| `spryteo-trace` | Contour extraction (Suzuki-Abe, marching squares), hole hierarchy |
+| `spryteo-fit` | Polygon simplification, corner detection, straight-run recovery, Bezier curve fitting |
+| `spryteo-geom` | Primitive recognition (circle, ellipse, rect, arc), geometry hashing |
+| `spryteo-stroke` | Centerline tracing: binarization, skeletonization, Eulerian path traversal |
+| `spryteo-semantic` | Mask-overlap grouping heuristics for externally-supplied segmentation masks |
+| `spryteo-svg` | Scene graph construction, SVG emission, metadata sidecar |
+| `spryteo-cli` | CLI binary (clap), pipeline wiring, error reporting |
+| `spryteo-mcp` | MCP server exposing convert_image and inspect_svg as agent tools |
+| `spryteo-api` | HTTP API stub (axum), planned not yet shipped |
 
 ## Built with
 
