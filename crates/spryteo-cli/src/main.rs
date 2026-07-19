@@ -1,6 +1,29 @@
 use clap::{Args, Parser};
 use spryteo_cli::{parse_mode, parse_preset, run_pipeline};
-use spryteo_core::{ColorSpec, ConvertOptions, OutputFormat, Preset};
+use spryteo_core::{ColorSpec, ConvertOptions, Layering, OutputFormat, Preset, Tri};
+
+fn parse_layering(s: &str) -> Result<Layering, String> {
+    match s.to_lowercase().as_str() {
+        "stacked" => Ok(Layering::Stacked),
+        "cutout" => Ok(Layering::Cutout),
+        _ => Err(format!(
+            "Invalid layering '{}'. Expected one of: stacked, cutout",
+            s
+        )),
+    }
+}
+
+fn parse_gradients(s: &str) -> Result<Tri, String> {
+    match s.to_lowercase().as_str() {
+        "auto" => Ok(Tri::Auto),
+        "on" => Ok(Tri::On),
+        "off" => Ok(Tri::Off),
+        _ => Err(format!(
+            "Invalid gradients value '{}'. Expected one of: auto, on, off",
+            s
+        )),
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "spryteo", version, about = "Vectorization tool")]
@@ -33,6 +56,14 @@ struct ConvertArgs {
     /// Target colour palette size (e.g. 8)
     #[arg(long)]
     colors: Option<u8>,
+
+    /// Layer composition mode for photo-mode quantization
+    #[arg(long, value_parser = parse_layering)]
+    layering: Option<Layering>,
+
+    /// Gradient detection: auto (photos only), on, or off
+    #[arg(long, value_parser = parse_gradients)]
+    gradients: Option<Tri>,
 
     /// Global curve-fit error budget in pixels
     #[arg(long)]
@@ -71,6 +102,8 @@ fn main() {
                     Some(n) => ColorSpec::N(n),
                     None => ColorSpec::Auto,
                 },
+                layering: args.layering.clone().unwrap_or(default_opts.layering),
+                gradients: args.gradients.clone().unwrap_or(default_opts.gradients),
                 tolerance: args.tolerance.unwrap_or(default_opts.tolerance),
                 smoothness: args.smoothness.unwrap_or(default_opts.smoothness),
                 turdsize: args.turdsize.unwrap_or(default_opts.turdsize),
