@@ -3,7 +3,7 @@
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use spryteo_core::{
-    Contour, ContourSet, ConvertOptions, ConvertResult, LayerStack, Rgb, SpryteoError,
+    Contour, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, SpryteoError,
 };
 
 fn count_contour_and_children(c: &Contour) -> usize {
@@ -14,7 +14,7 @@ fn count_contour_and_children(c: &Contour) -> usize {
         .sum::<usize>()
 }
 
-fn build_fills(layer_stack: &LayerStack, contour_set: &ContourSet) -> Vec<Rgb> {
+fn build_fills(layer_stack: &LayerStack, contour_set: &ContourSet) -> Vec<Fill> {
     let mut fills = Vec::new();
     for (layer, contours) in layer_stack.layers.iter().zip(contour_set.layers.iter()) {
         let mut count = 0;
@@ -22,7 +22,7 @@ fn build_fills(layer_stack: &LayerStack, contour_set: &ContourSet) -> Vec<Rgb> {
             count += count_contour_and_children(contour);
         }
         for _ in 0..count {
-            fills.push(layer.color);
+            fills.push(Fill::Solid(layer.color));
         }
     }
     fills

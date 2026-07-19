@@ -1,5 +1,6 @@
 use spryteo_core::{
-    Contour, ContourSet, ConvertOptions, ConvertResult, LayerStack, Mode, Preset, Rgb, SpryteoError,
+    Contour, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode, Preset,
+    SpryteoError,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -82,7 +83,7 @@ fn count_contour_and_children(c: &Contour) -> usize {
         .sum::<usize>()
 }
 
-pub fn build_fills(layer_stack: &LayerStack, contour_set: &ContourSet) -> Vec<Rgb> {
+pub fn build_fills(layer_stack: &LayerStack, contour_set: &ContourSet) -> Vec<Fill> {
     let mut fills = Vec::new();
     for (layer, contours) in layer_stack.layers.iter().zip(contour_set.layers.iter()) {
         let mut count = 0;
@@ -90,7 +91,7 @@ pub fn build_fills(layer_stack: &LayerStack, contour_set: &ContourSet) -> Vec<Rg
             count += count_contour_and_children(contour);
         }
         for _ in 0..count {
-            fills.push(layer.color);
+            fills.push(Fill::Solid(layer.color));
         }
     }
     fills
@@ -176,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_fills_building() {
-        use spryteo_core::ir::{Contour, ContourSet, Layer, LayerStack, Rgb};
+        use spryteo_core::ir::{Contour, ContourSet, Fill, Layer, LayerStack, Rgb};
 
         let red = Rgb { r: 255, g: 0, b: 0 };
         let green = Rgb { r: 0, g: 255, b: 0 };
@@ -219,10 +220,10 @@ mod tests {
 
         let fills = build_fills(&layer_stack, &contour_set);
         assert_eq!(fills.len(), 4);
-        assert_eq!(fills[0], red);
-        assert_eq!(fills[1], red);
-        assert_eq!(fills[2], green);
-        assert_eq!(fills[3], green);
+        assert_eq!(fills[0], Fill::Solid(red));
+        assert_eq!(fills[1], Fill::Solid(red));
+        assert_eq!(fills[2], Fill::Solid(green));
+        assert_eq!(fills[3], Fill::Solid(green));
     }
 
     #[test]
