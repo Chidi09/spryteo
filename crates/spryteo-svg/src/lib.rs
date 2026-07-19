@@ -2,9 +2,9 @@
 
 use spryteo_core::ir::{
     Bbox, ConvertResult, CurveSet, Group, Meta, Node, NodeMeta, PathElement, Primitive, Rgb,
-    SceneGraph, Shape, Stats, Transform,
+    SceneGraph, Shape, Stats, Stroke, Transform,
 };
-use spryteo_core::options::{ConvertOptions, Grouping, IdStyle, OutputFormat, TOrigin};
+use spryteo_core::options::{ConvertOptions, Grouping, IdStyle, OutputFormat, Preset, TOrigin};
 use spryteo_geom::{dedupe_ids, stable_id};
 use std::fmt::Write;
 
@@ -776,11 +776,507 @@ pub fn emit_svg(
     ConvertResult { svg, meta }
 }
 
+/// Builds a `SceneGraph` from a `CurveSet` specifically for stroke-mode.
+///
+/// ## Grouping Simplification
+/// Consistent with `build_scene_graph`, we produce one group (`<g>`) per curve.
+/// This maintains consistency across the pipeline and provides animators with
+/// a clean per-stroke hierarchy.
+///
+/// ## Centroid Shifting
+/// Centroid-shifting is not performed for stroke mode because open curves do not
+/// have a well-defined centroid/interior area like closed shapes. Coordinates are
+/// baked directly (equivalent to `TOrigin::Baked`).
+pub fn build_stroke_scene_graph(
+    curves: &CurveSet,
+    id_style: &IdStyle,
+    widths: &[f64],
+) -> SceneGraph {
+    let mut groups = Vec::new();
+
+    let mut ids = Vec::new();
+    for (i, curve) in curves.curves.iter().enumerate() {
+        let id = match id_style {
+            IdStyle::Hash => {
+                let points = extract_endpoints(&curve.segments);
+                stable_id(&points, None, i)
+            }
+            IdStyle::Sequential => {
+                format!("s-{}", i)
+            }
+            IdStyle::None => "".to_string(),
+        };
+        ids.push(id);
+    }
+
+    if !matches!(id_style, IdStyle::None) {
+        dedupe_ids(&mut ids);
+    }
+
+    for (i, curve) in curves.curves.iter().enumerate() {
+        let id = ids[i].clone();
+        let width = widths.get(i).copied().unwrap_or(1.0);
+
+        let node = Node {
+            id: id.clone(),
+            fill: None,
+            stroke: Some(Stroke {
+                color: Rgb { r: 0, g: 0, b: 0 },
+                width,
+            }),
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Path(curve.segments.clone()),
+        };
+
+        let group_id = if id.is_empty() {
+            "".to_string()
+        } else {
+            format!("g-{}", id)
+        };
+
+        let group = Group {
+            id: group_id,
+            nodes: vec![node],
+            groups: vec![],
+        };
+
+        groups.push(group);
+    }
+
+    SceneGraph { groups }
+}
+
+/// Serializes a stroke-mode scene graph into an SVG string.
+///
+/// Supports Svg, SvgPretty, and Jsx output formats.
+/// If `opts.emit_css` is `Some(Preset::Draw)`, appends a `<style>` block
+/// containing keyframe and staggered animation delay rules.
+///
+/// NOTE: `Preset::Fade` and `Preset::Pop` are currently deferred/out of scope
+/// for this centerline-tracing dispatch and are treated as no-ops.
+fn serialize_stroke_svg(
+    scene: &SceneGraph,
+    width: u32,
+    height: u32,
+    opts: &ConvertOptions,
+) -> String {
+    let precision = opts.precision as usize;
+    let pretty = matches!(opts.output, OutputFormat::SvgPretty | OutputFormat::Jsx);
+    let is_jsx = matches!(opts.output, OutputFormat::Jsx);
+
+    let mut out = String::new();
+
+    let stroke_width_attr = if is_jsx {
+        "strokeWidth"
+    } else {
+        "stroke-width"
+    };
+    let stroke_linecap_attr = if is_jsx {
+        "strokeLinecap"
+    } else {
+        "stroke-linecap"
+    };
+    let stroke_linejoin_attr = if is_jsx {
+        "strokeLinejoin"
+    } else {
+        "stroke-linejoin"
+    };
+
+    if pretty {
+        writeln!(out, "<svg viewBox=\"0 0 {} {}\">", width, height).unwrap();
+    } else {
+        write!(out, "<svg viewBox=\"0 0 {} {}\">", width, height).unwrap();
+    }
+
+    let mut nodes_with_ids = Vec::new();
+
+    for group in &scene.groups {
+        let use_group = !matches!(opts.grouping, Grouping::Flat);
+
+        if use_group {
+            let indent = if pretty { "  " } else { "" };
+            let mut g_attrs = String::new();
+            if !matches!(opts.id_style, IdStyle::None) && !group.id.is_empty() {
+                write!(g_attrs, " id=\"{}\"", escape_html(&group.id)).unwrap();
+            }
+            if pretty {
+                writeln!(out, "{}<g{}>", indent, g_attrs).unwrap();
+            } else {
+                write!(out, "<g{}>", g_attrs).unwrap();
+            }
+        }
+
+        for node in &group.nodes {
+            let indent = if pretty {
+                if use_group {
+                    "    "
+                } else {
+                    "  "
+                }
+            } else {
+                ""
+            };
+
+            let mut node_attrs = String::new();
+            if !matches!(opts.id_style, IdStyle::None) && !node.id.is_empty() {
+                write!(node_attrs, " id=\"{}\"", escape_html(&node.id)).unwrap();
+                nodes_with_ids.push(node);
+            }
+
+            write!(node_attrs, " fill=\"none\"").unwrap();
+
+            if let Some(ref stroke) = node.stroke {
+                write!(
+                    node_attrs,
+                    " stroke=\"#{:02x}{:02x}{:02x}\"",
+                    stroke.color.r, stroke.color.g, stroke.color.b
+                )
+                .unwrap();
+                write!(
+                    node_attrs,
+                    " {}=\"{}\"",
+                    stroke_width_attr,
+                    format_coord(stroke.width, precision)
+                )
+                .unwrap();
+            } else {
+                write!(node_attrs, " stroke=\"#000000\"").unwrap();
+                write!(
+                    node_attrs,
+                    " {}=\"{}\"",
+                    stroke_width_attr,
+                    format_coord(1.0, precision)
+                )
+                .unwrap();
+            }
+
+            write!(
+                node_attrs,
+                " {}=\"round\" {}=\"round\" pathLength=\"100\"",
+                stroke_linecap_attr, stroke_linejoin_attr
+            )
+            .unwrap();
+
+            let tx = node.transform.translate_x;
+            let ty = node.transform.translate_y;
+            if tx != 0.0 || ty != 0.0 {
+                write!(
+                    node_attrs,
+                    " transform=\"translate({}, {})\"",
+                    format_coord(tx, precision),
+                    format_coord(ty, precision)
+                )
+                .unwrap();
+            }
+
+            match &node.shape {
+                Shape::Primitive(prim) => match prim {
+                    Primitive::Circle { cx, cy, r } => {
+                        if pretty {
+                            writeln!(
+                                out,
+                                "{}<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{} />",
+                                indent,
+                                format_coord(*cx, precision),
+                                format_coord(*cy, precision),
+                                format_coord(*r, precision),
+                                node_attrs
+                            )
+                            .unwrap();
+                        } else {
+                            write!(
+                                out,
+                                "<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{}/>",
+                                format_coord(*cx, precision),
+                                format_coord(*cy, precision),
+                                format_coord(*r, precision),
+                                node_attrs
+                            )
+                            .unwrap();
+                        }
+                    }
+                    Primitive::Ellipse {
+                        cx,
+                        cy,
+                        rx,
+                        ry,
+                        rotation: _,
+                    } => {
+                        let rot_attr = String::new();
+                        if pretty {
+                            writeln!(
+                                out,
+                                "{}<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{} />",
+                                indent,
+                                format_coord(*cx, precision),
+                                format_coord(*cy, precision),
+                                format_coord(*rx, precision),
+                                format_coord(*ry, precision),
+                                rot_attr,
+                                node_attrs
+                            )
+                            .unwrap();
+                        } else {
+                            write!(
+                                out,
+                                "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{}/>",
+                                format_coord(*cx, precision),
+                                format_coord(*cy, precision),
+                                format_coord(*rx, precision),
+                                format_coord(*ry, precision),
+                                rot_attr,
+                                node_attrs
+                            )
+                            .unwrap();
+                        }
+                    }
+                    Primitive::Rect {
+                        x,
+                        y,
+                        width,
+                        height,
+                        rx,
+                        ry,
+                    } => {
+                        let mut rx_ry_attrs = String::new();
+                        if let Some(val_rx) = rx {
+                            write!(rx_ry_attrs, " rx=\"{}\"", format_coord(*val_rx, precision))
+                                .unwrap();
+                        }
+                        if let Some(val_ry) = ry {
+                            write!(rx_ry_attrs, " ry=\"{}\"", format_coord(*val_ry, precision))
+                                .unwrap();
+                        }
+                        if pretty {
+                            writeln!(
+                                out,
+                                "{}<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{} />",
+                                indent,
+                                format_coord(*x, precision),
+                                format_coord(*y, precision),
+                                format_coord(*width, precision),
+                                format_coord(*height, precision),
+                                rx_ry_attrs,
+                                node_attrs
+                            )
+                            .unwrap();
+                        } else {
+                            write!(
+                                out,
+                                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{}/>",
+                                format_coord(*x, precision),
+                                format_coord(*y, precision),
+                                format_coord(*width, precision),
+                                format_coord(*height, precision),
+                                rx_ry_attrs,
+                                node_attrs
+                            )
+                            .unwrap();
+                        }
+                    }
+                    Primitive::Arc {
+                        cx,
+                        cy,
+                        rx,
+                        ry,
+                        start_angle,
+                        end_angle,
+                        rotation,
+                    } => {
+                        let cx = *cx;
+                        let cy = *cy;
+                        let rx = *rx;
+                        let ry = *ry;
+                        let start_angle = *start_angle;
+                        let end_angle = *end_angle;
+                        let rot = *rotation;
+
+                        let point_on_ellipse = |angle: f64| -> (f64, f64) {
+                            let x_local = rx * angle.cos();
+                            let y_local = ry * angle.sin();
+                            let x_rot = x_local * rot.cos() - y_local * rot.sin();
+                            let y_rot = x_local * rot.sin() + y_local * rot.cos();
+                            (cx + x_rot, cy + y_rot)
+                        };
+
+                        let (x1, y1) = point_on_ellipse(start_angle);
+                        let (x2, y2) = point_on_ellipse(end_angle);
+
+                        let angle_diff = (end_angle - start_angle).abs();
+                        let large_arc_flag = if angle_diff > std::f64::consts::PI {
+                            1
+                        } else {
+                            0
+                        };
+                        let sweep_flag = if end_angle > start_angle { 1 } else { 0 };
+
+                        let d_str = format!(
+                            "M {} {} A {} {} {} {} {} {} {}",
+                            format_coord(x1, precision),
+                            format_coord(y1, precision),
+                            format_coord(rx, precision),
+                            format_coord(ry, precision),
+                            format_coord(rot.to_degrees(), precision),
+                            large_arc_flag,
+                            sweep_flag,
+                            format_coord(x2, precision),
+                            format_coord(y2, precision)
+                        );
+
+                        if pretty {
+                            writeln!(out, "{}<path d=\"{}\"{} />", indent, d_str, node_attrs)
+                                .unwrap();
+                        } else {
+                            write!(out, "<path d=\"{}\"{}/>", d_str, node_attrs).unwrap();
+                        }
+                    }
+                },
+                Shape::Path(segments) => {
+                    let d_str = format_path_data(segments, precision);
+                    if pretty {
+                        writeln!(out, "{}<path d=\"{}\"{} />", indent, d_str, node_attrs).unwrap();
+                    } else {
+                        write!(out, "<path d=\"{}\"{}/>", d_str, node_attrs).unwrap();
+                    }
+                }
+            }
+        }
+
+        if use_group {
+            let indent = if pretty { "  " } else { "" };
+            if pretty {
+                writeln!(out, "{}</g>", indent).unwrap();
+            } else {
+                write!(out, "</g>").unwrap();
+            }
+        }
+    }
+
+    if let Some(Preset::Draw) = opts.emit_css {
+        if !nodes_with_ids.is_empty() {
+            if pretty {
+                writeln!(out, "  <style>").unwrap();
+                writeln!(out, "    @keyframes sc-draw {{").unwrap();
+                writeln!(out, "      to {{").unwrap();
+                writeln!(out, "        stroke-dashoffset: 0;").unwrap();
+                writeln!(out, "      }}").unwrap();
+                writeln!(out, "    }}").unwrap();
+                for (i, node) in nodes_with_ids.iter().enumerate() {
+                    let delay = i * 100;
+                    writeln!(out, "    #{} {{", node.id).unwrap();
+                    writeln!(out, "      stroke-dasharray: 100;").unwrap();
+                    writeln!(out, "      stroke-dashoffset: 100;").unwrap();
+                    writeln!(out, "      animation: sc-draw 1s ease forwards;").unwrap();
+                    writeln!(out, "      animation-delay: {}ms;", delay).unwrap();
+                    writeln!(out, "    }}").unwrap();
+                }
+                writeln!(out, "  </style>").unwrap();
+            } else {
+                write!(
+                    out,
+                    "<style>@keyframes sc-draw{{to{{stroke-dashoffset:0;}}}}"
+                )
+                .unwrap();
+                for (i, node) in nodes_with_ids.iter().enumerate() {
+                    let delay = i * 100;
+                    write!(
+                        out,
+                        "#{} {{stroke-dasharray:100;stroke-dashoffset:100;animation:sc-draw 1s ease forwards;animation-delay:{}ms;}}",
+                        node.id,
+                        delay
+                    )
+                    .unwrap();
+                }
+                write!(out, "</style>").unwrap();
+            }
+        }
+    }
+
+    if pretty {
+        writeln!(out, "</svg>").unwrap();
+    } else {
+        write!(out, "</svg>").unwrap();
+    }
+
+    out
+}
+
+/// Walks the `SceneGraph`, emits the stroke SVG string, and builds the `Meta` sidecar.
+pub fn emit_stroke_svg(
+    scene: &SceneGraph,
+    width: u32,
+    height: u32,
+    opts: &ConvertOptions,
+) -> ConvertResult {
+    let mut nodes_meta = Vec::new();
+    let mut node_index = 0;
+    let mut path_count = 0;
+
+    for group in &scene.groups {
+        for node in &group.nodes {
+            let (rel_bbox, rel_centroid, area) = get_shape_geom(&node.shape, opts.arcs);
+
+            let tx = node.transform.translate_x;
+            let ty = node.transform.translate_y;
+
+            let bbox = Bbox {
+                x_min: rel_bbox.x_min + tx,
+                x_max: rel_bbox.x_max + tx,
+                y_min: rel_bbox.y_min + ty,
+                y_max: rel_bbox.y_max + ty,
+            };
+
+            let centroid = (rel_centroid.0 + tx, rel_centroid.1 + ty);
+
+            let is_path = match &node.shape {
+                Shape::Path(_) => true,
+                Shape::Primitive(Primitive::Arc { .. }) => !opts.arcs,
+                _ => false,
+            };
+            if is_path {
+                path_count += 1;
+            }
+
+            nodes_meta.push(NodeMeta {
+                id: node.id.clone(),
+                bbox,
+                centroid,
+                area,
+                fill: node.fill,
+                group: group.id.clone(),
+                z_order: node_index,
+                suggested_draw_order: node_index,
+            });
+
+            node_index += 1;
+        }
+    }
+
+    let svg = serialize_stroke_svg(scene, width, height, opts);
+    let byte_count = svg.len();
+
+    let stats = Stats {
+        node_count: node_index,
+        path_count,
+        byte_count,
+    };
+
+    let meta = Meta {
+        nodes: nodes_meta,
+        stats,
+    };
+
+    ConvertResult { svg, meta }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use spryteo_core::ir::{Curve, CurveSet, PathElement, Primitive, Rgb, Shape};
-    use spryteo_core::options::{ConvertOptions, IdStyle, OutputFormat, TOrigin};
+    use spryteo_core::options::{ConvertOptions, IdStyle, OutputFormat, Preset, TOrigin};
 
     fn make_test_options() -> ConvertOptions {
         ConvertOptions::default()
@@ -1088,5 +1584,175 @@ mod tests {
         let res2 = emit_svg(&scene, 500, 500, &opts);
 
         assert_eq!(res1.svg, res2.svg);
+    }
+
+    #[test]
+    fn test_stroke_emit_open_path() {
+        let curve = Curve {
+            segments: vec![
+                PathElement::MoveTo(10.0, 10.0),
+                PathElement::LineTo(20.0, 30.0),
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let scene = build_stroke_scene_graph(&curves, &IdStyle::Sequential, &[5.432]);
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::Sequential;
+        opts.precision = 2;
+
+        let res = emit_stroke_svg(&scene, 100, 100, &opts);
+        let svg = res.svg;
+
+        assert!(svg.contains("<path"), "SVG should contain path element");
+        assert!(svg.contains("fill=\"none\""), "fill should be none");
+        assert!(
+            svg.contains("stroke=\"#000000\""),
+            "stroke color should be #000000"
+        );
+        assert!(
+            svg.contains("stroke-width=\"5.43\""),
+            "stroke-width should match and be rounded to precision"
+        );
+        assert!(
+            svg.contains("pathLength=\"100\""),
+            "pathLength should be 100"
+        );
+
+        // Assert open path (d attribute does not end with Z or z)
+        assert!(
+            svg.contains("d=\"M 10.00 10.00 L 20.00 30.00\""),
+            "d attribute should not end with Z/z"
+        );
+        assert!(!svg.contains('Z'), "should not contain Z");
+        assert!(!svg.contains('z'), "should not contain z");
+    }
+
+    #[test]
+    fn test_stroke_emit_css_draw() {
+        let curve1 = Curve {
+            segments: vec![
+                PathElement::MoveTo(10.0, 10.0),
+                PathElement::LineTo(20.0, 30.0),
+            ],
+            primitive: None,
+        };
+        let curve2 = Curve {
+            segments: vec![
+                PathElement::MoveTo(40.0, 40.0),
+                PathElement::LineTo(50.0, 60.0),
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve1, curve2],
+        };
+        let scene = build_stroke_scene_graph(&curves, &IdStyle::Sequential, &[3.0, 4.0]);
+
+        let mut opts_with_css = make_test_options();
+        opts_with_css.id_style = IdStyle::Sequential;
+        opts_with_css.emit_css = Some(Preset::Draw);
+        opts_with_css.output = OutputFormat::SvgPretty;
+
+        let res_with = emit_stroke_svg(&scene, 100, 100, &opts_with_css);
+        assert!(res_with.svg.contains("<style"), "should contain style tag");
+        assert!(
+            res_with.svg.contains("@keyframes"),
+            "should contain keyframes"
+        );
+        assert!(
+            res_with.svg.contains("stroke-dasharray"),
+            "should contain stroke-dasharray"
+        );
+
+        // Staggered delays check
+        assert!(
+            res_with.svg.contains("animation-delay: 0ms;"),
+            "should contain delay for first node"
+        );
+        assert!(
+            res_with.svg.contains("animation-delay: 100ms;"),
+            "should contain delay for second node"
+        );
+
+        let mut opts_no_css = make_test_options();
+        opts_no_css.id_style = IdStyle::Sequential;
+        opts_no_css.emit_css = None;
+
+        let res_without = emit_stroke_svg(&scene, 100, 100, &opts_no_css);
+        assert!(
+            !res_without.svg.contains("<style"),
+            "should not contain style tag"
+        );
+        assert!(
+            !res_without.svg.contains("@keyframes"),
+            "should not contain keyframes"
+        );
+        assert!(
+            !res_without.svg.contains("stroke-dasharray"),
+            "should not contain stroke-dasharray in CSS"
+        );
+    }
+
+    #[test]
+    fn test_stroke_viewbox_and_id_styles() {
+        let curve = Curve {
+            segments: vec![
+                PathElement::MoveTo(10.0, 10.0),
+                PathElement::LineTo(20.0, 30.0),
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let scene_hash = build_stroke_scene_graph(&curves, &IdStyle::Hash, &[2.0]);
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::Hash;
+        let res_hash = emit_stroke_svg(&scene_hash, 150, 250, &opts);
+        assert!(
+            res_hash.svg.contains("viewBox=\"0 0 150 250\""),
+            "should preserve viewBox dimensions"
+        );
+        assert!(
+            res_hash.svg.contains("id=\"s-"),
+            "should contain hash-based ID"
+        );
+
+        let scene_none = build_stroke_scene_graph(&curves, &IdStyle::None, &[2.0]);
+        opts.id_style = IdStyle::None;
+        let res_none = emit_stroke_svg(&scene_none, 150, 250, &opts);
+        assert!(!res_none.svg.contains("id="), "should omit ID attribute");
+    }
+
+    #[test]
+    fn test_stroke_determinism() {
+        let curve1 = Curve {
+            segments: vec![
+                PathElement::MoveTo(10.0, 10.0),
+                PathElement::LineTo(20.0, 30.0),
+            ],
+            primitive: None,
+        };
+        let curve2 = Curve {
+            segments: vec![
+                PathElement::MoveTo(40.0, 40.0),
+                PathElement::LineTo(50.0, 60.0),
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve1, curve2],
+        };
+        let scene = build_stroke_scene_graph(&curves, &IdStyle::Hash, &[3.0, 4.0]);
+        let opts = make_test_options();
+
+        let res1 = emit_stroke_svg(&scene, 100, 100, &opts);
+        let res2 = emit_stroke_svg(&scene, 100, 100, &opts);
+
+        assert_eq!(res1.svg, res2.svg, "outputs should be byte-identical");
+        assert_eq!(res1.meta.stats.byte_count, res2.meta.stats.byte_count);
     }
 }
