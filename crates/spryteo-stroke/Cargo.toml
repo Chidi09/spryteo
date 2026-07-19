@@ -9,3 +9,7 @@ description = "Centerline tracing: skeletonization, stroke graph, Eulerian path 
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+spryteo-core = { path = "../spryteo-core" }
+
+[dev-dependencies]
+serde_json.workspace = true
