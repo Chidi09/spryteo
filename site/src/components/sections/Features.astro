@@ -16,14 +16,14 @@ const features: Feature[] = [
 <section class="section">
   <div class="grid">
     {features.map((f) => (
-      <div class="card">
+      <div class="card sc-reveal">
         <div class="card-tag" set:html={f.tag} />
         <h3 class="card-title">{f.title}</h3>
         <p class="card-desc" set:html={f.desc} />
       </div>
     ))}
   </div>
-  <a href="/docs" class="section-docs-link">see everything Spryteo can do &#8594;</a>
+  <a href="/docs" class="section-docs-link sc-reveal">see everything Spryteo can do &#8594;</a>
 </section>
 
 <style>

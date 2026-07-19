@@ -1,22 +1,89 @@
 ---
-interface Props { html?: string; code?: string; }
-const { html, code } = Astro.props as Props;
+interface Props {
+  html?: string;
+  code?: string;
+  title?: string;
+  minimal?: boolean;
+}
+const { html, code, title, minimal = false } = Astro.props as Props;
 ---
 
-{html && <div class="code-block" set:html={html} />}
-{code && <pre class="code-block code-block-plain">{code}</pre>}
+<div class:list={['code-block-wrapper', { minimal }]}>
+  {!minimal && (
+    <div class="mac-titlebar" aria-hidden="true">
+      <div class="mac-dots">
+        <div class="dot dot-red"></div>
+        <div class="dot dot-amber"></div>
+        <div class="dot dot-green"></div>
+      </div>
+      {title && <div class="mac-title">{title}</div>}
+    </div>
+  )}
+  {html && <div class="code-block" set:html={html} />}
+  {code && <pre class="code-block code-block-plain">{code}</pre>}
+  {!html && !code && (
+    <div class="code-block code-block-plain">
+      <slot />
+    </div>
+  )}
+</div>
 
 <style>
-  .code-block {
+  .code-block-wrapper {
     background: var(--surface);
     border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    margin: 0 0 44px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+    transition: transform var(--transition-bounce), box-shadow var(--transition-fast);
+  }
+  .code-block-wrapper.minimal {
+    margin: 0;
     border-radius: var(--radius-sm);
-    padding: 16px 18px;
-    font-family: var(--font-mono);
+    box-shadow: none;
+  }
+  .code-block-wrapper.minimal .code-block {
+    padding: 12px 16px;
     font-size: 14px;
+  }
+  .mac-titlebar {
+    display: flex;
+    align-items: center;
+    padding: 14px 18px;
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  .mac-dots {
+    display: flex;
+    gap: 8px;
+    position: absolute;
+    left: 18px;
+  }
+  .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+  .dot-red { background: #FF5F56; }
+  .dot-amber { background: #FFBD2E; }
+  .dot-green { background: #27C93F; }
+  .mac-title {
+    flex: 1;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+  .code-block {
+    padding: 24px 28px;
+    font-family: var(--font-mono);
+    font-size: 15px;
     line-height: 1.7;
     overflow-x: auto;
-    margin: 0 0 44px;
+    margin: 0;
   }
   .code-block-plain {
     color: var(--text);

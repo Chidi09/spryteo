@@ -9,10 +9,10 @@ interface Props {
 const { fontSize = '18px' } = Astro.props;
 ---
 
-<a href="#" id="goHome" class="wordmark" style={`font-size: ${fontSize};`}>
+<div class="wordmark" style={`font-size: ${fontSize};`}>
   <Logo />
   <span>spryteo</span>
-</a>
+</div>
 
 <style>
   .wordmark {

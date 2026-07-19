@@ -330,5 +330,21 @@
       b.style.transform = '';
     });
   });
+
+  // --- Scroll Reveal ---
+  if (!reduceMotion && 'IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in-view');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { rootMargin: '0px 0px -10% 0px', threshold: 0.05 });
+
+    document.querySelectorAll('.sc-reveal').forEach((el) => {
+      observer.observe(el);
+    });
+  }
 })();
 </script>
