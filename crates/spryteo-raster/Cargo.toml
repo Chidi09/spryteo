@@ -9,3 +9,4 @@ description = "Decode (PNG/JPEG/GIF/WebP/BMP), EXIF orientation, ICC to sRGB, pr
 [dependencies]
 spryteo-core = { path = "../spryteo-core" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+moxcms = "0.8"

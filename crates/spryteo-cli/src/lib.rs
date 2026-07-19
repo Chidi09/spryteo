@@ -485,6 +485,81 @@ mod tests {
     }
 
     #[test]
+    fn test_e2e_exif_orientation_applied_through_full_pipeline() {
+        // Fixture: 40x20 PNG, left half red / right half blue, tagged with
+        // EXIF Orientation=6 (rotate 90 CW to display upright). Correct
+        // decoding (crates/spryteo-raster's decode()) must rotate this to
+        // a 20x40 image with red on top and blue on the bottom -- verified
+        // independently against Pillow's own `ImageOps.exif_transpose`
+        // (see crates/spryteo-raster/tests/decode.rs for the isolated
+        // decode-level test; this proves the correction actually survives
+        // the full quantize/trace/fit/svg pipeline, not just decode()).
+        let png_bytes: &[u8] = include_bytes!("../tests/fixtures/exif_oriented_icon.png");
+
+        let opts = ConvertOptions {
+            mode: Mode::Icon,
+            ..ConvertOptions::default()
+        };
+        let result = run_convert(png_bytes, &opts).unwrap();
+
+        // The pipeline must have picked up the corrected (swapped) 20x40
+        // dimensions, not the raw 40x20 stored dimensions.
+        assert!(
+            result.svg.contains("width=\"20\"") || result.svg.contains("viewBox=\"0 0 20 40\""),
+            "expected orientation-corrected 20x40 dimensions in SVG, got: {}",
+            result.svg
+        );
+
+        assert_eq!(
+            result.meta.nodes.len(),
+            2,
+            "expected exactly two colour regions"
+        );
+
+        let red = spryteo_core::Rgb {
+            r: 220,
+            g: 20,
+            b: 20,
+        };
+        let blue = spryteo_core::Rgb {
+            r: 20,
+            g: 20,
+            b: 220,
+        };
+        let red_node = result
+            .meta
+            .nodes
+            .iter()
+            .find(|n| n.fill == Some(red))
+            .expect("red region should be present");
+        let blue_node = result
+            .meta
+            .nodes
+            .iter()
+            .find(|n| n.fill == Some(blue))
+            .expect("blue region should be present");
+
+        // Post-rotation: red occupies the top half (small y), blue the
+        // bottom half (large y) of the corrected 20x40 canvas. Icon-mode
+        // classification treats one colour as a full-canvas background
+        // layer (hence red's centroid sits near canvas-middle rather than
+        // strictly in the top half) with the other cut out as a
+        // constrained foreground shape, so only the cutout shape's bbox
+        // is checked precisely.
+        assert!(
+            red_node.centroid.1 < blue_node.centroid.1,
+            "red region (was left half pre-rotation) should end up above blue (was right half): red centroid={:?}, blue centroid={:?}",
+            red_node.centroid,
+            blue_node.centroid
+        );
+        assert!(
+            blue_node.bbox.y_min >= 19.0,
+            "blue region (post-rotation bottom half) should not bleed into the top half, bbox={:?}",
+            blue_node.bbox
+        );
+    }
+
+    #[test]
     fn test_garbage_input() {
         let garbage = b"Not a real image file content at all";
         let opts = ConvertOptions::default();

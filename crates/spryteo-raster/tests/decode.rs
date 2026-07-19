@@ -173,3 +173,93 @@ fn reject_unsupported_format() {
     let err = spryteo_raster::decode(tiff_header, &opts).unwrap_err();
     assert!(matches!(err, SpryteoError::InvalidInput(_)));
 }
+
+// ── EXIF orientation / ICC → sRGB ───────────────────────────────────────
+//
+// Fixtures generated with Pillow (see git history for the generating
+// script); expected pixel values were independently cross-checked against
+// Pillow's own `ImageOps.exif_transpose` (orientation) and
+// `ImageCms.profileToProfile` (ICC), not just derived from this crate's
+// own output.
+
+#[test]
+fn exif_orientation_6_rotates_to_upright() {
+    // A 4x2 PNG with EXIF Orientation=6 (rotate 90 CW to display upright)
+    // and four distinct quadrant colours, stored pre-rotation as:
+    //   row0: red,  red,  green,  green
+    //   row1: blue, blue, yellow, yellow
+    // After correction it must become a 2x4 image:
+    //   row0: blue,   red
+    //   row1: blue,   red
+    //   row2: yellow, green
+    //   row3: yellow, green
+    let bytes = include_bytes!("fixtures/exif_orientation_6.png");
+    let opts = test_options();
+    let result = spryteo_raster::decode(bytes, &opts).unwrap();
+
+    assert_eq!(result.width, 2);
+    assert_eq!(result.height, 4);
+
+    let px = |x: u32, y: u32| -> [u8; 3] {
+        let idx = ((y * result.width + x) * 4) as usize;
+        [
+            result.pixels[idx],
+            result.pixels[idx + 1],
+            result.pixels[idx + 2],
+        ]
+    };
+
+    assert_eq!(px(0, 0), [0, 0, 255], "top-left should be blue");
+    assert_eq!(px(1, 0), [255, 0, 0], "top-right should be red");
+    assert_eq!(px(0, 1), [0, 0, 255], "should still be blue");
+    assert_eq!(px(1, 1), [255, 0, 0], "should still be red");
+    assert_eq!(px(0, 2), [255, 255, 0], "should be yellow");
+    assert_eq!(px(1, 2), [0, 255, 0], "should be green");
+    assert_eq!(px(0, 3), [255, 255, 0], "should still be yellow");
+    assert_eq!(px(1, 3), [0, 255, 0], "should still be green");
+}
+
+#[test]
+fn no_exif_orientation_is_a_no_op() {
+    // Plain 4x4 PNG (no EXIF at all) must decode unchanged in shape.
+    let opts = test_options();
+    let original = make_4x4_rgba();
+    let bytes = encode(&original, ImageFormat::Png);
+    let result = spryteo_raster::decode(&bytes, &opts).unwrap();
+    assert_eq!(result.width, 4);
+    assert_eq!(result.height, 4);
+    assert_eq!(result.pixels, original.into_raw());
+}
+
+#[test]
+fn icc_adobe_rgb_profile_is_converted_to_srgb() {
+    // An 8x8 PNG whose raw stored pixel bytes are (136, 255, 51) but is
+    // tagged with an embedded Adobe RGB (1998) ICC profile. Interpreted
+    // correctly (converted to sRGB), that value must land at (0, 255, 0) --
+    // independently confirmed via Pillow/LittleCMS
+    // (ImageCms.profileToProfile, relative colorimetric intent). If ICC
+    // conversion were skipped, decode would instead yield the raw stored
+    // bytes (136, 255, 51).
+    let bytes = include_bytes!("fixtures/adobe_rgb_green.png");
+    let opts = test_options();
+    let result = spryteo_raster::decode(bytes, &opts).unwrap();
+
+    assert_eq!(result.width, 8);
+    assert_eq!(result.height, 8);
+    assert_eq!(&result.pixels[0..4], &[0, 255, 0, 255]);
+
+    // Sanity: prove this is a real conversion, not coincidence -- the raw
+    // stored bytes are NOT what we expect after conversion.
+    assert_ne!(&result.pixels[0..3], &[136, 255, 51]);
+}
+
+#[test]
+fn png_without_icc_profile_is_unaffected() {
+    // No ICC profile present -- decode should return exactly the encoded
+    // pixel bytes, same as the existing decode_png_roundtrip test.
+    let opts = test_options();
+    let original = make_4x4_rgba();
+    let bytes = encode(&original, ImageFormat::Png);
+    let result = spryteo_raster::decode(&bytes, &opts).unwrap();
+    assert_eq!(result.pixels, original.into_raw());
+}
