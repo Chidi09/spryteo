@@ -209,11 +209,18 @@ fn fit_single_contour(contour: &Contour, tolerance: f32, smoothness: f32) -> Cur
             let s_idx = corners[i];
             let e_idx = corners[(i + 1) % num_corners];
 
+            // Push-then-advance so a single-corner contour (s_idx ==
+            // e_idx) walks the full loop instead of producing an empty
+            // span that collapses the whole outline to a degenerate
+            // LineTo.
             let mut span_indices = Vec::new();
             let mut curr = s_idx;
-            while curr != e_idx {
+            loop {
                 span_indices.push(curr);
                 curr = (curr + 1) % n;
+                if curr == e_idx {
+                    break;
+                }
             }
             span_indices.push(e_idx);
 

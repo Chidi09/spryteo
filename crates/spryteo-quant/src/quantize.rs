@@ -15,7 +15,7 @@
 //! **not implemented** — this quantizer only handles the icon path.  That
 //! split belongs in Phase 4.
 
-use spryteo_core::{ClassifiedInput, ColorSpec, Layer, LayerStack, Layering, Rgb};
+use spryteo_core::{ClassifiedInput, ColorSpec, Layer, LayerStack, Layering, Mode, Rgb};
 
 use crate::color::{self, Lab};
 
@@ -80,6 +80,21 @@ pub fn quantize(
         return LayerStack { layers: vec![] };
     }
 
+    // Line-art (outline mode): binarize into exactly ink + paper. Thin
+    // anti-aliased strokes are majority-paper in every pixel, so color-space
+    // clustering (and blend dissolution) erodes them; a luminance threshold
+    // is the faithful model for ink drawings. Palette overrides still win,
+    // and images that fail the duotone validation (a colourful drawing the
+    // classifier mistook for line-art) fall through to k-means below.
+    if matches!(input.mode, Mode::LineArt) && !matches!(colors, ColorSpec::Palette(_)) {
+        if let Some(mut stack) = binarize_line_art(width, height, &pixel_data) {
+            if let Layering::Stacked = layering {
+                apply_stacked_layering(&mut stack);
+            }
+            return stack;
+        }
+    }
+
     // Determine target count
     let target = match colors {
         ColorSpec::Palette(pal) => {
@@ -140,6 +155,256 @@ pub fn quantize(
         apply_stacked_layering(&mut stack);
     }
     stack
+}
+
+/// Luminance half-window over which ink/paper coverage ramps linearly around
+/// the Otsu threshold, so marching squares (iso 127.5) lands stroke edges at
+/// subpixel positions instead of the pixel grid. Wider blurs edge placement;
+/// narrower reverts toward hard staircase boundaries.
+const LINE_ART_SOFT_WINDOW: f64 = 24.0;
+
+/// Sauvola window radius (window = 2r+1 px) and parameters k / R. The
+/// standard document-binarization values: k = 0.2 biases the threshold
+/// ~20% below the local mean in flat regions (so clean paper never trips),
+/// R = 128 normalizes the local standard deviation.
+const SAUVOLA_RADIUS: usize = 15;
+const SAUVOLA_K: f64 = 0.2;
+const SAUVOLA_R: f64 = 128.0;
+
+/// Per-pixel Sauvola thresholds via integral images (O(n)):
+/// t(x,y) = mean * (1 + k * (std / R - 1)).
+fn sauvola_thresholds(lumas: &[f64], width: usize, height: usize) -> Vec<f64> {
+    let w1 = width + 1;
+    let h1 = height + 1;
+    let mut integral = vec![0.0f64; w1 * h1];
+    let mut integral_sq = vec![0.0f64; w1 * h1];
+    for y in 0..height {
+        let mut row = 0.0;
+        let mut row_sq = 0.0;
+        for x in 0..width {
+            let v = lumas[y * width + x];
+            row += v;
+            row_sq += v * v;
+            integral[(y + 1) * w1 + (x + 1)] = integral[y * w1 + (x + 1)] + row;
+            integral_sq[(y + 1) * w1 + (x + 1)] = integral_sq[y * w1 + (x + 1)] + row_sq;
+        }
+    }
+
+    let mut thresholds = vec![0.0f64; width * height];
+    for y in 0..height {
+        let y0 = y.saturating_sub(SAUVOLA_RADIUS);
+        let y1 = (y + SAUVOLA_RADIUS + 1).min(height);
+        for x in 0..width {
+            let x0 = x.saturating_sub(SAUVOLA_RADIUS);
+            let x1 = (x + SAUVOLA_RADIUS + 1).min(width);
+            let count = ((x1 - x0) * (y1 - y0)) as f64;
+            let sum = integral[y1 * w1 + x1] - integral[y0 * w1 + x1] - integral[y1 * w1 + x0]
+                + integral[y0 * w1 + x0];
+            let sum_sq =
+                integral_sq[y1 * w1 + x1] - integral_sq[y0 * w1 + x1] - integral_sq[y1 * w1 + x0]
+                    + integral_sq[y0 * w1 + x0];
+            let mean = sum / count;
+            let var = (sum_sq / count - mean * mean).max(0.0);
+            thresholds[y * width + x] = mean * (1.0 + SAUVOLA_K * (var.sqrt() / SAUVOLA_R - 1.0));
+        }
+    }
+    thresholds
+}
+
+/// Fraction of pixels allowed to sit far off the ink↔paper axis in Lab
+/// before an image is judged not-actually-duotone and binarization is
+/// abandoned (falling back to the k-means path). Genuine line art —
+/// including anti-aliased strokes, whose blend pixels lie ON the axis —
+/// measures 0.0 here; multi-colour illustrations that merely have a low
+/// ink ratio (the classifier's only line-art heuristic) measure 10%+.
+const DUOTONE_MAX_OFF_AXIS_FRACTION: f64 = 0.02;
+/// Lab distance from the ink↔paper segment beyond which a pixel counts
+/// as off-axis for the duotone check.
+const DUOTONE_OFF_AXIS_DIST: f64 = 15.0;
+
+/// Binarize a line-art image into exactly two layers: paper (bottom) and
+/// ink (top). A pixel is ink when it is dark by EITHER the global Otsu
+/// threshold (solid regions) or the Sauvola local threshold (faint thin
+/// strokes), both over Rec.601 luminance.
+///
+/// Returns `None` when the image is not genuinely two-tone (see
+/// [`DUOTONE_MAX_OFF_AXIS_FRACTION`]) so the caller can fall back to
+/// full colour quantization instead of destroying a colourful image.
+fn binarize_line_art(width: u32, height: u32, pixel_data: &[PixelInfo]) -> Option<LayerStack> {
+    let total = (width * height) as usize;
+
+    let luma_of = |rgb: &Rgb| 0.299 * rgb.r as f64 + 0.587 * rgb.g as f64 + 0.114 * rgb.b as f64;
+
+    let mut hist = [0u64; 256];
+    for p in pixel_data {
+        hist[luma_of(&p.rgb) as usize] += 1;
+    }
+
+    // Otsu: maximize between-class variance; deterministic tie-break on the
+    // lowest threshold.
+    let n = pixel_data.len() as f64;
+    let total_sum: f64 = hist
+        .iter()
+        .enumerate()
+        .map(|(v, &c)| v as f64 * c as f64)
+        .sum();
+    let mut best_t = 127usize;
+    let mut best_var = -1.0f64;
+    let mut w0 = 0.0f64;
+    let mut sum0 = 0.0f64;
+    for (t, &count) in hist.iter().enumerate() {
+        w0 += count as f64;
+        sum0 += t as f64 * count as f64;
+        let w1 = n - w0;
+        if w0 == 0.0 || w1 == 0.0 {
+            continue;
+        }
+        let mu0 = sum0 / w0;
+        let mu1 = (total_sum - sum0) / w1;
+        let var = w0 * w1 * (mu0 - mu1) * (mu0 - mu1);
+        if var > best_var {
+            best_var = var;
+            best_t = t;
+        }
+    }
+    let threshold = best_t as f64;
+
+    // Duotone validation: binarization is only faithful when every pixel
+    // colour lies near the Lab segment between the ink mean and the paper
+    // mean (anti-aliased blends lie on it by construction). A colourful
+    // illustration misclassified as line-art has whole regions far off
+    // that axis — bail out so the k-means path handles it.
+    {
+        let mut dark_sum = [0u64; 3];
+        let mut dark_count = 0u64;
+        let mut light_sum = [0u64; 3];
+        let mut light_count = 0u64;
+        for p in pixel_data {
+            let (sum, count) = if luma_of(&p.rgb) <= threshold {
+                (&mut dark_sum, &mut dark_count)
+            } else {
+                (&mut light_sum, &mut light_count)
+            };
+            sum[0] += p.rgb.r as u64;
+            sum[1] += p.rgb.g as u64;
+            sum[2] += p.rgb.b as u64;
+            *count += 1;
+        }
+        if dark_count == 0 || light_count == 0 {
+            return None;
+        }
+        let mean_rgb = |sum: &[u64; 3], count: u64| Rgb {
+            r: (sum[0] as f64 / count as f64).round() as u8,
+            g: (sum[1] as f64 / count as f64).round() as u8,
+            b: (sum[2] as f64 / count as f64).round() as u8,
+        };
+        let axis_a = color::srgb_to_lab(&mean_rgb(&dark_sum, dark_count));
+        let axis_b = color::srgb_to_lab(&mean_rgb(&light_sum, light_count));
+        let ab = (
+            axis_b.l - axis_a.l,
+            axis_b.a - axis_a.a,
+            axis_b.b - axis_a.b,
+        );
+        let ab_len_sq = ab.0 * ab.0 + ab.1 * ab.1 + ab.2 * ab.2;
+        let mut off_axis = 0u64;
+        for p in pixel_data {
+            let lab = color::srgb_to_lab(&p.rgb);
+            let ap = (lab.l - axis_a.l, lab.a - axis_a.a, lab.b - axis_a.b);
+            let t = if ab_len_sq > 1e-12 {
+                ((ap.0 * ab.0 + ap.1 * ab.1 + ap.2 * ab.2) / ab_len_sq).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let proj = Lab {
+                l: axis_a.l + t * ab.0,
+                a: axis_a.a + t * ab.1,
+                b: axis_a.b + t * ab.2,
+            };
+            if color::lab_distance_sq(&lab, &proj) > DUOTONE_OFF_AXIS_DIST * DUOTONE_OFF_AXIS_DIST {
+                off_axis += 1;
+            }
+        }
+        if off_axis as f64 > pixel_data.len() as f64 * DUOTONE_MAX_OFF_AXIS_FRACTION {
+            return None;
+        }
+    }
+
+    // Full-resolution luminance grid (transparent pixels count as paper) for
+    // the Sauvola local threshold. Global Otsu alone misses faint strokes —
+    // thin anti-aliased lines whose pixels never reach the dark mode — while
+    // Sauvola alone hollows out solid ink regions larger than its window, so
+    // a pixel is ink when EITHER threshold says so.
+    let mut lumas = vec![255.0f64; total];
+    for p in pixel_data {
+        lumas[p.pixel_index] = luma_of(&p.rgb);
+    }
+    let local_thresholds = sauvola_thresholds(&lumas, width as usize, height as usize);
+
+    let ramp = |l: f64, t: f64| -> f64 {
+        if l <= t - LINE_ART_SOFT_WINDOW {
+            255.0
+        } else if l >= t + LINE_ART_SOFT_WINDOW {
+            0.0
+        } else {
+            (t + LINE_ART_SOFT_WINDOW - l) / (2.0 * LINE_ART_SOFT_WINDOW) * 255.0
+        }
+    };
+
+    let mut ink_mask = vec![0u8; total];
+    let mut paper_mask = vec![0u8; total];
+    let mut ink_sum = [0u64; 3];
+    let mut ink_count = 0u64;
+    let mut paper_sum = [0u64; 3];
+    let mut paper_count = 0u64;
+
+    for p in pixel_data {
+        let l = luma_of(&p.rgb);
+        // Cap the local threshold: Sauvola may rescue faint strokes the
+        // global split missed, but an uncapped local threshold near strong
+        // edges swallows anti-aliasing halos and bridges nearby strokes
+        // into merged blobs.
+        let t_local = local_thresholds[p.pixel_index].min(threshold + 2.0 * LINE_ART_SOFT_WINDOW);
+        let ink_cov = ramp(l, threshold).max(ramp(l, t_local)).round() as u8;
+        ink_mask[p.pixel_index] = ink_cov;
+        paper_mask[p.pixel_index] = 255 - ink_cov;
+
+        let side = if l <= threshold || l <= t_local {
+            ink_count += 1;
+            &mut ink_sum
+        } else {
+            paper_count += 1;
+            &mut paper_sum
+        };
+        side[0] += p.rgb.r as u64;
+        side[1] += p.rgb.g as u64;
+        side[2] += p.rgb.b as u64;
+    }
+
+    let mean_color = |sum: &[u64; 3], count: u64| -> Rgb {
+        if count == 0 {
+            return Rgb { r: 0, g: 0, b: 0 };
+        }
+        Rgb {
+            r: ((sum[0] as f64 / count as f64).round()) as u8,
+            g: ((sum[1] as f64 / count as f64).round()) as u8,
+            b: ((sum[2] as f64 / count as f64).round()) as u8,
+        }
+    };
+
+    Some(LayerStack {
+        layers: vec![
+            Layer {
+                mask: paper_mask,
+                color: mean_color(&paper_sum, paper_count),
+                z_order: 0,
+            },
+            Layer {
+                mask: ink_mask,
+                color: mean_color(&ink_sum, ink_count),
+                z_order: 1,
+            },
+        ],
+    })
 }
 
 /// Post-processing step to apply stacked layering per §3.4.
