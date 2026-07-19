@@ -1,6 +1,9 @@
 use clap::{Args, Parser};
 use spryteo_cli::{derive_svg_summary, format_meta_report, parse_mode, parse_preset, run_pipeline};
-use spryteo_core::{ColorSpec, ConvertOptions, Layering, Meta, OutputFormat, Preset, Tri};
+use spryteo_core::{
+    AlphaMode, Background, ColorSpec, ConvertOptions, Grouping, IdStyle, Layering, Meta,
+    OutputFormat, Preset, Rgb, TOrigin, Tri,
+};
 
 fn parse_layering(s: &str) -> Result<Layering, String> {
     match s.to_lowercase().as_str() {
@@ -23,6 +26,85 @@ fn parse_gradients(s: &str) -> Result<Tri, String> {
             s
         )),
     }
+}
+
+fn parse_background(s: &str) -> Result<Background, String> {
+    match s.to_lowercase().as_str() {
+        "keep" => Ok(Background::Keep),
+        "drop" => Ok(Background::Drop),
+        "rect" => Ok(Background::Rect),
+        _ => Err(format!(
+            "Invalid background '{}'. Expected one of: keep, drop, rect",
+            s
+        )),
+    }
+}
+
+fn parse_grouping(s: &str) -> Result<Grouping, String> {
+    match s.to_lowercase().as_str() {
+        "component" => Ok(Grouping::Component),
+        "semantic" => Ok(Grouping::Semantic),
+        "flat" => Ok(Grouping::Flat),
+        _ => Err(format!(
+            "Invalid grouping '{}'. Expected one of: component, semantic, flat",
+            s
+        )),
+    }
+}
+
+fn parse_id_style(s: &str) -> Result<IdStyle, String> {
+    match s.to_lowercase().as_str() {
+        "hash" => Ok(IdStyle::Hash),
+        "sequential" => Ok(IdStyle::Sequential),
+        "none" => Ok(IdStyle::None),
+        _ => Err(format!(
+            "Invalid id-style '{}'. Expected one of: hash, sequential, none",
+            s
+        )),
+    }
+}
+
+fn parse_transform_origin(s: &str) -> Result<TOrigin, String> {
+    match s.to_lowercase().as_str() {
+        "centroid" => Ok(TOrigin::Centroid),
+        "baked" => Ok(TOrigin::Baked),
+        _ => Err(format!(
+            "Invalid transform-origin '{}'. Expected one of: centroid, baked",
+            s
+        )),
+    }
+}
+
+fn parse_hex_rgb(s: &str) -> Result<Rgb, String> {
+    let hex = s.strip_prefix('#').unwrap_or(s);
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("Invalid color '{}'. Expected #rrggbb", s));
+    }
+    Ok(Rgb {
+        r: u8::from_str_radix(&hex[0..2], 16).unwrap(),
+        g: u8::from_str_radix(&hex[2..4], 16).unwrap(),
+        b: u8::from_str_radix(&hex[4..6], 16).unwrap(),
+    })
+}
+
+fn parse_alpha_mode(s: &str) -> Result<AlphaMode, String> {
+    let lower = s.to_lowercase();
+    if lower == "keep" {
+        return Ok(AlphaMode::Keep);
+    }
+    if let Some(color) = lower.strip_prefix("matte:") {
+        return Ok(AlphaMode::Matte(parse_hex_rgb(color)?));
+    }
+    if let Some(value) = lower.strip_prefix("threshold:") {
+        return value
+            .parse::<u8>()
+            .map(AlphaMode::Threshold)
+            .map_err(|_| format!("Invalid alpha threshold '{}'. Expected 0-255", value));
+    }
+    Err(format!(
+        "Invalid alpha-mode '{}'. Expected keep, matte:#rrggbb, or threshold:0-255",
+        s
+    ))
 }
 
 #[derive(Parser)]
@@ -84,12 +166,56 @@ struct ConvertArgs {
     precision: Option<u8>,
 
     /// Output pretty-printed SVG markup instead of minified
-    #[arg(long)]
+    #[arg(long, conflicts_with = "jsx")]
     pretty: bool,
+
+    /// Output a React JSX component instead of plain SVG
+    #[arg(long)]
+    jsx: bool,
 
     /// Force monochrome fill color to inherit via currentColor
     #[arg(long)]
     current_color: bool,
+
+    /// Background treatment: keep, drop, or rect
+    #[arg(long, value_parser = parse_background)]
+    background: Option<Background>,
+
+    /// Alpha handling: keep, matte:#rrggbb, or threshold:0-255
+    #[arg(long, value_parser = parse_alpha_mode)]
+    alpha_mode: Option<AlphaMode>,
+
+    /// Grouping strategy: component, semantic, or flat
+    #[arg(long, value_parser = parse_grouping)]
+    grouping: Option<Grouping>,
+
+    /// ID generation: hash, sequential, or none
+    #[arg(long, value_parser = parse_id_style)]
+    id_style: Option<IdStyle>,
+
+    /// Transform origin placement: centroid or baked
+    #[arg(long, value_parser = parse_transform_origin)]
+    transform_origin: Option<TOrigin>,
+
+    /// Emit circular-arc path commands where detected
+    #[arg(long)]
+    arcs: bool,
+
+    /// Downscale inputs larger than this dimension before tracing
+    #[arg(long)]
+    max_trace_dimension: Option<u32>,
+
+    /// Maximum input pixel count accepted before rejecting
+    #[arg(long)]
+    max_pixels: Option<u64>,
+
+    /// Maximum input size in bytes accepted before rejecting
+    #[arg(long)]
+    max_input_bytes: Option<u64>,
+
+    /// Abort the conversion after this many milliseconds
+    #[arg(long)]
+    timeout_ms: Option<u64>,
 
     /// Write the metadata sidecar as JSON to this path
     #[arg(long)]
@@ -127,13 +253,29 @@ fn main() {
                 turdsize: args.turdsize.unwrap_or(default_opts.turdsize),
                 precision: args.precision.unwrap_or(default_opts.precision),
                 current_color: args.current_color,
-                output: if args.pretty {
+                background: args.background.clone().unwrap_or(default_opts.background),
+                alpha_mode: args.alpha_mode.clone().unwrap_or(default_opts.alpha_mode),
+                grouping: args.grouping.clone().unwrap_or(default_opts.grouping),
+                id_style: args.id_style.clone().unwrap_or(default_opts.id_style),
+                transform_origin: args
+                    .transform_origin
+                    .clone()
+                    .unwrap_or(default_opts.transform_origin),
+                arcs: args.arcs,
+                max_trace_dimension: args
+                    .max_trace_dimension
+                    .or(default_opts.max_trace_dimension),
+                max_pixels: args.max_pixels.unwrap_or(default_opts.max_pixels),
+                max_input_bytes: args.max_input_bytes.unwrap_or(default_opts.max_input_bytes),
+                timeout_ms: args.timeout_ms.or(default_opts.timeout_ms),
+                output: if args.jsx {
+                    OutputFormat::Jsx
+                } else if args.pretty {
                     OutputFormat::SvgPretty
                 } else {
                     OutputFormat::Svg
                 },
                 emit_css: args.css.clone(),
-                ..default_opts
             };
 
             match run_pipeline(&args.input, &args.output, args.json.as_deref(), &opts) {
