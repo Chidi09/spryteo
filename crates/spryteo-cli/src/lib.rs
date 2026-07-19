@@ -1,6 +1,6 @@
 use spryteo_core::{
     Contour, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode, Preset,
-    SpryteoError,
+    RasterImage, SpryteoError, Tri,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -83,15 +83,52 @@ fn count_contour_and_children(c: &Contour) -> usize {
         .sum::<usize>()
 }
 
-pub fn build_fills(layer_stack: &LayerStack, contour_set: &ContourSet) -> Vec<Fill> {
+/// Whether gradient detection should be attempted for the resolved input mode,
+/// per `ConvertOptions.gradients`: `On` always tries, `Off` never does,
+/// `Auto` tries only for `Mode::Photo` (icons keep flat fills).
+fn should_try_gradients(gradients: &Tri, resolved_mode: &Mode) -> bool {
+    match gradients {
+        Tri::On => true,
+        Tri::Off => false,
+        Tri::Auto => matches!(resolved_mode, Mode::Photo),
+    }
+}
+
+/// Residual tolerance (Lab distance units) for gradient-vs-flat-fill
+/// detection. This is deliberately NOT `ConvertOptions.tolerance` -- that
+/// field is a *geometric* curve-fit budget in pixels (default 0.5), while
+/// gradient detection compares *colour* residuals in Lab space, where a
+/// "just noticeable difference" is already ~1-2 units; reusing 0.5 there
+/// made every real-world gradient (and even a clean synthetic one) fail to
+/// promote, confirmed by manually running a real gradient PNG through the
+/// CLI end-to-end. `ConvertOptions` has no dedicated field for this yet
+/// (would be a future addition); this constant matches the tolerance
+/// spryteo-quant's own gradient tests use to distinguish real gradients
+/// from noise.
+const GRADIENT_LAB_TOLERANCE: f64 = 12.0;
+
+pub fn build_fills(
+    image: &RasterImage,
+    layer_stack: &LayerStack,
+    contour_set: &ContourSet,
+    resolved_mode: &Mode,
+    opts: &ConvertOptions,
+) -> Vec<Fill> {
+    let try_gradients = should_try_gradients(&opts.gradients, resolved_mode);
     let mut fills = Vec::new();
     for (layer, contours) in layer_stack.layers.iter().zip(contour_set.layers.iter()) {
+        let fill = if try_gradients {
+            spryteo_quant::detect_gradient(image, layer, GRADIENT_LAB_TOLERANCE)
+                .unwrap_or(Fill::Solid(layer.color))
+        } else {
+            Fill::Solid(layer.color)
+        };
         let mut count = 0;
         for contour in contours {
             count += count_contour_and_children(contour);
         }
         for _ in 0..count {
-            fills.push(Fill::Solid(layer.color));
+            fills.push(fill.clone());
         }
     }
     fills
@@ -105,11 +142,18 @@ pub fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult,
     let height = raster_image.height;
 
     let classified = spryteo_quant::classify(raster_image, &opts.mode);
-    let layer_stack = spryteo_quant::quantize(&classified, &opts.colors, FIXED_SEED);
+    let layer_stack =
+        spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
     let contour_set = spryteo_trace::extract_contours(&layer_stack, width, height, opts.turdsize);
     let curve_set = spryteo_fit::fit_contours(&contour_set, opts.tolerance, opts.smoothness);
 
-    let fills = build_fills(&layer_stack, &contour_set);
+    let fills = build_fills(
+        &classified.image,
+        &layer_stack,
+        &contour_set,
+        &classified.mode,
+        opts,
+    );
     let scene = spryteo_svg::build_scene_graph(
         &curve_set,
         &opts.id_style,
@@ -218,7 +262,15 @@ mod tests {
             layers: vec![vec![contour_a], vec![contour_c, contour_d]],
         };
 
-        let fills = build_fills(&layer_stack, &contour_set);
+        // Mode::Icon + default (Auto) gradients means gradient detection is
+        // never attempted, so a minimal 0x0 image is fine here.
+        let image = RasterImage {
+            width: 0,
+            height: 0,
+            pixels: vec![],
+        };
+        let opts = ConvertOptions::default();
+        let fills = build_fills(&image, &layer_stack, &contour_set, &Mode::Icon, &opts);
         assert_eq!(fills.len(), 4);
         assert_eq!(fills[0], Fill::Solid(red));
         assert_eq!(fills[1], Fill::Solid(red));
