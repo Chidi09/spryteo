@@ -91,14 +91,29 @@
     svg?: string;
   }
 
+  type SpryteoWasmModule = typeof import('../wasm/spryteo_wasm.js');
+
+  let wasmModulePromise: Promise<SpryteoWasmModule> | null = null;
+
+  function loadWasm(): Promise<SpryteoWasmModule> {
+    if (!wasmModulePromise) {
+      wasmModulePromise = (async () => {
+        // The JS/TS glue is a real module under src/ so Vite can bundle it;
+        // the .wasm binary itself is served as-is from public/ and fetched
+        // at runtime by URL, which is how wasm-bindgen's `default()` init
+        // function expects to be called.
+        const mod = await import('../wasm/spryteo_wasm.js');
+        await mod.default('/wasm/spryteo_wasm_bg.wasm');
+        return mod;
+      })();
+    }
+    return wasmModulePromise;
+  }
+
   async function convertIcon(file: File): Promise<ConvertResult> {
-    // Wire the real backend here once it exists, e.g.:
-    //   const formData = new FormData();
-    //   formData.append('file', file);
-    //   const res = await fetch('/api/convert', { method: 'POST', body: formData });
-    //   if (!res.ok) throw new Error('conversion failed');
-    //   return res.json();
-    return new Promise((resolve) => setTimeout(() => resolve({}), 900));
+    const mod = await loadWasm();
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    return mod.convert_default(bytes) as ConvertResult;
   }
 
   function validateFile(file: File): string | null {
