@@ -27,3 +27,12 @@ serde-wasm-bindgen = "0.6"
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+[package.metadata.wasm-pack.profile.release]
+# wasm-opt 108 corrupts wasm-bindgen 0.2.126's externref table during
+# optimization -- produces "RangeError: WebAssembly.Table.grow(): failed
+# to grow table by 4" at init time in the browser. Confirmed by manual
+# browser testing: identical build with wasm-opt disabled works
+# correctly; with it enabled, module init throws every time. Re-check
+# this pin if either dependency's version changes.
+wasm-opt = false
+
