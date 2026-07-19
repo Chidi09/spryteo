@@ -1,0 +1,32 @@
+[package]
+name = "spryteo-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "napi-rs native Node.js addon exposing the Spryteo engine (npm package: spryteo)."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+spryteo-core = { path = "../../crates/spryteo-core" }
+spryteo-raster = { path = "../../crates/spryteo-raster" }
+spryteo-quant = { path = "../../crates/spryteo-quant" }
+spryteo-trace = { path = "../../crates/spryteo-trace" }
+spryteo-fit = { path = "../../crates/spryteo-fit" }
+spryteo-stroke = { path = "../../crates/spryteo-stroke" }
+spryteo-svg = { path = "../../crates/spryteo-svg" }
+
+serde.workspace = true
+serde_json.workspace = true
+napi = { version = "2", default-features = false, features = ["napi4", "serde-json", "tokio_rt"] }
+napi-derive = "2"
+
+
+[build-dependencies]
+napi-build = "2"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+

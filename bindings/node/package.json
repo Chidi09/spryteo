@@ -1,0 +1,25 @@
+{
+  "name": "spryteo",
+  "version": "0.0.1",
+  "description": "Raster-to-SVG engine: clean, animateable, semantically grouped SVGs from icons and images.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT OR Apache-2.0",
+  "napi": {
+    "name": "spryteo",
+    "triples": {
+      "defaults": true
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ]
+}
