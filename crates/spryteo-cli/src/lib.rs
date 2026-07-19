@@ -1,5 +1,5 @@
 use spryteo_core::{
-    Contour, ContourSet, ConvertOptions, ConvertResult, LayerStack, Mode, Rgb, SpryteoError,
+    Contour, ContourSet, ConvertOptions, ConvertResult, LayerStack, Mode, Preset, Rgb, SpryteoError,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +62,18 @@ pub fn parse_mode(s: &str) -> Result<Mode, String> {
     }
 }
 
+pub fn parse_preset(s: &str) -> Result<Preset, String> {
+    match s.to_lowercase().as_str() {
+        "draw" => Ok(Preset::Draw),
+        "fade" => Ok(Preset::Fade),
+        "pop" => Ok(Preset::Pop),
+        _ => Err(format!(
+            "Invalid CSS preset '{}'. Expected one of: draw, fade, pop",
+            s
+        )),
+    }
+}
+
 fn count_contour_and_children(c: &Contour) -> usize {
     1 + c
         .children
@@ -108,6 +120,23 @@ pub fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult,
     Ok(result)
 }
 
+pub fn run_convert_stroke(
+    bytes: &[u8],
+    opts: &ConvertOptions,
+) -> Result<ConvertResult, SpryteoError> {
+    let raster_image = spryteo_raster::decode(bytes, opts)?;
+    let width = raster_image.width;
+    let height = raster_image.height;
+    let stroke_result = spryteo_stroke::trace_stroke(&raster_image, opts.tolerance);
+    let scene = spryteo_svg::build_stroke_scene_graph(
+        &stroke_result.curves,
+        &opts.id_style,
+        &stroke_result.widths,
+    );
+    let result = spryteo_svg::emit_stroke_svg(&scene, width, height, opts);
+    Ok(result)
+}
+
 pub fn run_pipeline(
     input_path: &std::path::Path,
     output_path: &std::path::Path,
@@ -119,7 +148,11 @@ pub fn run_pipeline(
         source,
     })?;
 
-    let result = run_convert(&bytes, opts)?;
+    let result = if opts.stroke {
+        run_convert_stroke(&bytes, opts)?
+    } else {
+        run_convert(&bytes, opts)?
+    };
 
     std::fs::write(output_path, &result.svg).map_err(|source| CliError::OutputIo {
         path: output_path.to_path_buf(),
@@ -238,6 +271,76 @@ mod tests {
         let garbage = b"Not a real image file content at all";
         let opts = ConvertOptions::default();
         let res = run_convert(garbage, &opts);
+
+        assert!(res.is_err());
+        match res.err().unwrap() {
+            SpryteoError::InvalidInput(_) => {}
+            other => panic!("Expected SpryteoError::InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_pipeline_stroke_synthetic_image() {
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+        use std::io::Cursor;
+
+        // Generate synthetic PNG: 32x32 white background with black line
+        let mut img = RgbaImage::new(32, 32);
+        for pixel in img.pixels_mut() {
+            *pixel = Rgba([255, 255, 255, 255]);
+        }
+        // Draw diagonal line from (5,5) to (25,25)
+        for i in 5..=25 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let px = (i + dx) as u32;
+                    let py = (i + dy) as u32;
+                    if px < 32 && py < 32 {
+                        img.put_pixel(px, py, Rgba([0, 0, 0, 255]));
+                    }
+                }
+            }
+        }
+
+        let mut png_bytes = Vec::new();
+        DynamicImage::ImageRgba8(img)
+            .write_to(&mut Cursor::new(&mut png_bytes), ImageFormat::Png)
+            .unwrap();
+
+        let opts = ConvertOptions {
+            stroke: true,
+            ..ConvertOptions::default()
+        };
+        let res1 = run_convert_stroke(&png_bytes, &opts).unwrap();
+
+        assert!(res1.svg.contains("<svg"));
+        assert!(res1.svg.contains("viewBox="));
+        assert!(res1.svg.contains("pathLength=\"100\""));
+        assert!(res1.svg.contains("fill=\"none\""));
+
+        assert!(
+            res1.meta.stats.path_count <= 3,
+            "Path count was {}",
+            res1.meta.stats.path_count
+        );
+
+        let open_brackets = res1.svg.matches('<').count();
+        let close_brackets = res1.svg.matches('>').count();
+        assert_eq!(open_brackets, close_brackets);
+        assert!(!res1.svg.is_empty());
+
+        let res2 = run_convert_stroke(&png_bytes, &opts).unwrap();
+        assert_eq!(res1.svg, res2.svg);
+    }
+
+    #[test]
+    fn test_garbage_input_stroke() {
+        let garbage = b"Not a real image file content at all";
+        let opts = ConvertOptions {
+            stroke: true,
+            ..ConvertOptions::default()
+        };
+        let res = run_convert_stroke(garbage, &opts);
 
         assert!(res.is_err());
         match res.err().unwrap() {

@@ -445,6 +445,7 @@ dependencies = [
  "spryteo-fit",
  "spryteo-quant",
  "spryteo-raster",
+ "spryteo-stroke",
  "spryteo-svg",
  "spryteo-trace",
  "thiserror",

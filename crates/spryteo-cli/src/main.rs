@@ -1,6 +1,6 @@
 use clap::{Args, Parser};
-use spryteo_cli::{parse_mode, run_pipeline};
-use spryteo_core::{ColorSpec, ConvertOptions, OutputFormat};
+use spryteo_cli::{parse_mode, parse_preset, run_pipeline};
+use spryteo_core::{ColorSpec, ConvertOptions, OutputFormat, Preset};
 
 #[derive(Parser)]
 #[command(name = "spryteo", version, about = "Vectorization tool")]
@@ -21,6 +21,14 @@ struct ConvertArgs {
     /// How the engine should interpret the input image
     #[arg(long, default_value = "auto", value_parser = parse_mode)]
     mode: spryteo_core::Mode,
+
+    /// Run the centerline / stroke tracing pipeline instead of fill mode
+    #[arg(long)]
+    stroke: bool,
+
+    /// Optional CSS preset (e.g. draw, fade, pop)
+    #[arg(long, value_parser = parse_preset)]
+    css: Option<Preset>,
 
     /// Target colour palette size (e.g. 8)
     #[arg(long)]
@@ -58,6 +66,7 @@ fn main() {
             let default_opts = ConvertOptions::default();
             let opts = ConvertOptions {
                 mode: args.mode,
+                stroke: args.stroke,
                 colors: match args.colors {
                     Some(n) => ColorSpec::N(n),
                     None => ColorSpec::Auto,
@@ -71,6 +80,7 @@ fn main() {
                 } else {
                     OutputFormat::Svg
                 },
+                emit_css: args.css.clone(),
                 ..default_opts
             };
 
@@ -78,13 +88,24 @@ fn main() {
                 Ok(result) => {
                     let input_str = args.input.to_string_lossy();
                     let output_str = args.output.to_string_lossy();
-                    println!(
-                        "{} -> {} ({} nodes, {} bytes)",
-                        input_str,
-                        output_str,
-                        result.meta.stats.node_count,
-                        result.meta.stats.byte_count
-                    );
+                    if opts.stroke {
+                        println!(
+                            "{} -> {} ({} nodes, {} bytes, {} continuous paths)",
+                            input_str,
+                            output_str,
+                            result.meta.stats.node_count,
+                            result.meta.stats.byte_count,
+                            result.meta.stats.path_count
+                        );
+                    } else {
+                        println!(
+                            "{} -> {} ({} nodes, {} bytes)",
+                            input_str,
+                            output_str,
+                            result.meta.stats.node_count,
+                            result.meta.stats.byte_count
+                        );
+                    }
                     std::process::exit(0);
                 }
                 Err(err) => {

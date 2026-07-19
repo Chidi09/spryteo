@@ -21,6 +21,7 @@ spryteo-quant = { path = "../spryteo-quant" }
 spryteo-trace = { path = "../spryteo-trace" }
 spryteo-fit = { path = "../spryteo-fit" }
 spryteo-svg = { path = "../spryteo-svg" }
+spryteo-stroke = { path = "../spryteo-stroke" }
 
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
