@@ -83,8 +83,9 @@ fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, Spr
         mode: classified.mode,
         background_color: classified.background_color,
     };
-    let layer_stack =
+    let mut layer_stack =
         spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
+    let rect_color = spryteo_quant::apply_background_policy(&mut layer_stack, classified.background_color, &opts.background);
     let contour_set = spryteo_trace::extract_contours(&layer_stack, width, height, opts.turdsize);
     let curve_set = spryteo_fit::fit_contours(&contour_set, opts.tolerance, opts.smoothness);
 
@@ -102,7 +103,7 @@ fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, Spr
         &fills,
         opts.arcs,
     );
-    let result = spryteo_svg::emit_svg(&scene, width, height, opts);
+    let result = spryteo_svg::emit_svg(&scene, width, height, opts, rect_color);
     Ok(result)
 }
 

@@ -40,7 +40,7 @@ pub fn detect_gradient(image: &RasterImage, layer: &Layer, tolerance: f64) -> Op
         for x in 0..width {
             let idx = (y * width + x) as usize;
             if layer.mask[idx] != 0 {
-                if covered_seen % stride == 0 {
+                if covered_seen.is_multiple_of(stride) {
                     let rgb = color::get_rgb(&image.pixels, width, x, y);
                     let lab = color::srgb_to_lab(&rgb);
                     let x_f = x as f64;

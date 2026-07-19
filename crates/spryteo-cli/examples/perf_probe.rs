@@ -60,7 +60,8 @@ fn main() {
     eprintln!("preprocess:  {:?}", t.elapsed());
 
     let t = Instant::now();
-    let layer_stack = spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
+    let mut layer_stack = spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
+    let rect_color = spryteo_quant::apply_background_policy(&mut layer_stack, classified.background_color, &opts.background);
     eprintln!("quantize:    {:?}  ({} layers)", t.elapsed(), layer_stack.layers.len());
 
     let t = Instant::now();
@@ -89,7 +90,7 @@ fn main() {
         &fills,
         opts.arcs,
     );
-    let result = spryteo_svg::emit_svg(&scene, width, height, &opts);
+    let result = spryteo_svg::emit_svg(&scene, width, height, &opts, rect_color);
     eprintln!("svg:         {:?}", t.elapsed());
 
     eprintln!("TOTAL:       {:?}", t_all.elapsed());

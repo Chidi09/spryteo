@@ -20,8 +20,10 @@ pub mod classifier;
 pub mod color;
 pub mod gradient;
 pub mod quantize;
+pub mod background;
 
 pub use classifier::{classify, detect_background};
 pub use color::Lab;
 pub use gradient::detect_gradient;
 pub use quantize::quantize;
+pub use background::apply_background_policy;

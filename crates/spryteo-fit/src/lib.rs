@@ -204,6 +204,7 @@ fn fit_single_contour(contour: &Contour, tolerance: f32, smoothness: f32) -> Cur
                 raw_elements.push(PathElement::LineTo(q_last.0, q_last.1));
             } else {
                 // Fit curved span recursively (endpoints are corners, so not constrained at the root)
+                let mut span_elements = Vec::new();
                 fit_recursive(
                     points,
                     &contour_tangents,
@@ -211,8 +212,20 @@ fn fit_single_contour(contour: &Contour, tolerance: f32, smoothness: f32) -> Cur
                     false,
                     false,
                     tolerance as f64,
-                    &mut raw_elements,
+                    0,
+                    span_indices.len() - 1,
+                    &mut span_elements,
                 );
+                let merged = merge_bezier_segments(
+                    points,
+                    &contour_tangents,
+                    &span_indices,
+                    false,
+                    false,
+                    tolerance as f64,
+                    &span_elements,
+                );
+                raw_elements.extend(merged);
             }
         }
     } else {
@@ -225,6 +238,7 @@ fn fit_single_contour(contour: &Contour, tolerance: f32, smoothness: f32) -> Cur
         span_indices.push(s_idx);
 
         // Fit curved span recursively (endpoints are smooth, so constrained to tangent direction)
+        let mut span_elements = Vec::new();
         fit_recursive(
             points,
             &contour_tangents,
@@ -232,8 +246,20 @@ fn fit_single_contour(contour: &Contour, tolerance: f32, smoothness: f32) -> Cur
             true,
             true,
             tolerance as f64,
-            &mut raw_elements,
+            0,
+            span_indices.len() - 1,
+            &mut span_elements,
         );
+        let merged = merge_bezier_segments(
+            points,
+            &contour_tangents,
+            &span_indices,
+            true,
+            true,
+            tolerance as f64,
+            &span_elements,
+        );
+        raw_elements.extend(merged);
     }
     raw_elements.push(PathElement::ClosePath);
 
@@ -391,8 +417,32 @@ fn perpendicular_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     }
 }
 
+/// Computes the maximum distance from the points to the fitted bezier segment.
+fn evaluate_bezier_error(
+    points: &[(f64, f64)],
+    c1: (f64, f64),
+    c2: (f64, f64),
+) -> f64 {
+    let q0 = points[0];
+    let q_last = *points.last().unwrap();
+    let params = chord_length_parameterization(points);
+    let mut max_dev = 0.0;
+    for (i, &pt) in points.iter().enumerate() {
+        let t = params[i];
+        let fit_pt = evaluate_bezier(q0, c1, c2, q_last, t);
+        let dx = pt.0 - fit_pt.0;
+        let dy = pt.1 - fit_pt.1;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > max_dev {
+            max_dev = dist;
+        }
+    }
+    max_dev
+}
+
 /// Fits a cubic Bezier curve to a sub-span of indices recursively.
 /// Enforces G1 continuity at smooth joins by constraining control points along tangent directions.
+#[allow(clippy::too_many_arguments)] // internal recursion carrying span-position bookkeeping for the merge pass
 fn fit_recursive(
     contour_points: &[(f64, f64)],
     contour_tangents: &[(f64, f64)],
@@ -400,7 +450,9 @@ fn fit_recursive(
     constrain_start: bool,
     constrain_end: bool,
     tolerance: f64,
-    elements: &mut Vec<PathElement>,
+    start_pos: usize,
+    end_pos: usize,
+    elements: &mut Vec<(PathElement, usize, usize)>,
 ) {
     let points: Vec<(f64, f64)> = indices.iter().map(|&idx| contour_points[idx]).collect();
     let start_tangent = if constrain_start {
@@ -416,27 +468,16 @@ fn fit_recursive(
 
     let (c1, c2) = fit_bezier_segment(&points, start_tangent, end_tangent);
 
-    let q0 = points[0];
+    let max_dev = evaluate_bezier_error(&points, c1, c2);
+
     let q_last = *points.last().unwrap();
-    let params = chord_length_parameterization(&points);
 
-    let mut max_dev = 0.0;
-    for (i, &pt) in points.iter().enumerate() {
-        let t = params[i];
-        let fit_pt = evaluate_bezier(q0, c1, c2, q_last, t);
-        let dx = pt.0 - fit_pt.0;
-        let dy = pt.1 - fit_pt.1;
-        let dist = (dx * dx + dy * dy).sqrt();
-        if dist > max_dev {
-            max_dev = dist;
-        }
-    }
-
-    // Documented simplification: opttolerance merging is deferred to a future dispatch.
     // If the fit exceeds tolerance, we split at the midpoint.
     if max_dev <= tolerance || indices.len() <= 2 {
-        elements.push(PathElement::CurveTo(
-            c1.0, c1.1, c2.0, c2.1, q_last.0, q_last.1,
+        elements.push((
+            PathElement::CurveTo(c1.0, c1.1, c2.0, c2.1, q_last.0, q_last.1),
+            start_pos,
+            end_pos,
         ));
     } else {
         let mid_idx = indices.len() / 2;
@@ -447,6 +488,8 @@ fn fit_recursive(
             constrain_start,
             true,
             tolerance,
+            start_pos,
+            start_pos + mid_idx,
             elements,
         );
         fit_recursive(
@@ -456,9 +499,79 @@ fn fit_recursive(
             true,
             constrain_end,
             tolerance,
+            start_pos + mid_idx,
+            end_pos,
             elements,
         );
     }
+}
+
+/// Greedily merges consecutive Bezier segments inside a single curved span.
+pub(crate) fn merge_bezier_segments(
+    contour_points: &[(f64, f64)],
+    contour_tangents: &[(f64, f64)],
+    span_indices: &[usize],
+    constrain_start: bool,
+    constrain_end: bool,
+    tolerance: f64,
+    elements: &[(PathElement, usize, usize)],
+) -> Vec<PathElement> {
+    if elements.is_empty() {
+        return Vec::new();
+    }
+
+    let mut merged = Vec::new();
+    let mut i = 0;
+
+    while i < elements.len() {
+        let mut current_elem = elements[i].clone();
+        let mut j = i;
+
+        while j + 1 < elements.len() {
+            let next_end = elements[j + 1].2;
+            let start_pos = current_elem.1;
+            let end_pos = next_end;
+
+            let run_points: Vec<(f64, f64)> = span_indices[start_pos..=end_pos]
+                .iter()
+                .map(|&idx| contour_points[idx])
+                .collect();
+
+            let c_start = if start_pos == 0 { constrain_start } else { true };
+            let start_tangent = if c_start {
+                Some(contour_tangents[span_indices[start_pos]])
+            } else {
+                None
+            };
+
+            let c_end = if end_pos == span_indices.len() - 1 { constrain_end } else { true };
+            let end_tangent = if c_end {
+                Some(contour_tangents[span_indices[end_pos]])
+            } else {
+                None
+            };
+
+            let (c1, c2) = fit_bezier_segment(&run_points, start_tangent, end_tangent);
+            let max_dev = evaluate_bezier_error(&run_points, c1, c2);
+
+            if max_dev <= tolerance {
+                let q_last = *run_points.last().unwrap();
+                current_elem = (
+                    PathElement::CurveTo(c1.0, c1.1, c2.0, c2.1, q_last.0, q_last.1),
+                    start_pos,
+                    end_pos,
+                );
+                j += 1;
+            } else {
+                break;
+            }
+        }
+
+        merged.push(current_elem.0);
+        i = j + 1;
+    }
+
+    merged
 }
 
 /// Evaluates a cubic Bezier curve at parameter t in [0, 1].
@@ -992,5 +1105,252 @@ mod tests {
         assert_eq!(curve_set.curves.len(), 2);
         assert_finite_elements(&curve_set.curves[0].segments);
         assert_finite_elements(&curve_set.curves[1].segments);
+    }
+
+    #[test]
+    fn test_merge_reduces_curve_count() {
+        let n = 128;
+        let mut pts = Vec::with_capacity(n);
+        for i in 0..n {
+            let theta = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
+            let r = 30.0 * (1.0 + 0.3 * theta.cos());
+            pts.push((50.0 + r * theta.cos(), 50.0 + r * theta.sin()));
+        }
+        
+        let mut contour_tangents = vec![(0.0, 0.0); n];
+        for i in 0..n {
+            let prev = pts[(i + n - 1) % n];
+            let next = pts[(i + 1) % n];
+            let dx = next.0 - prev.0;
+            let dy = next.1 - prev.1;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > 1e-9 {
+                contour_tangents[i] = (dx / len, dy / len);
+            } else {
+                contour_tangents[i] = (1.0, 0.0);
+            }
+        }
+        
+        let mut span_indices = Vec::new();
+        for i in 0..n {
+            span_indices.push(i);
+        }
+        span_indices.push(0);
+        
+        let mut found_reduction = false;
+        for &tolerance in &[0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.8, 1.0, 1.2, 1.5] {
+            let mut unmerged_elements = Vec::new();
+            fit_recursive(
+                &pts,
+                &contour_tangents,
+                &span_indices,
+                true,
+                true,
+                tolerance,
+                0,
+                span_indices.len() - 1,
+                &mut unmerged_elements,
+            );
+            
+            let merged_elements = merge_bezier_segments(
+                &pts,
+                &contour_tangents,
+                &span_indices,
+                true,
+                true,
+                tolerance,
+                &unmerged_elements,
+            );
+            
+            println!(
+                "tolerance: {}, unmerged: {}, merged: {}",
+                tolerance,
+                unmerged_elements.len(),
+                merged_elements.len()
+            );
+            
+            if merged_elements.len() < unmerged_elements.len() {
+                found_reduction = true;
+                break;
+            }
+        }
+        
+        assert!(
+            found_reduction,
+            "Expected merge pass to reduce node count for at least one tolerance value"
+        );
+    }
+
+    #[test]
+    fn test_merge_respects_tolerance() {
+        let pts = sample_circle(50.0, 50.0, 25.0, 64);
+        
+        let n = pts.len();
+        let mut contour_tangents = vec![(0.0, 0.0); n];
+        for i in 0..n {
+            let prev = pts[(i + n - 1) % n];
+            let next = pts[(i + 1) % n];
+            let dx = next.0 - prev.0;
+            let dy = next.1 - prev.1;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > 1e-9 {
+                contour_tangents[i] = (dx / len, dy / len);
+            } else {
+                contour_tangents[i] = (1.0, 0.0);
+            }
+        }
+        
+        let mut span_indices = Vec::new();
+        for i in 0..n {
+            span_indices.push(i);
+        }
+        span_indices.push(0);
+        
+        let tolerance = 1.0;
+        
+        let mut unmerged_elements = Vec::new();
+        fit_recursive(
+            &pts,
+            &contour_tangents,
+            &span_indices,
+            true,
+            true,
+            tolerance,
+            0,
+            span_indices.len() - 1,
+            &mut unmerged_elements,
+        );
+        
+        let merged_elements = merge_bezier_segments(
+            &pts,
+            &contour_tangents,
+            &span_indices,
+            true,
+            true,
+            tolerance,
+            &unmerged_elements,
+        );
+        
+        let mut current_idx = 0;
+        for elem in &merged_elements {
+            if let PathElement::CurveTo(x1, y1, x2, y2, x3, y3) = *elem {
+                let mut end_idx = current_idx + 1;
+                while end_idx < span_indices.len() {
+                    let pt = pts[span_indices[end_idx]];
+                    if (pt.0 - x3).abs() < 1e-9 && (pt.1 - y3).abs() < 1e-9 {
+                        break;
+                    }
+                    end_idx += 1;
+                }
+                assert!(
+                    end_idx < span_indices.len(),
+                    "Could not find end point of CurveTo in span_indices"
+                );
+                
+                let run_points: Vec<(f64, f64)> = span_indices[current_idx..=end_idx]
+                    .iter()
+                    .map(|&idx| pts[idx])
+                    .collect();
+                
+                let max_dev = evaluate_bezier_error(&run_points, (x1, y1), (x2, y2));
+                assert!(
+                    max_dev <= tolerance + 1e-9,
+                    "Max deviation {} exceeded tolerance {}",
+                    max_dev,
+                    tolerance
+                );
+                
+                current_idx = end_idx;
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_determinism() {
+        let pts = sample_circle(50.0, 50.0, 25.0, 64);
+        
+        let n = pts.len();
+        let mut contour_tangents = vec![(0.0, 0.0); n];
+        for i in 0..n {
+            let prev = pts[(i + n - 1) % n];
+            let next = pts[(i + 1) % n];
+            let dx = next.0 - prev.0;
+            let dy = next.1 - prev.1;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > 1e-9 {
+                contour_tangents[i] = (dx / len, dy / len);
+            } else {
+                contour_tangents[i] = (1.0, 0.0);
+            }
+        }
+        
+        let mut span_indices = Vec::new();
+        for i in 0..n {
+            span_indices.push(i);
+        }
+        span_indices.push(0);
+        
+        let tolerance = 1.0;
+        
+        let mut unmerged1 = Vec::new();
+        fit_recursive(
+            &pts,
+            &contour_tangents,
+            &span_indices,
+            true,
+            true,
+            tolerance,
+            0,
+            span_indices.len() - 1,
+            &mut unmerged1,
+        );
+        
+        let merged1 = merge_bezier_segments(
+            &pts,
+            &contour_tangents,
+            &span_indices,
+            true,
+            true,
+            tolerance,
+            &unmerged1,
+        );
+
+        let mut unmerged2 = Vec::new();
+        fit_recursive(
+            &pts,
+            &contour_tangents,
+            &span_indices,
+            true,
+            true,
+            tolerance,
+            0,
+            span_indices.len() - 1,
+            &mut unmerged2,
+        );
+        
+        let merged2 = merge_bezier_segments(
+            &pts,
+            &contour_tangents,
+            &span_indices,
+            true,
+            true,
+            tolerance,
+            &unmerged2,
+        );
+        
+        assert_eq!(merged1.len(), merged2.len());
+        for (e1, e2) in merged1.iter().zip(merged2.iter()) {
+            match (e1, e2) {
+                (PathElement::CurveTo(ax1, ay1, ax2, ay2, ax3, ay3), PathElement::CurveTo(bx1, by1, bx2, by2, bx3, by3)) => {
+                    assert!((ax1 - bx1).abs() < 1e-15);
+                    assert!((ay1 - by1).abs() < 1e-15);
+                    assert!((ax2 - bx2).abs() < 1e-15);
+                    assert!((ay2 - by2).abs() < 1e-15);
+                    assert!((ax3 - bx3).abs() < 1e-15);
+                    assert!((ay3 - by3).abs() < 1e-15);
+                }
+                _ => panic!("Expected CurveTo elements only"),
+            }
+        }
     }
 }

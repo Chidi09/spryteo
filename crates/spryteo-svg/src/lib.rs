@@ -444,7 +444,13 @@ fn serialize_defs(grads: &[(String, &Fill)], opts: &ConvertOptions) -> String {
 }
 
 /// Serializes the scene graph into an SVG string according to conversion options.
-fn serialize_svg(scene: &SceneGraph, width: u32, height: u32, opts: &ConvertOptions) -> String {
+fn serialize_svg(
+    scene: &SceneGraph,
+    width: u32,
+    height: u32,
+    opts: &ConvertOptions,
+    background_rect_color: Option<Rgb>,
+) -> String {
     let precision = opts.precision as usize;
     let pretty = matches!(opts.output, OutputFormat::SvgPretty | OutputFormat::Jsx);
     let is_jsx = matches!(opts.output, OutputFormat::Jsx);
@@ -461,6 +467,24 @@ fn serialize_svg(scene: &SceneGraph, width: u32, height: u32, opts: &ConvertOpti
     let grads = collect_gradients(scene);
     let defs_str = serialize_defs(&grads, opts);
     out.push_str(&defs_str);
+
+    if let Some(color) = background_rect_color {
+        if pretty {
+            writeln!(
+                out,
+                "  <rect width=\"{}\" height=\"{}\" fill=\"#{:02x}{:02x}{:02x}\"/>",
+                width, height, color.r, color.g, color.b
+            )
+            .unwrap();
+        } else {
+            write!(
+                out,
+                "<rect width=\"{}\" height=\"{}\" fill=\"#{:02x}{:02x}{:02x}\"/>",
+                width, height, color.r, color.g, color.b
+            )
+            .unwrap();
+        }
+    }
 
     for group in &scene.groups {
         let use_group = !matches!(opts.grouping, Grouping::Flat);
@@ -846,6 +870,7 @@ pub fn emit_svg(
     width: u32,
     height: u32,
     opts: &ConvertOptions,
+    background_rect_color: Option<Rgb>,
 ) -> ConvertResult {
     let mut nodes_meta = Vec::new();
     let mut node_index = 0;
@@ -891,7 +916,7 @@ pub fn emit_svg(
         }
     }
 
-    let svg = serialize_svg(scene, width, height, opts);
+    let svg = serialize_svg(scene, width, height, opts, background_rect_color);
     let byte_count = svg.len();
 
     let stats = Stats {
@@ -1505,7 +1530,7 @@ mod tests {
         let mut opts = make_test_options();
         opts.id_style = IdStyle::Sequential;
 
-        let res = emit_svg(&scene, 100, 100, &opts);
+        let res = emit_svg(&scene, 100, 100, &opts, None);
         assert!(res.svg.contains("<circle"));
         assert!(res.svg.contains("cx=\"50.00\""));
         assert!(res.svg.contains("cy=\"50.00\""));
@@ -1544,7 +1569,7 @@ mod tests {
         let mut opts = make_test_options();
         opts.id_style = IdStyle::Sequential;
 
-        let res = emit_svg(&scene, 100, 100, &opts);
+        let res = emit_svg(&scene, 100, 100, &opts, None);
         assert!(res.svg.contains("<path"));
         assert!(res.svg.contains("d=\"M 1.00 2.00 L 3.00 4.00 Z\""));
         assert_all_numbers_finite(&res.svg);
@@ -1569,12 +1594,12 @@ mod tests {
         let scene_hash = build_scene_graph(&curves, &IdStyle::Hash, &TOrigin::Baked, &fills, false);
         let mut opts = make_test_options();
         opts.id_style = IdStyle::Hash;
-        let res_hash = emit_svg(&scene_hash, 100, 100, &opts);
+        let res_hash = emit_svg(&scene_hash, 100, 100, &opts, None);
         assert!(res_hash.svg.contains("id=\"s-"));
 
         let scene_none = build_scene_graph(&curves, &IdStyle::None, &TOrigin::Baked, &fills, false);
         opts.id_style = IdStyle::None;
-        let res_none = emit_svg(&scene_none, 100, 100, &opts);
+        let res_none = emit_svg(&scene_none, 100, 100, &opts, None);
         assert!(!res_none.svg.contains("id="));
 
         let scene_seq = build_scene_graph(
@@ -1585,7 +1610,7 @@ mod tests {
             false,
         );
         opts.id_style = IdStyle::Sequential;
-        let res_seq = emit_svg(&scene_seq, 100, 100, &opts);
+        let res_seq = emit_svg(&scene_seq, 100, 100, &opts, None);
         assert!(res_seq.svg.contains("id=\"s-0\""));
     }
 
@@ -1613,7 +1638,7 @@ mod tests {
         opts.id_style = IdStyle::None;
         opts.precision = 1;
 
-        let res = emit_svg(&scene, 100, 100, &opts);
+        let res = emit_svg(&scene, 100, 100, &opts, None);
         assert!(res.svg.contains("12.3"));
         assert!(res.svg.contains("78.9"));
         assert!(res.svg.contains("0.0"));
@@ -1641,10 +1666,10 @@ mod tests {
         opts.id_style = IdStyle::None;
 
         opts.output = OutputFormat::Svg;
-        let res_min = emit_svg(&scene, 100, 100, &opts);
+        let res_min = emit_svg(&scene, 100, 100, &opts, None);
 
         opts.output = OutputFormat::SvgPretty;
-        let res_pretty = emit_svg(&scene, 100, 100, &opts);
+        let res_pretty = emit_svg(&scene, 100, 100, &opts, None);
 
         assert!(res_pretty.svg.contains('\n'));
         assert!(res_min.svg.len() < res_pretty.svg.len());
@@ -1658,7 +1683,7 @@ mod tests {
         let scene = build_scene_graph(&curves, &IdStyle::None, &TOrigin::Baked, &[], false);
 
         let opts = make_test_options();
-        let res = emit_svg(&scene, 412, 927, &opts);
+        let res = emit_svg(&scene, 412, 927, &opts, None);
         assert!(res.svg.contains("viewBox=\"0 0 412 927\""));
     }
 
@@ -1690,7 +1715,7 @@ mod tests {
         let mut opts = make_test_options();
         opts.id_style = IdStyle::Hash;
 
-        let res = emit_svg(&scene, 100, 100, &opts);
+        let res = emit_svg(&scene, 100, 100, &opts, None);
         assert!(!res.svg.contains("<script>"));
         assert!(res.svg.contains("&lt;script&gt;"));
     }
@@ -1717,8 +1742,8 @@ mod tests {
         let scene = build_scene_graph(&curves, &IdStyle::Hash, &TOrigin::Centroid, &fills, false);
 
         let opts = make_test_options();
-        let res1 = emit_svg(&scene, 500, 500, &opts);
-        let res2 = emit_svg(&scene, 500, 500, &opts);
+        let res1 = emit_svg(&scene, 500, 500, &opts, None);
+        let res2 = emit_svg(&scene, 500, 500, &opts, None);
 
         assert_eq!(res1.svg, res2.svg);
     }
@@ -1931,7 +1956,7 @@ mod tests {
             false,
         );
         let opts = make_test_options();
-        let res_linear = emit_svg(&scene_linear, 100, 100, &opts);
+        let res_linear = emit_svg(&scene_linear, 100, 100, &opts, None);
 
         assert!(
             res_linear.svg.contains("<defs>"),
@@ -1997,7 +2022,7 @@ mod tests {
             &fills_radial,
             false,
         );
-        let res_radial = emit_svg(&scene_radial, 100, 100, &opts);
+        let res_radial = emit_svg(&scene_radial, 100, 100, &opts, None);
 
         assert!(
             res_radial.svg.contains("<defs>"),
@@ -2088,7 +2113,7 @@ mod tests {
             &fills_two,
             false,
         );
-        let res_two = emit_svg(&scene_two, 100, 100, &opts);
+        let res_two = emit_svg(&scene_two, 100, 100, &opts, None);
         assert!(res_two.svg.contains("id=\"grad-s-0\""));
         assert!(res_two.svg.contains("id=\"grad-s-1\""));
         assert!(res_two.svg.contains("fill=\"url(#grad-s-0)\""));
@@ -2117,14 +2142,14 @@ mod tests {
             &fills_solid,
             false,
         );
-        let res_solid = emit_svg(&scene_solid, 100, 100, &opts);
+        let res_solid = emit_svg(&scene_solid, 100, 100, &opts, None);
         assert!(
             res_solid.svg.contains("fill=\"#0c2238\""),
             "solid fill serialization regression check"
         );
 
         // 5. Determinism: emit twice and assert identical output
-        let res_two_second = emit_svg(&scene_two, 100, 100, &opts);
+        let res_two_second = emit_svg(&scene_two, 100, 100, &opts, None);
         assert_eq!(
             res_two.svg, res_two_second.svg,
             "SVG outputs must be byte-identical"

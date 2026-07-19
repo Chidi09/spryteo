@@ -152,8 +152,9 @@ pub fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult,
         mode: classified.mode,
         background_color: classified.background_color,
     };
-    let layer_stack =
+    let mut layer_stack =
         spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
+    let rect_color = spryteo_quant::apply_background_policy(&mut layer_stack, classified.background_color, &opts.background);
     let contour_set = spryteo_trace::extract_contours(&layer_stack, width, height, opts.turdsize);
     let curve_set = spryteo_fit::fit_contours(&contour_set, opts.tolerance, opts.smoothness);
 
@@ -171,7 +172,7 @@ pub fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult,
         &fills,
         opts.arcs,
     );
-    let result = spryteo_svg::emit_svg(&scene, width, height, opts);
+    let result = spryteo_svg::emit_svg(&scene, width, height, opts, rect_color);
     Ok(result)
 }
 
@@ -694,4 +695,70 @@ mod tests {
         assert!(summary.contains("paths=0"));
         assert!(summary.contains("ids (0):"));
     }
+
+    #[test]
+    fn test_e2e_background_policies() {
+        use image::{ImageBuffer, Rgba, ImageFormat};
+        use std::io::Cursor;
+        use spryteo_core::options::{Background, Mode};
+
+        let mut img = ImageBuffer::new(16, 16);
+        for x in 0..16 {
+            for y in 0..16 {
+                if x >= 4 && x < 12 && y >= 4 && y < 12 {
+                    img.put_pixel(x, y, Rgba([255, 0, 0, 255])); // Red
+                } else {
+                    img.put_pixel(x, y, Rgba([255, 255, 255, 255])); // White
+                }
+            }
+        }
+
+        let mut png_bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut Cursor::new(&mut png_bytes), ImageFormat::Png)
+            .unwrap();
+
+        // 1. Keep (default)
+        let opts_keep = ConvertOptions {
+            background: Background::Keep,
+            mode: Mode::Icon,
+            ..ConvertOptions::default()
+        };
+        let res_keep = run_convert(&png_bytes, &opts_keep).unwrap();
+        assert!(res_keep.svg.contains("fill=\"#ffffff\""), "Keep SVG should contain white fill: {}", res_keep.svg);
+        assert!(res_keep.svg.contains("fill=\"#ff0000\""), "Keep SVG should contain red fill: {}", res_keep.svg);
+        assert!(!res_keep.svg.contains("<rect width=\"16\" height=\"16\""), "Keep SVG should not contain a background rect: {}", res_keep.svg);
+
+        // 2. Drop
+        let opts_drop = ConvertOptions {
+            background: Background::Drop,
+            mode: Mode::Icon,
+            ..ConvertOptions::default()
+        };
+        let res_drop = run_convert(&png_bytes, &opts_drop).unwrap();
+        assert!(!res_drop.svg.contains("fill=\"#ffffff\""), "Drop SVG should not contain white fill: {}", res_drop.svg);
+        assert!(res_drop.svg.contains("fill=\"#ff0000\""), "Drop SVG should contain red fill: {}", res_drop.svg);
+        assert!(!res_drop.svg.contains("<rect width=\"16\" height=\"16\""), "Drop SVG should not contain a background rect: {}", res_drop.svg);
+
+        // 3. Rect
+        let opts_rect = ConvertOptions {
+            background: Background::Rect,
+            mode: Mode::Icon,
+            ..ConvertOptions::default()
+        };
+        let res_rect = run_convert(&png_bytes, &opts_rect).unwrap();
+        assert!(res_rect.svg.contains("<rect width=\"16\" height=\"16\" fill=\"#ffffff\"/>"), "Rect SVG should contain the background rect: {}", res_rect.svg);
+        let white_matches = res_rect.svg.matches("#ffffff").count();
+        assert_eq!(white_matches, 1, "Rect SVG should only have one white fill (in the rect): {}", res_rect.svg);
+        assert!(res_rect.svg.contains("fill=\"#ff0000\""), "Rect SVG should contain red fill: {}", res_rect.svg);
+
+        let rect_idx = res_rect.svg.find("<rect ").expect("should find rect");
+        if let Some(path_idx) = res_rect.svg.find("<path ") {
+            assert!(rect_idx < path_idx, "rect should come before path");
+        }
+        if let Some(g_idx) = res_rect.svg.find("<g") {
+            assert!(rect_idx < g_idx, "rect should come before group");
+        }
+    }
 }
+
