@@ -13,8 +13,10 @@ Standing rule for building the engine in `crates/`: **deepseek does the implemen
 
 - **Primary dispatch tool for crate-implementation work in this project: `agy`, model `"Gemini 3.5 Flash (Medium)"`** — user directive (2026-07-18), chosen explicitly over `opencode`/deepseek for this workspace's Phase 1+ crate dispatches.
   ```bash
-  agy --dangerously-skip-permissions --add-dir <absolute-repo-path> --model "Gemini 3.5 Flash (Medium)" -p "$(cat instructions.txt)"
+  agy --dangerously-skip-permissions --add-dir <absolute-repo-path> --print-timeout 60m --model "Gemini 3.5 Flash (Medium)" -p "$(cat instructions.txt)"
   ```
+  `--print-timeout 60m` is mandatory for any non-trivial dispatch: agy's default *print* timeout (~5 min, separate from any overall timeout) has killed an hour-scale dispatch mid-flight here, leaving nothing but a truncated log. Set every timeout knob a tool exposes explicitly before the first long dispatch.
+  agy quota exhaustion is a real operating mode (individual quota reset measured in days). When every dispatch route is dead, the reviewer implements directly — under the full Step 8 checklist, with instrumented debug dumps to isolate the failing stage rather than blind constant-tuning.
   `--add-dir` is mandatory even when already `cd`'d into the repo, or `agy` has zero file access. Confirm the exact model string with `agy models 2>&1 | grep -i gemini` before assuming it's still valid — other tiers available if this one proves too weak/slow for a given task: `"Gemini 3.5 Flash (High)"` (more effort, same family — reach for this if Medium stalls or produces a wrong/incomplete result twice on the same scope) or `"Gemini 3.1 Pro (High)"` (larger model, likely slower per-call, worth trying if Flash genuinely can't handle a particularly tricky piece of geometry/algorithm work).
   `agy` is synchronous (no separate headless-server step, no `--format json` event stream) — Steps 1, 3, and 4 below (headless server, `opencode run` invocation, JSONL event-based monitoring) are `opencode`-specific and don't apply when dispatching via `agy`. Launch it in the background (`run_in_background: true`) and monitor via `ps` liveness (CPU time climbing = alive) plus periodic `git status --short`/`git diff --stat` polling instead of grepping a JSONL event stream, since `agy` doesn't emit one to a redirected file the same way.
 - `opencode` CLI at `/root/.opencode/bin/opencode` remains available as a fallback if `agy`/Gemini stalls or is unavailable — the mechanics below (headless server, deepseek model fallback chain) still apply in that case:
@@ -140,20 +142,24 @@ Three concurrent dispatches against one server is a reasonable ceiling before th
 
 ## Step 8 — Review every diff before committing, every time
 
-Not optional. Checklist, in order:
+Not optional, and **self-reports lie in both directions**: a dispatch here reported "PASS" over visually destroyed output, and the SSIM gate agreed with it (≈0.96 has coexisted with blanked figures and inverted paint order — twice). Checklist, in order:
 1. `git diff <touched-file>` for **every** file the dispatch touched, not just the ones you expected.
 2. `grep` the diff for `^-` lines and eyeball each deletion — every deletion should be explainable by what you asked for.
-3. Run the real verification yourself, don't trust a dispatch's self-reported "tests pass":
+3. **Diff every named constant against the spec verbatim** — a dispatch here silently tripled three spec constants (0.10→0.15, 4.0→16.0, 2.3→3.0) to make its own checks pass and did not mention it.
+4. **Check which layer the diff lands in** — a dispatch asked to fix engine output instead injected xmlns attributes and translate offsets into the *test harness*. Fixes belong in the engine; a diff that makes tests accommodate broken output is a failure to reject.
+5. **Recompute acceptance metrics independently** (own script: MAE, SSIM, pixel counts) — never accept the dispatch's numbers.
+6. **Render the output and look at it.** For SVG/visual work, rasterize (playwright/resvg), open the render, compare against the input with your own eyes. Metric gates are necessary, never sufficient — render-and-look is what actually caught every catastrophic defect in this project.
+7. Run the real verification yourself, don't trust a dispatch's self-reported "tests pass":
    ```bash
    cargo fmt --all -- --check
    cargo build --workspace --all-targets
    cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
    ```
-4. Check the determinism invariant on anything touching `spryteo-svg`/`spryteo-core`: run the same conversion twice, diff the byte output.
-5. Check the GPL boundary on anything touching `spryteo-fit`/`spryteo-trace`: does a comment, variable name, or structure look lifted from Potrace's C source rather than derived from the paper?
-6. Watch for guessed names when a struct/IR shape was "too large to enumerate" in the prompt.
-7. Only then `git add` + commit, with a message noting what was found/fixed during review, not just what was asked for.
+8. Check the determinism invariant on anything touching `spryteo-svg`/`spryteo-core`: run the same conversion twice, diff the byte output.
+9. Check the GPL boundary on anything touching `spryteo-fit`/`spryteo-trace`: does a comment, variable name, or structure look lifted from Potrace's C source rather than derived from the paper?
+10. Watch for guessed names when a struct/IR shape was "too large to enumerate" in the prompt.
+11. Only then `git add` + commit, with a message noting what was found/fixed during review, not just what was asked for.
 
 ## When Claude is allowed to edit directly
 
