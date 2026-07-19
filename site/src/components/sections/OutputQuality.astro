@@ -1,4 +1,5 @@
 ---
+import Icon from '../ui/Icon.astro';
 ---
 
 <section class="section">
@@ -6,29 +7,29 @@
     <h2 class="title sc-reveal">Built for animation, not just eyeballs.</h2>
     <p class="subtitle sc-reveal">Most raster-to-SVG tools give you a single, flattened <code class="inline-code">&lt;path&gt;</code> blob. Spryteo gives you semantic groups and stable IDs, ready for CSS or JS motion.</p>
   </div>
-  
+
   <div class="quality-grid">
     <div class="quality-card sc-reveal">
-      <div class="quality-icon">&#9635;</div>
+      <div class="quality-icon"><Icon name="layers" size={22} strokeWidth={1.75} /></div>
       <h3 class="quality-title">Semantic Grouping</h3>
       <p class="quality-desc">Shapes are hierarchically nested into a proper <code class="inline-code">&lt;g&gt;</code> tree based on containment or mask-guided coverage. Animate the wheel, not the whole car.</p>
     </div>
-    
+
     <div class="quality-card sc-reveal">
-      <div class="quality-icon">&#128274;</div>
+      <div class="quality-icon"><Icon name="lock" size={22} strokeWidth={1.75} /></div>
       <h3 class="quality-title">Stable Content-Hashed IDs</h3>
       <p class="quality-desc">Every element gets an ID derived from a blake3 hash of its geometry and fill. Tweak your source image and re-export without breaking your animation selectors.</p>
     </div>
 
     <div class="quality-card sc-reveal">
-      <div class="quality-icon">&#128394;</div>
+      <div class="quality-icon"><Icon name="spline" size={22} strokeWidth={1.75} /></div>
       <h3 class="quality-title">True Centerline Stroke</h3>
       <p class="quality-desc">Use <code class="inline-code">--stroke</code> mode for line art. Instead of outlining a stroke as a filled region, get a true variable-width centerline path with <code class="inline-code">pathLength="100"</code>.</p>
     </div>
   </div>
 
   <div class="section-footer sc-reveal">
-    <a href="/docs#options" class="section-docs-link">read more about output quality &#8594;</a>
+    <a href="/docs#options" class="section-docs-link">read more about output quality <Icon name="arrow-right" size={14} /></a>
   </div>
 </section>
 
@@ -86,7 +87,14 @@
     transform: translateY(-4px);
   }
   .quality-icon {
-    font-size: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    background: rgba(198, 255, 75, 0.08);
+    border: 1px solid rgba(198, 255, 75, 0.2);
+    border-radius: 12px;
     color: var(--accent);
     margin-bottom: 24px;
   }
@@ -106,6 +114,9 @@
     display: flex;
   }
   .section-docs-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-family: var(--font-mono);
     font-size: 14px;
     color: var(--muted);

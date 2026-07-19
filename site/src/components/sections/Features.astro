@@ -1,4 +1,6 @@
 ---
+import Icon from '../ui/Icon.astro';
+
 interface Feature {
   tag: string;
   title: string;
@@ -6,7 +8,7 @@ interface Feature {
 }
 
 const features: Feature[] = [
-  { tag: 'CLI &middot; API &middot; lib', title: 'One engine, every surface', desc: 'Run it from the terminal, call the API, or import the library. Same output wherever you work.' },
+  { tag: 'CLI &middot; Node &middot; WASM', title: 'One engine, every surface', desc: 'Run it from the terminal, call the library, or convert client-side in the browser. Same output wherever you work.' },
   { tag: '&lt;g&gt; groups', title: 'Actually animateable', desc: 'Single continuous paths, not one flattened blob. Semantic groups you can target and tween.' },
   { tag: 'MIT / Apache-2.0', title: 'Free and open', desc: 'Runs locally &#8212; no upload, no account. The source is on GitHub, dual-licensed MIT / Apache-2.0.' },
   { tag: 'MCP', title: 'Ready for agents', desc: 'Ships an MCP server so agents can convert icons without leaving the chat.' },
@@ -23,7 +25,7 @@ const features: Feature[] = [
       </div>
     ))}
   </div>
-  <a href="/docs" class="section-docs-link sc-reveal">see everything Spryteo can do &#8594;</a>
+  <a href="/docs" class="section-docs-link sc-reveal">see everything Spryteo can do <Icon name="arrow-right" size={14} /></a>
 </section>
 
 <style>
@@ -38,7 +40,9 @@ const features: Feature[] = [
     gap: 16px;
   }
   .section-docs-link {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     margin-top: 24px;
     font-family: var(--font-mono);
     font-size: 13px;

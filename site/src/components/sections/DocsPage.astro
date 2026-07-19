@@ -1,5 +1,6 @@
 ---
 import CodeBlock from '../ui/CodeBlock.astro';
+import Icon from '../ui/Icon.astro';
 
 const surfaces = [
   { id: 'cli', tag: 'terminal', title: 'CLI', desc: 'One binary. Point it at a file, get an SVG back.' },
@@ -56,13 +57,13 @@ const cliFlags: [string, string][] = [
 
     <div class="ai-tools">
       <a href="/docs.md" download="spryteo-docs.md" class="ai-btn" id="downloadMd">
-        <span class="ai-btn-icon">&#8595;</span> download as .md
+        <span class="ai-btn-icon"><Icon name="download" size={14} strokeWidth={2} /></span> download as .md
       </a>
       <button type="button" class="ai-btn" id="copyMd">
-        <span class="ai-btn-icon">&#9112;</span> copy as markdown
+        <span class="ai-btn-icon"><Icon name="clipboard-copy" size={14} strokeWidth={2} /></span> copy as markdown
       </button>
       <a href="/docs.md" class="ai-btn" id="viewMd">
-        <span class="ai-btn-icon">&#8599;</span> view raw
+        <span class="ai-btn-icon"><Icon name="external-link" size={14} strokeWidth={2} /></span> view raw
       </a>
     </div>
 
@@ -216,6 +217,7 @@ const cliFlags: [string, string][] = [
   const copyBtn = document.getElementById('copyMd');
   copyBtn?.addEventListener('click', async () => {
     const label = copyBtn.querySelector('.ai-btn-icon');
+    const originalIconHtml = label?.innerHTML ?? '';
     try {
       const res = await fetch('/docs.md');
       const text = await res.text();
@@ -224,7 +226,7 @@ const cliFlags: [string, string][] = [
       if (label) label.textContent = '✓';
       setTimeout(() => {
         copyBtn.classList.remove('ai-btn-done');
-        if (label) label.textContent = '⎘';
+        if (label) label.innerHTML = originalIconHtml;
       }, 1800);
     } catch {
       // Clipboard API unavailable/denied -- fall back to just opening the file.
@@ -299,8 +301,8 @@ const cliFlags: [string, string][] = [
     text-decoration: none;
   }
   .ai-btn-icon {
+    display: inline-flex;
     color: var(--accent);
-    font-size: 13px;
   }
   .ai-btn-done {
     color: var(--accent);

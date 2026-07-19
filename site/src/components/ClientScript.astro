@@ -140,29 +140,52 @@
     svg?: string;
   }
 
-  type SpryteoWasmModule = typeof import('../wasm/spryteo_wasm.js');
+  // Conversions run in a Web Worker: WASM executes synchronously, so a
+  // multi-second photo conversion on the main thread would freeze the
+  // entire page. Vite bundles the worker via the `new URL` pattern.
+  let convertWorker: Worker | null = null;
+  let nextRequestId = 0;
+  const pendingConversions = new Map<
+    number,
+    { resolve: (r: ConvertResult) => void; reject: (e: Error) => void }
+  >();
 
-  let wasmModulePromise: Promise<SpryteoWasmModule> | null = null;
-
-  function loadWasm(): Promise<SpryteoWasmModule> {
-    if (!wasmModulePromise) {
-      wasmModulePromise = (async () => {
-        // The JS/TS glue is a real module under src/ so Vite can bundle it;
-        // the .wasm binary itself is served as-is from public/ and fetched
-        // at runtime by URL, which is how wasm-bindgen's `default()` init
-        // function expects to be called.
-        const mod = await import('../wasm/spryteo_wasm.js');
-        await mod.default('/wasm/spryteo_wasm_bg.wasm');
-        return mod;
-      })();
+  function getConvertWorker(): Worker {
+    if (!convertWorker) {
+      convertWorker = new Worker(new URL('../wasm/convert.worker.ts', import.meta.url), {
+        type: 'module',
+      });
+      convertWorker.onmessage = (e: MessageEvent) => {
+        const { id, ok, result, error } = e.data as {
+          id: number;
+          ok: boolean;
+          result?: ConvertResult;
+          error?: string;
+        };
+        const pending = pendingConversions.get(id);
+        if (!pending) return;
+        pendingConversions.delete(id);
+        if (ok) pending.resolve(result ?? {});
+        else pending.reject(new Error(error ?? 'conversion failed'));
+      };
+      convertWorker.onerror = () => {
+        pendingConversions.forEach((p) => p.reject(new Error('conversion worker crashed')));
+        pendingConversions.clear();
+        convertWorker?.terminate();
+        convertWorker = null;
+      };
     }
-    return wasmModulePromise;
+    return convertWorker;
   }
 
   async function convertIcon(file: File): Promise<ConvertResult> {
-    const mod = await loadWasm();
     const bytes = new Uint8Array(await file.arrayBuffer());
-    return mod.convert_default(bytes) as ConvertResult;
+    const worker = getConvertWorker();
+    const id = nextRequestId++;
+    return new Promise<ConvertResult>((resolve, reject) => {
+      pendingConversions.set(id, { resolve, reject });
+      worker.postMessage({ id, bytes }, [bytes.buffer]);
+    });
   }
 
   function validateFile(file: File): string | null {
@@ -198,27 +221,102 @@
       playing = false;
     }, 2600);
 
-    convertIcon(file)
-      .then((result) => {
-        if (!demoCaption) return;
-        demoCaption.textContent = result.svg
-          ? file.name + ' → ' + file.name.replace(/\.[^.]+$/, '.svg')
-          : file.name + ' → ready for the API';
-      })
-      .catch(() => {
-        if (demoCaption) demoCaption.textContent = file.name + ' → conversion failed';
-      });
+  }
+
+  // --- Batch conversion + downloadable results -----------------------
+
+  const demoResults = document.getElementById('demoResults');
+  const MAX_BATCH = 6;
+  let resultUrls: string[] = [];
+
+  function clearResults(): void {
+    resultUrls.forEach((url) => URL.revokeObjectURL(url));
+    resultUrls = [];
+    if (demoResults) {
+      demoResults.innerHTML = '';
+      demoResults.hidden = true;
+    }
+  }
+
+  function addResultChip(inputName: string, svg: string): void {
+    if (!demoResults) return;
+    const outName = inputName.replace(/\.[^.]+$/, '') + '.svg';
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+    resultUrls.push(url);
+    const chip = document.createElement('a');
+    chip.className = 'demo-result-chip';
+    chip.href = url;
+    chip.download = outName;
+    chip.textContent = outName + ' ';
+    const arrow = document.createElement('span');
+    arrow.textContent = '↓';
+    arrow.setAttribute('aria-hidden', 'true');
+    chip.appendChild(arrow);
+    demoResults.appendChild(chip);
+    demoResults.hidden = false;
+  }
+
+  function handleFiles(fileList: File[]): void {
+    const files = fileList.slice(0, MAX_BATCH);
+    const valid: File[] = [];
+    let firstError: string | null = null;
+    for (const f of files) {
+      const error = validateFile(f);
+      if (error) {
+        if (!firstError) firstError = error;
+      } else {
+        valid.push(f);
+      }
+    }
+    if (valid.length === 0) {
+      if (firstError) showError(firstError);
+      return;
+    }
+
+    currentFile = valid[0];
+    stopAutoplay();
+    clearResults();
+    renderPreview(valid[0]);
+
+    const total = valid.length;
+    if (demoCaption) {
+      demoCaption.textContent =
+        total === 1 ? valid[0].name + ' → converting…' : 'converting ' + total + ' files…';
+    }
+
+    let done = 0;
+    let failed = 0;
+    valid.forEach((file) => {
+      convertIcon(file)
+        .then((result) => {
+          if (result.svg) addResultChip(file.name, result.svg);
+          else failed++;
+        })
+        .catch(() => {
+          failed++;
+        })
+        .finally(() => {
+          done++;
+          if (!demoCaption) return;
+          if (done < total) {
+            demoCaption.textContent = 'converting… ' + done + '/' + total + ' done';
+          } else if (total === 1) {
+            demoCaption.textContent = failed
+              ? valid[0].name + ' → conversion failed'
+              : valid[0].name +
+                ' → ' +
+                valid[0].name.replace(/\.[^.]+$/, '.svg') +
+                ' · click to download';
+          } else {
+            demoCaption.textContent =
+              total - failed + '/' + total + ' converted · click a file to download';
+          }
+        });
+    });
   }
 
   function handleFile(file: File): void {
-    const error = validateFile(file);
-    if (error) {
-      showError(error);
-      return;
-    }
-    currentFile = file;
-    stopAutoplay();
-    renderPreview(file);
+    handleFiles([file]);
   }
 
   function openFilePicker(): void {
@@ -241,8 +339,8 @@
     demoArea.addEventListener('drop', (e) => {
       e.preventDefault();
       demoArea.classList.remove('dragover');
-      const file = (e as DragEvent).dataTransfer?.files?.[0];
-      if (file) handleFile(file);
+      const files = Array.from((e as DragEvent).dataTransfer?.files ?? []);
+      if (files.length > 0) handleFiles(files);
     });
     demoArea.addEventListener('click', () => openFilePicker());
     demoArea.addEventListener('keydown', (e) => {
@@ -256,8 +354,8 @@
   if (fileInput) {
     fileInput.addEventListener('click', (e) => e.stopPropagation());
     fileInput.addEventListener('change', () => {
-      const file = fileInput.files?.[0];
-      if (file) handleFile(file);
+      const files = Array.from(fileInput.files ?? []);
+      if (files.length > 0) handleFiles(files);
       fileInput.value = '';
     });
   }
@@ -270,7 +368,7 @@
   bind('ctaDocs', () => { window.location.href = '/docs'; });
   bind('runDemo', () => {
     if (currentFile) {
-      renderPreview(currentFile);
+      handleFiles([currentFile]);
     } else {
       runDemo();
     }
@@ -332,18 +430,29 @@
   });
 
   // --- Scroll Reveal ---
+  // .sc-reveal elements are visible by default (see tokens.css) so they
+  // never disappear if this script is slow, blocked, or errors out. Only
+  // elements confirmed off-screen right now get opted into the hidden
+  // .sc-pending state, then revealed via IntersectionObserver as they
+  // scroll into view -- the observer only ever *removes* the hidden
+  // class, it's never the sole thing making content visible.
   if (!reduceMotion && 'IntersectionObserver' in window) {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
-          entry.target.classList.add('in-view');
+          entry.target.classList.remove('sc-pending');
           observer.unobserve(entry.target);
         }
       });
     }, { rootMargin: '0px 0px -10% 0px', threshold: 0.05 });
 
     document.querySelectorAll('.sc-reveal').forEach((el) => {
-      observer.observe(el);
+      const rect = el.getBoundingClientRect();
+      const alreadyVisible = rect.top < window.innerHeight && rect.bottom > 0;
+      if (!alreadyVisible) {
+        el.classList.add('sc-pending');
+        observer.observe(el);
+      }
     });
   }
 })();

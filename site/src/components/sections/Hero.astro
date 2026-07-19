@@ -12,21 +12,21 @@ import CodeBlock from '../ui/CodeBlock.astro';
     <h1 class="hero-title sc-stagger">Raster in. Animateable SVG out.</h1>
     <p class="hero-subtitle sc-stagger">Traced, grouped, and ready to animate &#8212; entirely offline.</p>
     <div class="sc-stagger hero-code-wrapper">
-      <CodeBlock title="spryteo">
-        <span class="install-prompt">$</span>
-        <span>spryteo convert </span><span id="heroTyping" class="hero-typing-text"></span><span class="hero-caret">&#8203;</span>
+      <CodeBlock title="terminal">
+        <div class="hero-term-line">
+          <span class="install-prompt">$</span>
+          <span>npm install spryteo</span>
+          <button id="copyInstall" class="install-copy">copy</button>
+        </div>
+        <div class="hero-term-line">
+          <span class="install-prompt">$</span>
+          <span>spryteo convert </span><span id="heroTyping" class="hero-typing-text"></span><span class="hero-caret">&#8203;</span>
+        </div>
       </CodeBlock>
     </div>
     <div class="hero-actions sc-stagger">
       <ClippedButton id="ctaHero" variant="primary">convert an icon</ClippedButton>
       <ClippedButton id="heroDocs" variant="secondary">read the docs</ClippedButton>
-    </div>
-    <div class="sc-stagger hero-code-wrapper">
-      <CodeBlock title="install">
-        <span class="install-prompt">$</span>
-        <span>npm install spryteo</span>
-        <button id="copyInstall" class="install-copy">copy</button>
-      </CodeBlock>
     </div>
   </div>
   <div class="demo-frame sc-stagger">
@@ -35,7 +35,7 @@ import CodeBlock from '../ui/CodeBlock.astro';
       <span>trace &#8594; group &#8594; animate</span>
     </div>
     <div id="demoArea" class="demo-area" role="button" tabindex="0" aria-label="Drop an image to convert, or click to browse">
-      <input id="fileInput" class="demo-file-input" type="file" accept="image/png,image/jpeg,image/svg+xml,image/gif,image/webp" hidden />
+      <input id="fileInput" class="demo-file-input" type="file" accept="image/png,image/jpeg,image/svg+xml,image/gif,image/webp" multiple hidden />
       <div id="demoContent" class="demo-idle">
         <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#A3A199" stroke-width="1.4">
           <path d="M12 16V4M12 4L7 9M12 4l5 5" stroke-linecap="round" stroke-linejoin="round" />
@@ -44,6 +44,7 @@ import CodeBlock from '../ui/CodeBlock.astro';
         <span class="demo-idle-text">drop a .png, .jpg, .svg or .gif &#8212; or click to browse</span>
       </div>
     </div>
+    <div id="demoResults" class="demo-results" hidden></div>
     <div class="demo-footer">
       <span id="demoCaption" class="demo-caption">icon.png &#8594; icon.svg &#183; 1 path &#183; 3 groups</span>
       <button id="runDemo" class="demo-btn">run again</button>
@@ -93,6 +94,7 @@ import CodeBlock from '../ui/CodeBlock.astro';
   .hero-content {
     position: relative;
     z-index: 1;
+    min-width: 0;
   }
   .sc-stagger {
     animation: sc-rise 640ms cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -100,8 +102,8 @@ import CodeBlock from '../ui/CodeBlock.astro';
   .hero-badge.sc-stagger { animation-delay: 0ms; }
   .hero-title.sc-stagger { animation-delay: 70ms; }
   .hero-subtitle.sc-stagger { animation-delay: 140ms; }
-  .hero-actions.sc-stagger { animation-delay: 210ms; }
-  .hero-install.sc-stagger { animation-delay: 260ms; }
+  .hero-code-wrapper.sc-stagger { animation-delay: 200ms; }
+  .hero-actions.sc-stagger { animation-delay: 260ms; }
   .demo-frame.sc-stagger { animation-delay: 180ms; }
   .hero-badge {
     font-family: var(--font-mono);
@@ -132,6 +134,13 @@ import CodeBlock from '../ui/CodeBlock.astro';
   }
   .hero-code-wrapper :global(.code-block-wrapper) {
     margin: 0; /* Override default 44px margin since we handle spacing here */
+  }
+  .hero-term-line {
+    display: flex;
+    align-items: center;
+  }
+  .hero-term-line + .hero-term-line {
+    margin-top: 10px;
   }
   .hero-typing-text {
     color: var(--accent);
@@ -251,6 +260,33 @@ import CodeBlock from '../ui/CodeBlock.astro';
   .demo-idle-text {
     font-family: var(--font-mono);
     font-size: 12px;
+  }
+  .demo-results {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+  }
+  /* Chips are created at runtime by ClientScript, so they need :global
+     to escape Astro's scoped-style attribute. */
+  .demo-results :global(.demo-result-chip) {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    background: rgba(198, 255, 75, 0.08);
+    border: 1px solid rgba(198, 255, 75, 0.25);
+    border-radius: 999px;
+    padding: 5px 12px;
+    text-decoration: none;
+    transition: border-color 160ms ease, background 160ms ease;
+  }
+  .demo-results :global(.demo-result-chip:hover) {
+    border-color: var(--accent);
+    background: rgba(198, 255, 75, 0.14);
   }
   .demo-footer {
     display: flex;

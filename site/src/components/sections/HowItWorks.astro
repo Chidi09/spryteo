@@ -1,4 +1,6 @@
 ---
+import Icon from '../ui/Icon.astro';
+
 interface Step {
   n: string;
   title: string;
@@ -26,7 +28,7 @@ const steps: Step[] = [
       </div>
     ))}
   </div>
-  <a href="/docs#options" class="section-docs-link">every option, tuned per surface &#8594;</a>
+  <a href="/docs#options" class="section-docs-link">every option, tuned per surface <Icon name="arrow-right" size={14} /></a>
 </section>
 
 <style>
@@ -52,7 +54,9 @@ const steps: Step[] = [
     gap: 12px;
   }
   .section-docs-link {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     margin-top: 24px;
     font-family: var(--font-mono);
     font-size: 13px;

@@ -1,4 +1,5 @@
 ---
+import Icon from '../ui/Icon.astro';
 const REPO = 'https://github.com/chidi09/spryteo';
 ---
 
@@ -19,12 +20,12 @@ const REPO = 'https://github.com/chidi09/spryteo';
       </a>
       <span class="community-divider" aria-hidden="true"></span>
       <a href={REPO + '/issues'} target="_blank" rel="noopener" class="community-link">
-        <span class="community-dot"></span>
+        <Icon name="git-pull-request" size={16} strokeWidth={2} />
         <span>contribute &#8212; browse open issues</span>
       </a>
       <span class="community-divider" aria-hidden="true"></span>
       <a href={REPO + '/discussions'} target="_blank" rel="noopener" class="community-link">
-        <span class="community-dot"></span>
+        <Icon name="message-circle" size={16} strokeWidth={2} />
         <span>support &#8212; GitHub Discussions</span>
       </a>
     </div>
@@ -92,13 +93,6 @@ const REPO = 'https://github.com/chidi09/spryteo';
   .community-icon {
     width: 16px;
     height: 16px;
-  }
-  .community-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--accent);
-    flex-shrink: 0;
   }
   .community-divider {
     width: 1px;

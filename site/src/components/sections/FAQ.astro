@@ -1,0 +1,167 @@
+---
+import Icon from '../ui/Icon.astro';
+
+interface QA {
+  q: string;
+  a: string;
+}
+
+const faqs: QA[] = [
+  {
+    q: 'Is Spryteo free?',
+    a: 'Yes. Spryteo is fully open source and dual-licensed under MIT / Apache-2.0 -- free for personal and commercial use, no account, no usage limits enforced by us.',
+  },
+  {
+    q: 'Do my images get uploaded anywhere?',
+    a: 'No. The CLI, Node library, and MCP server run entirely on your machine. The browser demo runs the same engine compiled to WebAssembly, client-side -- your image never leaves the tab.',
+  },
+  {
+    q: 'What image formats does it accept?',
+    a: 'PNG, JPEG, GIF (first frame), WebP, and BMP as input. Output is always SVG. Format is detected by magic bytes, never by file extension.',
+  },
+  {
+    q: 'How is this different from other raster-to-SVG tools?',
+    a: 'Most tracers give you a single flattened <path> per colour region, or one giant path for the whole image. Spryteo groups shapes into a semantic <g> tree and gives every shape a stable, content-hashed ID -- so the output is actually structured enough to select and animate individual parts, not just display as a static image.',
+  },
+  {
+    q: 'Does it handle photos, or just icons?',
+    a: 'Both. Icon mode targets flat-colour logos and UI icons with aggressive primitive recognition (circles, rects). Photo mode runs colour quantization, optional gradient detection, and automatically downscales very large photos before tracing so conversion stays fast.',
+  },
+  {
+    q: 'Can I use it in CI or a build pipeline?',
+    a: 'Yes -- the CLI is a single static binary with no network calls, so it drops into any CI runner or build step. The Node library works the same way if you\'d rather call it from JavaScript/TypeScript directly.',
+  },
+  {
+    q: 'What is the MCP server for?',
+    a: 'Model Context Protocol lets AI agents (like Claude) call tools mid-conversation. spryteo-mcp exposes convert_image and inspect_svg as MCP tools, so an agent can vectorize an icon or inspect an SVG\'s structure without you leaving the chat.',
+  },
+  {
+    q: 'Is Spryteo v1.0 stable?',
+    a: 'The npm packages are at v1.0; the underlying Rust workspace crates are pre-1.0 (v0.0.1) and not yet published to crates.io. See SEMVER.md in the repository for the exact compatibility commitments on ConvertOptions and the metadata sidecar.',
+  },
+];
+
+const faqJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map((f) => ({
+    '@type': 'Question',
+    name: f.q,
+    acceptedAnswer: {
+      '@type': 'Answer',
+      text: f.a,
+    },
+  })),
+};
+---
+
+<section class="section" id="faq">
+  <div class="head">
+    <h2 class="title sc-reveal">Frequently asked questions</h2>
+    <p class="subtitle sc-reveal">The short version. Full detail lives in the docs.</p>
+  </div>
+  <div class="faq-list">
+    {faqs.map((f) => (
+      <details class="faq-item sc-reveal">
+        <summary class="faq-q">
+          {f.q}
+          <span class="faq-chevron"><Icon name="chevron-down" size={18} /></span>
+        </summary>
+        <p class="faq-a">{f.a}</p>
+      </details>
+    ))}
+  </div>
+  <div class="section-footer sc-reveal">
+    <a href="/docs" class="section-docs-link">more detail in the docs <Icon name="arrow-right" size={14} /></a>
+  </div>
+</section>
+
+<script type="application/ld+json" is:inline set:html={JSON.stringify(faqJsonLd)} />
+
+<style>
+  .section {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 64px 32px;
+  }
+  .head {
+    margin: 0 0 32px;
+  }
+  .title {
+    font-size: 32px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+  }
+  .subtitle {
+    font-size: 16px;
+    color: var(--muted);
+    margin: 0;
+  }
+  .faq-list {
+    border-top: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .faq-item {
+    border-bottom: 1px solid var(--border);
+    padding: 4px 0;
+  }
+  .faq-q {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 2px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    list-style: none;
+  }
+  .faq-q::-webkit-details-marker {
+    display: none;
+  }
+  .faq-q:hover {
+    color: var(--accent);
+  }
+  .faq-chevron {
+    display: flex;
+    flex-shrink: 0;
+    color: var(--muted);
+    transition: transform var(--transition-fast);
+  }
+  details[open] .faq-chevron {
+    transform: rotate(180deg);
+  }
+  .faq-a {
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--muted);
+    margin: 0 0 20px;
+    padding: 0 2px;
+  }
+  .section-footer {
+    display: flex;
+  }
+  .section-docs-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+  }
+  .section-docs-link:hover {
+    color: var(--accent);
+  }
+
+  @media (max-width: 560px) {
+    .section {
+      padding: 48px 20px;
+    }
+    .title {
+      font-size: 26px;
+    }
+  }
+</style>
