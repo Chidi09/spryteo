@@ -26,6 +26,55 @@
   }
   cycleGif();
 
+  // --- Hero typing effect: cycle through real CLI invocations ---------
+
+  const typingSamples = [
+    'icon.png --mode icon --out icon.svg',
+    'photo.jpg --mode photo --colors 12',
+    'sprite.gif --stroke --css draw',
+    'logo.svg --mode pixel-art --arcs',
+  ];
+
+  function runTyping(): void {
+    const el = document.getElementById('heroTyping');
+    if (!el) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    if (reduceMotion) {
+      el.textContent = typingSamples[0];
+      return;
+    }
+
+    let sampleIndex = 0;
+    let charIndex = 0;
+    let deleting = false;
+
+    const tick = (): void => {
+      const sample = typingSamples[sampleIndex];
+      if (!deleting) {
+        charIndex++;
+        el.textContent = sample.slice(0, charIndex);
+        if (charIndex === sample.length) {
+          deleting = false;
+          setTimeout(() => { deleting = true; tick(); }, 1800);
+          return;
+        }
+        setTimeout(tick, 34 + Math.random() * 40);
+      } else {
+        charIndex--;
+        el.textContent = sample.slice(0, charIndex);
+        if (charIndex === 0) {
+          deleting = false;
+          sampleIndex = (sampleIndex + 1) % typingSamples.length;
+          setTimeout(tick, 300);
+          return;
+        }
+        setTimeout(tick, 16);
+      }
+    };
+    tick();
+  }
+  runTyping();
+
   function bind(id: string, fn: (this: HTMLElement, ev: MouseEvent) => void): void {
     const el = document.getElementById(id);
     if (el) el.addEventListener('click', fn);

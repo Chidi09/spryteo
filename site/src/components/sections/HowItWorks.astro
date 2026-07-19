@@ -26,6 +26,7 @@ const steps: Step[] = [
       </div>
     ))}
   </div>
+  <a href="/docs#options" class="section-docs-link">every option, tuned per surface &#8594;</a>
 </section>
 
 <style>
@@ -50,6 +51,18 @@ const steps: Step[] = [
     grid-template-columns: repeat(5, 1fr);
     gap: 12px;
   }
+  .section-docs-link {
+    display: inline-block;
+    margin-top: 24px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .section-docs-link:hover {
+    color: var(--accent);
+    text-decoration: none;
+  }
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -71,5 +84,19 @@ const steps: Step[] = [
     font-size: 13px;
     line-height: 1.5;
     color: var(--muted);
+  }
+
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+  @media (max-width: 560px) {
+    .section {
+      padding: 40px 20px;
+    }
+    .grid {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

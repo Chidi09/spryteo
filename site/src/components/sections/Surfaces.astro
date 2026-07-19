@@ -1,0 +1,127 @@
+---
+interface Surface {
+  tag: string;
+  title: string;
+  snippet: string;
+  href: string;
+}
+
+const surfaces: Surface[] = [
+  { tag: 'terminal', title: 'CLI', snippet: '$ spryteo icon.png --out icon.svg', href: '/docs#cli' },
+  { tag: 'node · npm', title: 'Library', snippet: "const { svg } = await convert(buf, opts)", href: '/docs#library' },
+  { tag: 'wasm · browser', title: 'Browser', snippet: 'convert_default(bytes) // client-side', href: '/docs#browser' },
+  { tag: 'MCP · agents', title: 'Agents', snippet: '{ "command": "spryteo-mcp" }', href: '/docs#mcp' },
+];
+---
+
+<section class="section">
+  <div class="head">
+    <h2 class="title">One engine. Every surface you already work in.</h2>
+    <p class="subtitle">Terminal, Node, browser, or an agent&#8217;s tool call &#8212; same trace, same groups, same output.</p>
+  </div>
+  <div class="grid">
+    {surfaces.map((s) => (
+      <a href={s.href} class="card">
+        <div class="card-tag">{s.tag}</div>
+        <h3 class="card-title">{s.title}</h3>
+        <code class="card-snippet">{s.snippet}</code>
+        <span class="card-link">docs &#8594;</span>
+      </a>
+    ))}
+  </div>
+</section>
+
+<style>
+  .section {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 64px 32px;
+  }
+  .head {
+    max-width: 620px;
+    margin: 0 0 32px;
+  }
+  .title {
+    font-size: 32px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+    text-wrap: balance;
+  }
+  .subtitle {
+    font-size: 16px;
+    color: var(--muted);
+    margin: 0;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .card {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 22px;
+    text-decoration: none;
+    color: var(--text);
+    transition: border-color var(--transition-fast), transform var(--transition-bounce);
+  }
+  .card:hover {
+    border-color: var(--accent);
+    transform: translateY(-3px);
+    text-decoration: none;
+  }
+  .card-tag {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+  .card-title {
+    font-size: 17px;
+    font-weight: 500;
+    margin: 0 0 12px;
+  }
+  .card-snippet {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .card-link {
+    margin-top: auto;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .card:hover .card-link {
+    color: var(--accent);
+  }
+
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  @media (max-width: 560px) {
+    .section {
+      padding: 40px 20px;
+    }
+    .title {
+      font-size: 26px;
+    }
+    .grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

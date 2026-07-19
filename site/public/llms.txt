@@ -1,0 +1,10 @@
+# Spryteo
+
+Spryteo is an open-source, local-first tool that converts raster images (PNG, JPEG, GIF, WebP, BMP) into clean, animateable, and semantically-grouped SVGs.
+
+- Official Website: https://spryteo.dev
+- Documentation: https://spryteo.dev/docs
+- Markdown Documentation: https://spryteo.dev/docs.md
+- GitHub Repository: https://github.com/chidi09/spryteo
+
+Spryteo is available as a CLI (`spryteo`), a Node.js native library, a WebAssembly browser build (`@spryteo/wasm`), and an MCP server (`spryteo-mcp`) for AI agents. It operates fully offline with no cloud dependency. Dual-licensed under MIT / Apache-2.0.

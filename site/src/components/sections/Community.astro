@@ -1,0 +1,155 @@
+---
+const REPO = 'https://github.com/chidi09/spryteo';
+---
+
+<section class="section">
+  <div class="community">
+    <div class="community-head">
+      <div class="community-tag">open source &#183; MIT / Apache-2.0</div>
+      <h2 class="community-title">Built in the open. Yours to shape.</h2>
+      <p class="community-desc">No account, no paywall, no telemetry. Read the source, file a bug, or send a patch.</p>
+    </div>
+
+    <div class="community-links">
+      <a href={REPO} target="_blank" rel="noopener" class="community-link">
+        <svg viewBox="0 0 24 24" class="community-icon" aria-hidden="true">
+          <path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+        </svg>
+        <span>star on GitHub</span>
+      </a>
+      <span class="community-divider" aria-hidden="true"></span>
+      <a href={REPO + '/issues'} target="_blank" rel="noopener" class="community-link">
+        <span class="community-dot"></span>
+        <span>contribute &#8212; browse open issues</span>
+      </a>
+      <span class="community-divider" aria-hidden="true"></span>
+      <a href={REPO + '/discussions'} target="_blank" rel="noopener" class="community-link">
+        <span class="community-dot"></span>
+        <span>support &#8212; GitHub Discussions</span>
+      </a>
+    </div>
+
+    <div class="community-footer">
+      <span class="community-footer-label">built by</span>
+      <a href="https://github.com/chidi09" target="_blank" rel="noopener" class="builder">
+        <span class="builder-avatar">C</span>
+        <span>chidi09</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .section {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 32px 64px;
+  }
+  .community {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 48px;
+    text-align: center;
+  }
+  .community-tag {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+  .community-title {
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0 0 10px;
+  }
+  .community-desc {
+    font-size: 15px;
+    color: var(--muted);
+    margin: 0 0 32px;
+  }
+  .community-links {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin: 0 0 36px;
+  }
+  .community-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .community-link:hover {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .community-icon {
+    width: 16px;
+    height: 16px;
+  }
+  .community-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+  .community-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+  }
+  .community-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding-top: 28px;
+    border-top: 1px solid var(--border);
+  }
+  .community-footer-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .builder {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 12px 5px 6px;
+    text-decoration: none;
+  }
+  .builder:hover {
+    border-color: var(--accent);
+    text-decoration: none;
+  }
+  .builder-avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  @media (max-width: 640px) {
+    .community { padding: 36px 24px; }
+    .community-divider { display: none; }
+  }
+</style>

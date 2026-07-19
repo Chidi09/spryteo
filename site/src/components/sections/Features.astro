@@ -8,7 +8,7 @@ interface Feature {
 const features: Feature[] = [
   { tag: 'CLI &middot; API &middot; lib', title: 'One engine, every surface', desc: 'Run it from the terminal, call the API, or import the library. Same output wherever you work.' },
   { tag: '&lt;g&gt; groups', title: 'Actually animateable', desc: 'Single continuous paths, not one flattened blob. Semantic groups you can target and tween.' },
-  { tag: 'MIT', title: 'Free and open', desc: 'Runs locally &#8212; no upload, no account. The source is on GitHub under an MIT license.' },
+  { tag: 'MIT / Apache-2.0', title: 'Free and open', desc: 'Runs locally &#8212; no upload, no account. The source is on GitHub, dual-licensed MIT / Apache-2.0.' },
   { tag: 'MCP', title: 'Ready for agents', desc: 'Ships an MCP server so agents can convert icons without leaving the chat.' },
 ];
 ---
@@ -23,6 +23,7 @@ const features: Feature[] = [
       </div>
     ))}
   </div>
+  <a href="/docs" class="section-docs-link">see everything Spryteo can do &#8594;</a>
 </section>
 
 <style>
@@ -35,6 +36,18 @@ const features: Feature[] = [
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 16px;
+  }
+  .section-docs-link {
+    display: inline-block;
+    margin-top: 24px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .section-docs-link:hover {
+    color: var(--accent);
+    text-decoration: none;
   }
   .card {
     background: var(--surface);
@@ -58,5 +71,19 @@ const features: Feature[] = [
     line-height: 1.55;
     color: var(--muted);
     margin: 0;
+  }
+
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  @media (max-width: 560px) {
+    .section {
+      padding: 40px 20px;
+    }
+    .grid {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

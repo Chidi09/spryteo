@@ -1,43 +1,313 @@
 ---
 import CodeBlock from '../ui/CodeBlock.astro';
+
+const surfaces = [
+  { id: 'cli', tag: 'terminal', title: 'CLI', desc: 'One binary. Point it at a file, get an SVG back.' },
+  { id: 'library', tag: 'node · npm', title: 'Library', desc: 'Native addon (napi-rs). Same engine, no subprocess.' },
+  { id: 'browser', tag: 'wasm', title: 'Browser', desc: 'Runs client-side. No upload, no server round-trip.' },
+  { id: 'mcp', tag: 'agents', title: 'MCP server', desc: 'Two tools agents can call mid-conversation.' },
+];
+
+const modes = [
+  { name: 'auto', desc: 'Picks a profile from the image itself — dimensions, unique-colour count, edge hardness, ink ratio. Every heuristic is overridable with --mode.' },
+  { name: 'icon', desc: 'Few unique colours (≤32 after a 1% noise floor) or a flat-fill alpha channel. Aggressive primitive recognition — circles and rects come out as <circle>/<rect>, not path soup.' },
+  { name: 'pixel-art', desc: '≤128px, ≤64 unique colours, hard-edged (no anti-aliasing). Traces exact pixel boundaries with corner-preserving fit instead of smoothing them away.' },
+  { name: 'line-art', desc: 'Low ink ratio after adaptive threshold, unimodal stroke-width histogram. Pairs with --stroke for true centerline output instead of outlined fills.' },
+  { name: 'photo', desc: 'Everything else. K-means colour quantization, optional gradient detection, bilateral filtering + JPEG deblocking, and automatic downscaling above 1600px so a 4K photo doesn\'t blow the time budget.' },
+];
+
+const cliFlags: [string, string][] = [
+  ['--output, -o <path>', 'Output SVG path. Required.'],
+  ['--mode <auto|icon|pixel-art|line-art|photo>', 'Override input classification. Default: auto.'],
+  ['--stroke', 'Run the centerline tracer instead of fill-mode outlining.'],
+  ['--css <draw|fade|pop>', 'Bake one of the built-in CSS animation presets into the SVG.'],
+  ['--colors <n>', 'Target palette size for quantization.'],
+  ['--layering <stacked|cutout>', 'Photo-mode layer composition.'],
+  ['--gradients <auto|on|off>', 'Gradient-fill detection. auto only tries it in photo mode.'],
+  ['--tolerance <px>', 'Curve-fit error budget, in pixels. Lower = more path points.'],
+  ['--smoothness <n>', 'Corner-preservation strength for the Bezier fit.'],
+  ['--turdsize <px²>', 'Discard regions smaller than this area (noise suppression).'],
+  ['--precision <n>', 'Decimal places in emitted path coordinates.'],
+  ['--pretty', 'Pretty-print the SVG instead of minifying it.'],
+  ['--json <path>', 'Also write the metadata sidecar (nodes, bboxes, groups, stats) as JSON.'],
+];
 ---
 
 <div class="page">
-  <div class="docs-meta">docs &#183; v1.0</div>
-  <h1 class="docs-title">Documentation</h1>
-  <p class="docs-desc">Spryteo converts raster images and icons into clean, animateable SVG. Install it, then reach for whichever surface fits your workflow &#8212; CLI, HTTP API, library, or MCP.</p>
+  <aside class="toc">
+    <div class="toc-label">on this page</div>
+    <a href="#surfaces" class="toc-link">Ways to use it</a>
+    <a href="#install" class="toc-link">Install</a>
+    <a href="#cli" class="toc-link">CLI</a>
+    <a href="#modes" class="toc-link">Modes</a>
+    <a href="#library" class="toc-link">Library (Node)</a>
+    <a href="#browser" class="toc-link">Browser (WASM)</a>
+    <a href="#mcp" class="toc-link">MCP server</a>
+    <a href="#api" class="toc-link">HTTP API</a>
+    <a href="#options" class="toc-link">Options reference</a>
+    <a href="#output" class="toc-link">Output &amp; metadata</a>
+    <a href="#stack" class="toc-link">Built with</a>
+  </aside>
 
-  <h2 class="heading">Install</h2>
-  <p class="para">Requires Node 18 or newer. Install globally for the CLI, or as a dependency for the library.</p>
-  <CodeBlock html='<span style="color:var(--muted);">$</span> npm install -g spryteo<br><span style="color:var(--muted);"># or, as a project dependency</span><br><span style="color:var(--muted);">$</span> npm install spryteo' />
+  <div class="content">
+    <div class="docs-meta">docs &#183; v1.0</div>
+    <h1 class="docs-title">Documentation</h1>
+    <p class="docs-desc">Spryteo converts raster images and icons into clean, animateable SVG &#8212; traced, quantized, curve-fit, and semantically grouped, entirely offline. Install it, then reach for whichever surface fits your workflow.</p>
 
-  <h2 class="heading">Quick start &#8212; CLI</h2>
-  <p class="para">Point it at a raster file. It writes a grouped, animateable SVG next to the source.</p>
-  <CodeBlock html='<span style="color:var(--muted);">$</span> spryteo ./icon.png <span style="color:var(--accent);">--groups</span> <span style="color:var(--accent);">--out</span> ./icon.svg<br><span style="color:var(--muted);">  traced 1 path &#183; 3 groups &#183; 2.1 kb &#8594; ./icon.svg</span>' />
+    <div class="ai-tools">
+      <a href="/docs.md" download="spryteo-docs.md" class="ai-btn" id="downloadMd">
+        <span class="ai-btn-icon">&#8595;</span> download as .md
+      </a>
+      <button type="button" class="ai-btn" id="copyMd">
+        <span class="ai-btn-icon">&#9112;</span> copy as markdown
+      </button>
+      <a href="/docs.md" class="ai-btn" id="viewMd">
+        <span class="ai-btn-icon">&#8599;</span> view raw
+      </a>
+    </div>
 
-  <h2 class="heading">HTTP API</h2>
-  <p class="para">POST an image, get SVG back. The body is the raw file; the response is <code class="inline-code">image/svg+xml</code>.</p>
-  <CodeBlock html='<span style="color:var(--muted);">$</span> curl <span style="color:var(--accent);">-X</span> POST https://api.spryteo.dev/v1/convert \<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--accent);">-H</span> "content-type: image/png" \<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--accent);">--data-binary</span> @icon.png' />
+    <h2 id="surfaces" class="heading">Ways to use it</h2>
+    <p class="para">Same engine, same output, four entry points.</p>
+    <div class="surface-grid">
+      {surfaces.map((s) => (
+        <a href={'#' + s.id} class="surface-card">
+          <div class="surface-tag">{s.tag}</div>
+          <div class="surface-title">{s.title}</div>
+          <div class="surface-desc">{s.desc}</div>
+        </a>
+      ))}
+    </div>
 
-  <h2 class="heading">Library</h2>
-  <p class="para">Import the async <code class="inline-code">convert()</code> function. It returns an SVG string plus the group map.</p>
-  <CodeBlock html='<span style="color:var(--accent);">import</span> { convert } <span style="color:var(--accent);">from</span> <span style="color:var(--muted);">&#39;spryteo&#39;</span><br><br><span style="color:var(--accent);">const</span> { svg, groups } = <span style="color:var(--accent);">await</span> convert(buffer, {<br>&nbsp;&nbsp;groups: <span style="color:var(--accent);">true</span>,<br>&nbsp;&nbsp;simplify: <span style="color:var(--muted);">0.4</span>,<br>})' />
+    <h2 id="install" class="heading">Install</h2>
+    <p class="para">Requires Node 18 or newer for the npm-distributed CLI/library/WASM builds. The Rust crates build with any current stable toolchain if you're working from source.</p>
+    <CodeBlock html='<span style="color:var(--muted);">$</span> npm install -g spryteo<br><span style="color:var(--muted);"># or, as a project dependency</span><br><span style="color:var(--muted);">$</span> npm install spryteo' />
 
-  <h2 class="heading">MCP server</h2>
-  <p class="para">Register Spryteo as an MCP server and agents can convert icons in-conversation. Add this to your client config:</p>
-  <CodeBlock html='{<br>&nbsp;&nbsp;<span style="color:var(--muted);">&quot;mcpServers&quot;</span>: {<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--muted);">&quot;spryteo&quot;</span>: { <span style="color:var(--muted);">&quot;command&quot;</span>: <span style="color:var(--accent);">&quot;spryteo-mcp&quot;</span> }<br>&nbsp;&nbsp;}<br>}' />
+    <h2 id="cli" class="heading">CLI</h2>
+    <p class="para">Point it at a raster file. It writes a grouped, animateable SVG next to the source, plus an optional JSON metadata sidecar.</p>
+    <CodeBlock html='<span style="color:var(--muted);">$</span> spryteo ./icon.png <span style="color:var(--accent);">--groups</span> <span style="color:var(--accent);">--out</span> ./icon.svg<br><span style="color:var(--muted);">  traced 1 path &#183; 3 groups &#183; 2.1 kb &#8594; ./icon.svg</span>' />
+    <p class="para">Full flag reference:</p>
+    <div class="flag-table">
+      {cliFlags.map(([flag, desc]) => (
+        <div class="flag-row">
+          <code class="flag-name">{flag}</code>
+          <span class="flag-desc">{desc}</span>
+        </div>
+      ))}
+    </div>
+    <p class="para">A second subcommand, <code class="inline-code">spryteo inspect</code>, prints a human-readable summary of an SVG produced by <code class="inline-code">convert</code> &#8212; node/path counts, group tree, and (with <code class="inline-code">--meta</code>) centroids, bboxes and colours read back from the JSON sidecar.</p>
+    <CodeBlock code={'$ spryteo inspect ./icon.svg --meta ./icon.json\n  4 nodes · 2 groups · viewBox 0 0 64 64\n  g-s-0\n    #s-a1b2c3d4  circle  fill #e63946  area 812.4  bbox [12.0,12.0 52.0,52.0]'} />
 
-  <div class="docs-footer">
-    <span class="docs-footer-text">Full reference lives in the</span>
-    <a href="https://github.com" target="_blank" rel="noopener" class="docs-footer-link">GitHub README &#8594;</a>
+    <h2 id="modes" class="heading">Modes</h2>
+    <p class="para"><code class="inline-code">auto</code> (the default) picks one of these for you; every heuristic is overridable with <code class="inline-code">--mode</code>.</p>
+    <div class="mode-table">
+      {modes.map((m) => (
+        <div class="mode-row">
+          <code class="mode-name">{m.name}</code>
+          <span class="mode-desc">{m.desc}</span>
+        </div>
+      ))}
+    </div>
+
+    <h2 id="library" class="heading">Library (Node)</h2>
+    <p class="para">A native addon built with napi-rs &#8212; the real Rust engine in-process, no subprocess or WASM overhead. <code class="inline-code">convert()</code> is async; <code class="inline-code">convertSync()</code> blocks. Options are a JSON string merged against sensible defaults, so you only need to specify what you're overriding.</p>
+    <CodeBlock code={"import { convert } from 'spryteo'\n\nconst { svg, meta } = await convert(\n  buffer,\n  JSON.stringify({ mode: 'icon', colors: 8, css: 'draw' })\n)\n\n// meta.nodes[i] = { id, bbox, centroid, area, fill, group, zOrder }\nconsole.log(meta.stats) // { nodeCount, pathCount, byteCount }"} />
+
+    <h2 id="browser" class="heading">Browser (WASM)</h2>
+    <p class="para">The same engine compiled to WebAssembly &#8212; this is what powers the live demo at the top of this site. Everything happens client-side; no image ever leaves the browser.</p>
+    <CodeBlock code={"import init, { convert_default } from '@spryteo/wasm'\n\nawait init('/spryteo_wasm_bg.wasm')\nconst bytes = new Uint8Array(await file.arrayBuffer())\nconst { svg, meta } = convert_default(bytes)"} />
+    <p class="para">Use <code class="inline-code">convert(bytes, optionsJson)</code> instead of <code class="inline-code">convert_default</code> to pass the same JSON options object as the Node and CLI surfaces.</p>
+
+    <h2 id="mcp" class="heading">MCP server</h2>
+    <p class="para">Register Spryteo as an MCP server and agents can convert and inspect icons mid-conversation, without shelling out or leaving the chat.</p>
+    <CodeBlock html='{<br>&nbsp;&nbsp;<span style="color:var(--muted);">&quot;mcpServers&quot;</span>: {<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--muted);">&quot;spryteo&quot;</span>: { <span style="color:var(--muted);">&quot;command&quot;</span>: <span style="color:var(--accent);">&quot;spryteo-mcp&quot;</span> }<br>&nbsp;&nbsp;}<br>}' />
+    <p class="para">It exposes two tools:</p>
+    <div class="flag-table">
+      <div class="flag-row">
+        <code class="flag-name">convert_image</code>
+        <span class="flag-desc">Base64-encoded image bytes in, vectorized SVG + metadata out. Takes the same partial JSON options object as every other surface.</span>
+      </div>
+      <div class="flag-row">
+        <code class="flag-name">inspect_svg</code>
+        <span class="flag-desc">Feed it a metadata JSON string (from convert_image's response) and get back a human-readable summary of nodes, groups, centroids, bboxes, areas and colours.</span>
+      </div>
+    </div>
+
+    <h2 id="api" class="heading">HTTP API</h2>
+    <p class="para" style="color:var(--accent);">Planned, not yet shipped. <code class="inline-code">spryteo-api</code> exists in the workspace as a stub — until it lands, use the CLI, library, WASM build, or MCP server above.</p>
+
+    <h2 id="options" class="heading">Options reference</h2>
+    <p class="para">Every surface (CLI flags, library/WASM/MCP JSON options) shares the same underlying option set:</p>
+
+    <h3 class="subheading">Colour &amp; layering</h3>
+    <p class="para"><code class="inline-code">colors</code> targets a palette size for quantization. <code class="inline-code">layering</code> (photo mode) chooses between <code class="inline-code">stacked</code> layers or <code class="inline-code">cutout</code> composition. <code class="inline-code">gradients</code> (<code class="inline-code">auto | on | off</code>) detects smooth colour gradients and emits an SVG <code class="inline-code">&lt;linearGradient&gt;</code>/<code class="inline-code">&lt;radialGradient&gt;</code> fill instead of a flat colour where the residual fits within a Lab-space tolerance &#8212; auto only attempts it in photo mode, since icons are almost always flat fills.</p>
+
+    <h3 class="subheading">Geometry</h3>
+    <p class="para"><code class="inline-code">tolerance</code> is the curve-fit error budget in pixels &#8212; lower produces more path points and tighter fidelity. <code class="inline-code">smoothness</code> controls corner-preservation strength during Bezier fitting. <code class="inline-code">turdsize</code> discards regions below a minimum area (denoising). <code class="inline-code">arcs</code> allows emitting native SVG arc commands for near-circular/near-rectangular contours instead of Bezier approximations &#8212; this is what makes a traced circle come out as a real <code class="inline-code">&lt;circle&gt;</code> element.</p>
+
+    <h3 class="subheading">Stroke / centerline mode</h3>
+    <p class="para">Setting <code class="inline-code">stroke: true</code> (or <code class="inline-code">--stroke</code>) switches to a dedicated centerline tracer suited to line art and hand-drawn strokes: variable-width paths with <code class="inline-code">pathLength="100"</code> normalized for animation, emitted with <code class="inline-code">fill="none"</code>.</p>
+
+    <h3 class="subheading">Semantic grouping</h3>
+    <p class="para">Shapes are grouped into a <code class="inline-code">&lt;g&gt;</code> tree two ways: containment-based (default &#8212; a shape nested inside another's bounding region becomes its child group) and mask-guided, where you supply your own segmentation masks (e.g. from a model you're already running) and Spryteo groups traced contours by mask-overlap coverage. Spryteo does not run its own object-detection/segmentation model &#8212; mask-guided grouping is bring-your-own-masks by design, not an automatic ML segmentation feature.</p>
+
+    <h3 class="subheading">Stable IDs</h3>
+    <p class="para">Every shape gets a content-derived ID (<code class="inline-code">s-&lt;8 hex chars&gt;</code>, a blake3 hash of the shape's geometry and fill) via <code class="inline-code">id_style</code>. Re-running on a slightly edited source keeps unchanged shapes' IDs identical &#8212; safe to reference a shape by ID across re-exports.</p>
+
+    <h3 class="subheading">CSS presets</h3>
+    <p class="para">Three built-in animation presets bakeable via <code class="inline-code">css</code> / <code class="inline-code">--css</code>: <code class="inline-code">draw</code> (stroke-dashoffset reveal), <code class="inline-code">fade</code> (staggered opacity), <code class="inline-code">pop</code> (staggered scale-in). Or ignore them and animate the grouped output yourself &#8212; that's the point of shipping real groups instead of one flattened path.</p>
+
+    <h3 class="subheading">Decode-time correctness</h3>
+    <p class="para">EXIF orientation is read and applied automatically &#8212; a photo shot sideways decodes upright, not rotated. Embedded ICC colour profiles are converted to sRGB before any other processing (via a pure-Rust colour-management stack, no LGPL dependency). Photos over 1600px on the long edge are automatically downscaled to a 1024px working size with Lanczos3 resampling before tracing, so a 4K upload doesn't blow the time budget &#8212; coordinates are still emitted against the correct output viewBox.</p>
+
+    <h3 class="subheading">Limits</h3>
+    <p class="para">Decompression-bomb guards reject oversized input before allocating: max input bytes (8MB default), max pixel count (16MP default), and a hard 8192px dimension ceiling &#8212; all configurable, all enforced before the full decode where possible.</p>
+
+    <h2 id="output" class="heading">Output &amp; metadata</h2>
+    <p class="para">Every surface returns the same shape: an <code class="inline-code">svg</code> string and a <code class="inline-code">meta</code> sidecar built for programmatic and agent consumption, not just human eyeballing. <code class="inline-code">meta.nodes</code> is a flat list &#8212; one entry per shape &#8212; each with a stable <code class="inline-code">id</code>, <code class="inline-code">bbox</code>, <code class="inline-code">centroid</code>, <code class="inline-code">area</code>, resolved <code class="inline-code">fill</code>, its <code class="inline-code">group</code> key into the SVG's <code class="inline-code">&lt;g id=...&gt;</code> tree, <code class="inline-code">zOrder</code>, and a <code class="inline-code">suggestedDrawOrder</code> for animation sequencing. <code class="inline-code">meta.stats</code> gives node/path/byte counts for a quick sanity check without walking the tree.</p>
+
+    <h2 id="stack" class="heading">Built with</h2>
+    <div class="stack-row">
+      <div class="stack-badge"><span class="stack-dot"></span>Rust</div>
+      <div class="stack-badge"><span class="stack-dot"></span>WebAssembly</div>
+      <div class="stack-badge"><span class="stack-dot"></span>napi-rs / Node</div>
+      <div class="stack-badge"><span class="stack-dot"></span>TypeScript</div>
+      <div class="stack-badge"><span class="stack-dot"></span>MCP</div>
+      <div class="stack-badge"><span class="stack-dot"></span>blake3</div>
+      <div class="stack-badge"><span class="stack-dot"></span>MIT / Apache-2.0</div>
+    </div>
+
+    <div class="docs-footer">
+      <span class="docs-footer-text">Full reference lives in the</span>
+      <a href="https://github.com/chidi09/spryteo" target="_blank" rel="noopener" class="docs-footer-link">GitHub README &#8594;</a>
+    </div>
   </div>
 </div>
 
+<script>
+  // Scroll-spy: highlight the TOC link for whichever section heading is
+  // currently in view.
+  const tocLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>('.toc-link'));
+  const sections = tocLinks
+    .map((link) => document.getElementById(link.getAttribute('href')!.slice(1)))
+    .filter((el): el is HTMLElement => el !== null);
+
+  if (sections.length && 'IntersectionObserver' in window) {
+    const setActive = (id: string) => {
+      tocLinks.forEach((link) => {
+        link.classList.toggle('active', link.getAttribute('href') === '#' + id);
+      });
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible.length > 0) setActive(visible[0].target.id);
+      },
+      { rootMargin: '-90px 0px -70% 0px', threshold: 0 }
+    );
+    sections.forEach((el) => observer.observe(el));
+  }
+
+  // AI conveniences: copy the plain-markdown mirror of this page straight
+  // to the clipboard, for pasting into an LLM chat without a round-trip
+  // through the browser's downloads folder.
+  const copyBtn = document.getElementById('copyMd');
+  copyBtn?.addEventListener('click', async () => {
+    const label = copyBtn.querySelector('.ai-btn-icon');
+    try {
+      const res = await fetch('/docs.md');
+      const text = await res.text();
+      await navigator.clipboard.writeText(text);
+      copyBtn.classList.add('ai-btn-done');
+      if (label) label.textContent = '✓';
+      setTimeout(() => {
+        copyBtn.classList.remove('ai-btn-done');
+        if (label) label.textContent = '⎘';
+      }, 1800);
+    } catch {
+      // Clipboard API unavailable/denied -- fall back to just opening the file.
+      window.open('/docs.md', '_blank');
+    }
+  });
+</script>
+
 <style>
   .page {
-    max-width: 820px;
+    max-width: 1120px;
     margin: 0 auto;
     padding: 64px 32px 96px;
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 56px;
+    align-items: start;
+  }
+  .toc {
+    position: sticky;
+    top: 84px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 6px;
+  }
+  .toc-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .toc-link {
+    font-size: 13px;
+    color: var(--muted);
+    padding: 5px 0;
+    text-decoration: none;
+  }
+  .toc-link:hover {
+    color: var(--text);
+    text-decoration: none;
+  }
+  .toc-link.active {
+    color: var(--accent);
+  }
+
+  .ai-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0 0 48px;
+  }
+  .ai-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .ai-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
+    text-decoration: none;
+  }
+  .ai-btn-icon {
+    color: var(--accent);
+    font-size: 13px;
+  }
+  .ai-btn-done {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .content {
+    min-width: 0;
   }
   .docs-meta {
     font-family: var(--font-mono);
@@ -60,8 +330,16 @@ import CodeBlock from '../ui/CodeBlock.astro';
   .heading {
     font-size: 24px;
     font-weight: 500;
-    margin: 0 0 12px;
+    margin: 48px 0 12px;
     scroll-margin-top: 90px;
+  }
+  .heading:first-of-type {
+    margin-top: 0;
+  }
+  .subheading {
+    font-size: 17px;
+    font-weight: 500;
+    margin: 28px 0 8px;
   }
   .para {
     font-size: 15px;
@@ -74,6 +352,98 @@ import CodeBlock from '../ui/CodeBlock.astro';
     font-size: 13px;
     color: var(--accent);
   }
+
+  .surface-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 0 0 44px;
+  }
+  .surface-card {
+    display: block;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 18px;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .surface-card:hover {
+    border-color: var(--accent);
+    text-decoration: none;
+  }
+  .surface-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    margin-bottom: 10px;
+  }
+  .surface-title {
+    font-size: 16px;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .surface-desc {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+
+  .flag-table, .mode-table {
+    border-top: 1px solid var(--border);
+    margin: 0 0 32px;
+  }
+  .flag-row, .mode-row {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 20px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .mode-row {
+    grid-template-columns: 100px 1fr;
+  }
+  .flag-name, .mode-name {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .mode-name {
+    white-space: normal;
+  }
+  .flag-desc, .mode-desc {
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+
+  .stack-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0 0 44px;
+  }
+  .stack-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 7px 14px;
+  }
+  .stack-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
   .docs-footer {
     border-top: 1px solid var(--border);
     padding-top: 28px;
@@ -87,5 +457,24 @@ import CodeBlock from '../ui/CodeBlock.astro';
   }
   .docs-footer-link {
     font-size: 15px;
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  @media (max-width: 860px) {
+    .page {
+      grid-template-columns: 1fr;
+      padding: 40px 20px 72px;
+    }
+    .toc {
+      display: none;
+    }
+    .surface-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .flag-row, .mode-row {
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
   }
 </style>

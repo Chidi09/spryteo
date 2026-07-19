@@ -15,8 +15,8 @@ import Logo from '../ui/Logo.astro';
       <div class="footer-label">product</div>
       <div class="footer-links">
         <a href="/docs" class="footer-link">docs</a>
-        <a href="https://github.com" target="_blank" rel="noopener" class="footer-link">github</a>
-        <a href="https://www.npmjs.com" target="_blank" rel="noopener" class="footer-link">npm</a>
+        <a href="https://github.com/chidi09/spryteo" target="_blank" rel="noopener" class="footer-link">github</a>
+        <a href="https://www.npmjs.com/package/spryteo" target="_blank" rel="noopener" class="footer-link">npm</a>
       </div>
     </div>
     <div>
@@ -32,7 +32,7 @@ import Logo from '../ui/Logo.astro';
     </div>
   </div>
   <div class="footer-bottom">
-    <span class="footer-muted">&copy; <span id="year"></span> spryteo &middot; MIT licensed</span>
+    <span class="footer-muted">&copy; <span id="year"></span> spryteo &middot; MIT / Apache-2.0 licensed</span>
     <span class="footer-mono">made for developers &amp; agents</span>
   </div>
 </footer>
@@ -119,5 +119,24 @@ import Logo from '../ui/Logo.astro';
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--muted);
+  }
+
+  @media (max-width: 860px) {
+    .footer-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 28px 20px;
+      padding: 40px 24px 24px;
+    }
+  }
+  @media (max-width: 520px) {
+    .footer-grid {
+      grid-template-columns: 1fr;
+    }
+    .footer-bottom {
+      padding: 0 24px 32px;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+    }
   }
 </style>

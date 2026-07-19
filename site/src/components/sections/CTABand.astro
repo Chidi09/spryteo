@@ -10,7 +10,7 @@ import ClippedButton from '../ui/ClippedButton.astro';
     </div>
     <div class="actions">
       <ClippedButton id="ctaDocs" variant="primary">read the docs</ClippedButton>
-      <a href="https://github.com" target="_blank" rel="noopener" class="btn-ghost">github</a>
+      <a href="https://github.com/chidi09/spryteo" target="_blank" rel="noopener" class="btn-ghost">github</a>
     </div>
   </div>
 </section>
@@ -64,5 +64,25 @@ import ClippedButton from '../ui/ClippedButton.astro';
     border-color: var(--muted);
     transform: translateY(-2px);
     text-decoration: none;
+  }
+
+  @media (max-width: 640px) {
+    .section {
+      padding: 32px 20px 64px;
+    }
+    .band {
+      padding: 32px 24px;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .title {
+      font-size: 24px;
+    }
+    .actions {
+      width: 100%;
+    }
+    .actions > :global(*) {
+      flex: 1;
+    }
   }
 </style>

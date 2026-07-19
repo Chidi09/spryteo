@@ -1,8 +1,10 @@
 ---
-const { html } = Astro.props;
+interface Props { html?: string; code?: string; }
+const { html, code } = Astro.props as Props;
 ---
 
-<div class="code-block" set:html={html} />
+{html && <div class="code-block" set:html={html} />}
+{code && <pre class="code-block code-block-plain">{code}</pre>}
 
 <style>
   .code-block {
@@ -15,5 +17,9 @@ const { html } = Astro.props;
     line-height: 1.7;
     overflow-x: auto;
     margin: 0 0 44px;
+  }
+  .code-block-plain {
+    color: var(--text);
+    white-space: pre;
   }
 </style>

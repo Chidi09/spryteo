@@ -4,18 +4,22 @@ import Header from '../components/layout/Header.astro';
 import Footer from '../components/layout/Footer.astro';
 import Hero from '../components/sections/Hero.astro';
 import Features from '../components/sections/Features.astro';
+import Surfaces from '../components/sections/Surfaces.astro';
 import HowItWorks from '../components/sections/HowItWorks.astro';
+import Community from '../components/sections/Community.astro';
 import CTABand from '../components/sections/CTABand.astro';
 import ClientScript from '../components/ClientScript.astro';
 ---
 
-<Base title="Spryteo — Raster to animateable SVG">
+<Base title="Spryteo — Raster to animateable SVG" description="Spryteo is an open-source, local-first tool that converts raster images (PNG, JPEG, GIF, WebP, BMP) into clean, animateable, and semantically-grouped SVGs.">
   <Header />
 
   <main style="flex: 1;">
     <Hero />
     <Features />
+    <Surfaces />
     <HowItWorks />
+    <Community />
     <CTABand />
   </main>
 
