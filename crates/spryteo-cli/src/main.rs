@@ -1,6 +1,6 @@
 use clap::{Args, Parser};
-use spryteo_cli::{parse_mode, parse_preset, run_pipeline};
-use spryteo_core::{ColorSpec, ConvertOptions, Layering, OutputFormat, Preset, Tri};
+use spryteo_cli::{derive_svg_summary, format_meta_report, parse_mode, parse_preset, run_pipeline};
+use spryteo_core::{ColorSpec, ConvertOptions, Layering, Meta, OutputFormat, Preset, Tri};
 
 fn parse_layering(s: &str) -> Result<Layering, String> {
     match s.to_lowercase().as_str() {
@@ -30,6 +30,8 @@ fn parse_gradients(s: &str) -> Result<Tri, String> {
 enum Cli {
     /// Convert a raster image to SVG
     Convert(ConvertArgs),
+    /// Print metadata for an SVG produced by `spryteo convert`
+    Inspect(InspectArgs),
 }
 
 #[derive(Args, Clone, Debug)]
@@ -90,6 +92,18 @@ struct ConvertArgs {
     json: Option<std::path::PathBuf>,
 }
 
+#[derive(Args, Clone, Debug)]
+struct InspectArgs {
+    /// SVG file to inspect (as produced by `spryteo convert`)
+    svg: std::path::PathBuf,
+
+    /// Metadata sidecar JSON path (as written by `convert --json`). When
+    /// omitted, a lighter summary is re-derived directly from the SVG
+    /// markup (element counts, IDs, viewBox -- no centroid/area/group tree).
+    #[arg(long)]
+    meta: Option<std::path::PathBuf>,
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli {
@@ -144,6 +158,49 @@ fn main() {
                 Err(err) => {
                     eprintln!("Error: {}", err);
                     std::process::exit(err.exit_code());
+                }
+            }
+        }
+        Cli::Inspect(args) => {
+            let svg_text = match std::fs::read_to_string(&args.svg) {
+                Ok(s) => s,
+                Err(source) => {
+                    eprintln!("Error: failed to read '{}': {}", args.svg.display(), source);
+                    std::process::exit(1);
+                }
+            };
+
+            match &args.meta {
+                Some(meta_path) => {
+                    let meta_text = match std::fs::read_to_string(meta_path) {
+                        Ok(s) => s,
+                        Err(source) => {
+                            eprintln!(
+                                "Error: failed to read '{}': {}",
+                                meta_path.display(),
+                                source
+                            );
+                            std::process::exit(1);
+                        }
+                    };
+                    match serde_json::from_str::<Meta>(&meta_text) {
+                        Ok(meta) => {
+                            print!("{}", format_meta_report(&meta));
+                            std::process::exit(0);
+                        }
+                        Err(source) => {
+                            eprintln!(
+                                "Error: '{}' is not a valid metadata sidecar: {}",
+                                meta_path.display(),
+                                source
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                None => {
+                    print!("{}", derive_svg_summary(&svg_text));
+                    std::process::exit(0);
                 }
             }
         }

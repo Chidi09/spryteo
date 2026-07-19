@@ -223,6 +223,86 @@ pub fn run_pipeline(
     Ok(result)
 }
 
+/// Render a human-readable report from a `Meta` sidecar (as written by
+/// `convert --json`), for `spryteo inspect --meta`.
+pub fn format_meta_report(meta: &spryteo_core::Meta) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "nodes={} paths={} bytes={}\n\n",
+        meta.stats.node_count, meta.stats.path_count, meta.stats.byte_count
+    ));
+    for n in &meta.nodes {
+        let fill_str = match n.fill {
+            Some(rgb) => format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b),
+            None => "-".to_string(),
+        };
+        out.push_str(&format!(
+            "{:<16} group={:<12} z={:<4} fill={:<9} bbox=({:.1},{:.1},{:.1},{:.1}) centroid=({:.1},{:.1}) area={:.1} draw_order={}\n",
+            n.id,
+            n.group,
+            n.z_order,
+            fill_str,
+            n.bbox.x_min,
+            n.bbox.y_min,
+            n.bbox.x_max,
+            n.bbox.y_max,
+            n.centroid.0,
+            n.centroid.1,
+            n.area,
+            n.suggested_draw_order,
+        ));
+    }
+    out
+}
+
+/// Extract `id="..."` attribute values from SVG markup, in document order.
+/// Not a full XML parser -- sufficient for re-deriving a summary when no
+/// `Meta` sidecar is available (`spryteo inspect` without `--meta`).
+fn extract_ids(svg: &str) -> Vec<&str> {
+    let mut ids = Vec::new();
+    let mut rest = svg;
+    while let Some(start) = rest.find("id=\"") {
+        rest = &rest[start + 4..];
+        if let Some(end) = rest.find('"') {
+            ids.push(&rest[..end]);
+            rest = &rest[end + 1..];
+        } else {
+            break;
+        }
+    }
+    ids
+}
+
+fn extract_view_box(svg: &str) -> Option<&str> {
+    let start = svg.find("viewBox=\"")? + "viewBox=\"".len();
+    let rest = &svg[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// Re-derive a lightweight summary directly from SVG markup, for
+/// `spryteo inspect` when no `--meta` sidecar path is given. Cannot recover
+/// centroid/area/group tree (never embedded in the markup itself), only
+/// element counts, IDs, and viewBox.
+pub fn derive_svg_summary(svg: &str) -> String {
+    let path_count = svg.matches("<path").count();
+    let group_count = svg.matches("<g ").count() + svg.matches("<g>").count();
+    let ids = extract_ids(svg);
+    let view_box = extract_view_box(svg).unwrap_or("(none)");
+
+    let mut out = String::new();
+    out.push_str("no --meta sidecar given; showing values re-derived from SVG markup only\n");
+    out.push_str(&format!(
+        "paths={} groups={} bytes={} viewBox={}\n\n",
+        path_count,
+        group_count,
+        svg.len(),
+        view_box
+    ));
+    out.push_str(&format!("ids ({}): {}\n", ids.len(), ids.join(", ")));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +488,58 @@ mod tests {
             SpryteoError::InvalidInput(_) => {}
             other => panic!("Expected SpryteoError::InvalidInput, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_format_meta_report() {
+        use spryteo_core::{Bbox, Meta, NodeMeta, Rgb, Stats};
+
+        let meta = Meta {
+            nodes: vec![NodeMeta {
+                id: "s-abc123".to_string(),
+                bbox: Bbox {
+                    x_min: 0.0,
+                    y_min: 0.0,
+                    x_max: 10.0,
+                    y_max: 10.0,
+                },
+                centroid: (5.0, 5.0),
+                area: 100.0,
+                fill: Some(Rgb { r: 255, g: 0, b: 0 }),
+                group: "g-root".to_string(),
+                z_order: 0,
+                suggested_draw_order: 0,
+            }],
+            stats: Stats {
+                node_count: 1,
+                path_count: 1,
+                byte_count: 42,
+            },
+        };
+
+        let report = format_meta_report(&meta);
+        assert!(report.contains("nodes=1"));
+        assert!(report.contains("s-abc123"));
+        assert!(report.contains("#ff0000"));
+        assert!(report.contains("g-root"));
+    }
+
+    #[test]
+    fn test_derive_svg_summary() {
+        let svg = r#"<svg viewBox="0 0 24 24"><g id="g-root"><path id="s-1" d="M0 0"/></g></svg>"#;
+        let summary = derive_svg_summary(svg);
+        assert!(summary.contains("paths=1"));
+        assert!(summary.contains("groups=1"));
+        assert!(summary.contains("viewBox=0 0 24 24"));
+        assert!(summary.contains("g-root"));
+        assert!(summary.contains("s-1"));
+    }
+
+    #[test]
+    fn test_derive_svg_summary_no_ids() {
+        let svg = "<svg></svg>";
+        let summary = derive_svg_summary(svg);
+        assert!(summary.contains("paths=0"));
+        assert!(summary.contains("ids (0):"));
     }
 }
