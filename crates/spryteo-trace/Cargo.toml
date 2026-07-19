@@ -10,6 +10,10 @@ description = "Contour extraction: Suzuki-Abe border following, marching squares
 spryteo-core = { path = "../spryteo-core" }
 serde.workspace = true
 thiserror.workspace = true
+rayon = { workspace = true, optional = true }
+
+[features]
+parallel = ["dep:rayon"]
 
 [dev-dependencies]
 serde_json.workspace = true

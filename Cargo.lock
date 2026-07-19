@@ -1260,6 +1260,7 @@ dependencies = [
 name = "spryteo-fit"
 version = "0.0.1"
 dependencies = [
+ "rayon",
  "serde",
  "serde_json",
  "spryteo-core",
@@ -1372,6 +1373,7 @@ dependencies = [
 name = "spryteo-trace"
 version = "0.0.1"
 dependencies = [
+ "rayon",
  "serde",
  "serde_json",
  "spryteo-core",

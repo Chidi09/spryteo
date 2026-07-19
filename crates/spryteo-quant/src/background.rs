@@ -1,6 +1,6 @@
+use crate::color::{lab_distance_sq, srgb_to_lab};
 use spryteo_core::ir::{LayerStack, Rgb};
 use spryteo_core::options::Background;
-use crate::color::{srgb_to_lab, lab_distance_sq};
 
 /// Apply the background treatment policy to the LayerStack.
 ///
@@ -64,9 +64,9 @@ mod tests {
     fn test_drop_removes_nearest_layer_within_threshold() {
         let mut stack = LayerStack {
             layers: vec![
-                make_test_layer(255, 0, 0),   // Red
-                make_test_layer(0, 255, 0),   // Green
-                make_test_layer(0, 0, 255),   // Blue
+                make_test_layer(255, 0, 0), // Red
+                make_test_layer(0, 255, 0), // Green
+                make_test_layer(0, 0, 255), // Blue
             ],
         };
 
@@ -85,9 +85,9 @@ mod tests {
     fn test_rect_removes_nearest_layer_and_returns_color() {
         let mut stack = LayerStack {
             layers: vec![
-                make_test_layer(255, 0, 0),   // Red
-                make_test_layer(0, 255, 0),   // Green
-                make_test_layer(0, 0, 255),   // Blue
+                make_test_layer(255, 0, 0), // Red
+                make_test_layer(0, 255, 0), // Green
+                make_test_layer(0, 0, 255), // Blue
             ],
         };
 
@@ -113,7 +113,11 @@ mod tests {
         };
 
         // White color, far from Red, Green, Blue in Lab space
-        let bg_color = Some(Rgb { r: 255, g: 255, b: 255 });
+        let bg_color = Some(Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        });
         let result = apply_background_policy(&mut stack, bg_color, &Background::Drop);
 
         assert_eq!(result, None);

@@ -11,6 +11,10 @@ serde.workspace = true
 thiserror.workspace = true
 spryteo-core = { path = "../spryteo-core" }
 spryteo-geom = { path = "../spryteo-geom" }
+rayon = { workspace = true, optional = true }
+
+[features]
+parallel = ["dep:rayon"]
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -18,8 +18,8 @@ path = "src/lib.rs"
 spryteo-core = { path = "../spryteo-core" }
 spryteo-raster = { path = "../spryteo-raster" }
 spryteo-quant = { path = "../spryteo-quant" }
-spryteo-trace = { path = "../spryteo-trace" }
-spryteo-fit = { path = "../spryteo-fit" }
+spryteo-trace = { path = "../spryteo-trace", features = ["parallel"] }
+spryteo-fit = { path = "../spryteo-fit", features = ["parallel"] }
 spryteo-svg = { path = "../spryteo-svg" }
 spryteo-stroke = { path = "../spryteo-stroke" }
 

@@ -487,12 +487,22 @@ fn extract_layer_contours(mask: &[u8], width: u32, height: u32, turdsize: u32) -
 /// of closed contours using Marching Squares with linear interpolation, despeckling,
 /// and hierarchical parent-child hole nesting.
 pub fn extract_contours(layers: &LayerStack, width: u32, height: u32, turdsize: u32) -> ContourSet {
-    let mut result_layers = Vec::new();
+    #[cfg(feature = "parallel")]
+    let result_layers = {
+        use rayon::prelude::*;
+        layers
+            .layers
+            .par_iter()
+            .map(|layer| extract_layer_contours(&layer.mask, width, height, turdsize))
+            .collect()
+    };
 
-    for layer in &layers.layers {
-        let layer_contours = extract_layer_contours(&layer.mask, width, height, turdsize);
-        result_layers.push(layer_contours);
-    }
+    #[cfg(not(feature = "parallel"))]
+    let result_layers = layers
+        .layers
+        .iter()
+        .map(|layer| extract_layer_contours(&layer.mask, width, height, turdsize))
+        .collect();
 
     ContourSet {
         layers: result_layers,

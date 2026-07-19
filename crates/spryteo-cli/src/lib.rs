@@ -154,7 +154,11 @@ pub fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult,
     };
     let mut layer_stack =
         spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
-    let rect_color = spryteo_quant::apply_background_policy(&mut layer_stack, classified.background_color, &opts.background);
+    let rect_color = spryteo_quant::apply_background_policy(
+        &mut layer_stack,
+        classified.background_color,
+        &opts.background,
+    );
     let contour_set = spryteo_trace::extract_contours(&layer_stack, width, height, opts.turdsize);
     let curve_set = spryteo_fit::fit_contours(&contour_set, opts.tolerance, opts.smoothness);
 
@@ -698,9 +702,9 @@ mod tests {
 
     #[test]
     fn test_e2e_background_policies() {
-        use image::{ImageBuffer, Rgba, ImageFormat};
-        use std::io::Cursor;
+        use image::{ImageBuffer, ImageFormat, Rgba};
         use spryteo_core::options::{Background, Mode};
+        use std::io::Cursor;
 
         let mut img = ImageBuffer::new(16, 16);
         for x in 0..16 {
@@ -725,9 +729,21 @@ mod tests {
             ..ConvertOptions::default()
         };
         let res_keep = run_convert(&png_bytes, &opts_keep).unwrap();
-        assert!(res_keep.svg.contains("fill=\"#ffffff\""), "Keep SVG should contain white fill: {}", res_keep.svg);
-        assert!(res_keep.svg.contains("fill=\"#ff0000\""), "Keep SVG should contain red fill: {}", res_keep.svg);
-        assert!(!res_keep.svg.contains("<rect width=\"16\" height=\"16\""), "Keep SVG should not contain a background rect: {}", res_keep.svg);
+        assert!(
+            res_keep.svg.contains("fill=\"#ffffff\""),
+            "Keep SVG should contain white fill: {}",
+            res_keep.svg
+        );
+        assert!(
+            res_keep.svg.contains("fill=\"#ff0000\""),
+            "Keep SVG should contain red fill: {}",
+            res_keep.svg
+        );
+        assert!(
+            !res_keep.svg.contains("<rect width=\"16\" height=\"16\""),
+            "Keep SVG should not contain a background rect: {}",
+            res_keep.svg
+        );
 
         // 2. Drop
         let opts_drop = ConvertOptions {
@@ -736,9 +752,21 @@ mod tests {
             ..ConvertOptions::default()
         };
         let res_drop = run_convert(&png_bytes, &opts_drop).unwrap();
-        assert!(!res_drop.svg.contains("fill=\"#ffffff\""), "Drop SVG should not contain white fill: {}", res_drop.svg);
-        assert!(res_drop.svg.contains("fill=\"#ff0000\""), "Drop SVG should contain red fill: {}", res_drop.svg);
-        assert!(!res_drop.svg.contains("<rect width=\"16\" height=\"16\""), "Drop SVG should not contain a background rect: {}", res_drop.svg);
+        assert!(
+            !res_drop.svg.contains("fill=\"#ffffff\""),
+            "Drop SVG should not contain white fill: {}",
+            res_drop.svg
+        );
+        assert!(
+            res_drop.svg.contains("fill=\"#ff0000\""),
+            "Drop SVG should contain red fill: {}",
+            res_drop.svg
+        );
+        assert!(
+            !res_drop.svg.contains("<rect width=\"16\" height=\"16\""),
+            "Drop SVG should not contain a background rect: {}",
+            res_drop.svg
+        );
 
         // 3. Rect
         let opts_rect = ConvertOptions {
@@ -747,10 +775,24 @@ mod tests {
             ..ConvertOptions::default()
         };
         let res_rect = run_convert(&png_bytes, &opts_rect).unwrap();
-        assert!(res_rect.svg.contains("<rect width=\"16\" height=\"16\" fill=\"#ffffff\"/>"), "Rect SVG should contain the background rect: {}", res_rect.svg);
+        assert!(
+            res_rect
+                .svg
+                .contains("<rect width=\"16\" height=\"16\" fill=\"#ffffff\"/>"),
+            "Rect SVG should contain the background rect: {}",
+            res_rect.svg
+        );
         let white_matches = res_rect.svg.matches("#ffffff").count();
-        assert_eq!(white_matches, 1, "Rect SVG should only have one white fill (in the rect): {}", res_rect.svg);
-        assert!(res_rect.svg.contains("fill=\"#ff0000\""), "Rect SVG should contain red fill: {}", res_rect.svg);
+        assert_eq!(
+            white_matches, 1,
+            "Rect SVG should only have one white fill (in the rect): {}",
+            res_rect.svg
+        );
+        assert!(
+            res_rect.svg.contains("fill=\"#ff0000\""),
+            "Rect SVG should contain red fill: {}",
+            res_rect.svg
+        );
 
         let rect_idx = res_rect.svg.find("<rect ").expect("should find rect");
         if let Some(path_idx) = res_rect.svg.find("<path ") {
@@ -761,4 +803,3 @@ mod tests {
         }
     }
 }
-

@@ -60,9 +60,18 @@ fn main() {
     eprintln!("preprocess:  {:?}", t.elapsed());
 
     let t = Instant::now();
-    let mut layer_stack = spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
-    let rect_color = spryteo_quant::apply_background_policy(&mut layer_stack, classified.background_color, &opts.background);
-    eprintln!("quantize:    {:?}  ({} layers)", t.elapsed(), layer_stack.layers.len());
+    let mut layer_stack =
+        spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
+    let rect_color = spryteo_quant::apply_background_policy(
+        &mut layer_stack,
+        classified.background_color,
+        &opts.background,
+    );
+    eprintln!(
+        "quantize:    {:?}  ({} layers)",
+        t.elapsed(),
+        layer_stack.layers.len()
+    );
 
     let t = Instant::now();
     let contour_set = spryteo_trace::extract_contours(&layer_stack, width, height, opts.turdsize);
@@ -94,5 +103,9 @@ fn main() {
     eprintln!("svg:         {:?}", t.elapsed());
 
     eprintln!("TOTAL:       {:?}", t_all.elapsed());
-    eprintln!("svg bytes: {}, nodes: {}", result.svg.len(), result.meta.nodes.len());
+    eprintln!(
+        "svg bytes: {}, nodes: {}",
+        result.svg.len(),
+        result.meta.nodes.len()
+    );
 }

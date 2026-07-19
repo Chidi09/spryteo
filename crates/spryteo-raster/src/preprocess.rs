@@ -63,7 +63,11 @@ pub fn bilateral_filter(image: &RasterImage) -> RasterImage {
         };
         for o in 0..outer {
             for i in 0..len {
-                let pixel = if horizontal { o * len + i } else { i * (width as usize) + o };
+                let pixel = if horizontal {
+                    o * len + i
+                } else {
+                    i * (width as usize) + o
+                };
                 let center_idx = 4 * pixel;
                 let center_r = src[center_idx] as i32;
                 let center_g = src[center_idx + 1] as i32;

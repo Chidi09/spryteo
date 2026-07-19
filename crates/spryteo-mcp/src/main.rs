@@ -156,7 +156,11 @@ fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, Spr
     };
     let mut layer_stack =
         spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
-    let rect_color = spryteo_quant::apply_background_policy(&mut layer_stack, classified.background_color, &opts.background);
+    let rect_color = spryteo_quant::apply_background_policy(
+        &mut layer_stack,
+        classified.background_color,
+        &opts.background,
+    );
     let contour_set = spryteo_trace::extract_contours(&layer_stack, width, height, opts.turdsize);
     let curve_set = spryteo_fit::fit_contours(&contour_set, opts.tolerance, opts.smoothness);
 
