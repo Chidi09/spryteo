@@ -1,0 +1,37 @@
+[package]
+name = "spryteo-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+spryteo-core = { path = "../crates/spryteo-core" }
+spryteo-raster = { path = "../crates/spryteo-raster" }
+spryteo-cli = { path = "../crates/spryteo-cli" }
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pipeline"
+path = "fuzz_targets/pipeline.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pipeline_stroke"
+path = "fuzz_targets/pipeline_stroke.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

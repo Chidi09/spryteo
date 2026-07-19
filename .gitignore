@@ -3,3 +3,7 @@
 /site/dist
 /site/.vercel
 /site/.astro
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/coverage

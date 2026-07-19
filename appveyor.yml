@@ -1,0 +1,27 @@
+version: '{build}'
+
+image: Ubuntu2204
+
+environment:
+  CARGO_TERM_COLOR: always
+
+cache:
+  - $HOME/.cargo/registry -> Cargo.lock
+  - target -> Cargo.lock
+
+install:
+  - curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+  - export PATH=$HOME/.cargo/bin:$PATH
+  - rustup component add rustfmt clippy
+  - rustc --version
+  - cargo --version
+
+build_script:
+  - export PATH=$HOME/.cargo/bin:$PATH
+  - cargo fmt --all -- --check
+  - cargo clippy --workspace --all-targets -- -D warnings
+  - cargo build --workspace --all-targets
+
+test_script:
+  - export PATH=$HOME/.cargo/bin:$PATH
+  - cargo test --workspace
