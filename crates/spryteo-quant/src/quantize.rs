@@ -26,6 +26,17 @@ const MIN_AUTO_COLORS: usize = 2;
 const KMEANS_MAX_ITER: usize = 20;
 const SEED_AUTO: u64 = 42;
 
+/// Above this many pixels, k-means trains its centroids on an
+/// evenly-strided sample of this size instead of every pixel, then does a
+/// single full assignment pass at the end. Iterating all pixels every
+/// round is O(pixels x k x iters) -- ~240M Lab distances (several
+/// seconds, worse in WASM) for a 1-megapixel photo at k=12 -- while the
+/// centroids a 65K-pixel stride sample converges to are visually
+/// indistinguishable. Small inputs (below the threshold) keep the exact
+/// original full-data path, and the stride sample keeps the result
+/// deterministic for a given seed.
+const KMEANS_SAMPLE_MAX: usize = 65_536;
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /// Quantize a classified input into a `LayerStack`.
@@ -88,8 +99,7 @@ pub fn quantize(
     }
 
     // Check exact-histogram shortcut
-    let unique = unique_rgb_from_data(&pixel_data);
-    let mut stack = if unique.len() <= target {
+    let mut stack = if let Some(unique) = unique_rgb_up_to(&pixel_data, target) {
         build_exact_layers(pixels, width, height, &unique, target)
     } else {
         // k-means clustering
@@ -171,6 +181,18 @@ impl SeededRng {
 /// `(WSSE_{k-1} - WSSE_k) / WSSE_{k-1}` drops below 0.05.
 /// If no elbow is found, returns 8.
 fn auto_color_count(data: &[PixelInfo]) -> usize {
+    // The elbow scan only *estimates a colour count* -- it runs k-means
+    // up to 15 times (k = 2..=16), so it pays the clustering cost many
+    // times over. A small evenly-strided sample estimates the same k
+    // (the WSSE curve's shape is what matters, not its absolute values)
+    // at a fraction of the cost; deterministic because the stride is.
+    const ELBOW_SAMPLE_MAX: usize = 16_384;
+    if data.len() > ELBOW_SAMPLE_MAX {
+        let stride = data.len().div_ceil(ELBOW_SAMPLE_MAX);
+        let sample: Vec<PixelInfo> = data.iter().step_by(stride).cloned().collect();
+        return auto_color_count(&sample);
+    }
+
     let n = data.len();
     if n <= MIN_AUTO_COLORS {
         return n;
@@ -244,6 +266,55 @@ fn kmeans_pp(data: &[PixelInfo], k: usize, seed: u64) -> Vec<usize> {
         return vec![];
     }
     let k = k.min(n);
+
+    // Large inputs: train on a deterministic stride sample, then assign
+    // every point to the nearest trained centroid in one pass.
+    if n > KMEANS_SAMPLE_MAX {
+        let stride = n.div_ceil(KMEANS_SAMPLE_MAX);
+        let sample: Vec<PixelInfo> = data.iter().step_by(stride).cloned().collect();
+        let sample_assignments = kmeans_pp(&sample, k, seed);
+
+        // Recover centroids from the sample assignments
+        let mut centroids = vec![
+            Lab {
+                l: 0.0,
+                a: 0.0,
+                b: 0.0
+            };
+            k
+        ];
+        let mut counts = vec![0usize; k];
+        for (i, &cluster) in sample_assignments.iter().enumerate() {
+            centroids[cluster].l += sample[i].lab.l;
+            centroids[cluster].a += sample[i].lab.a;
+            centroids[cluster].b += sample[i].lab.b;
+            counts[cluster] += 1;
+        }
+        for c in 0..k {
+            if counts[c] > 0 {
+                let n_c = counts[c] as f64;
+                centroids[c].l /= n_c;
+                centroids[c].a /= n_c;
+                centroids[c].b /= n_c;
+            }
+        }
+
+        // Full assignment pass over all points
+        let mut assignments = vec![0usize; n];
+        for (i, pi) in data.iter().enumerate() {
+            let mut best = 0usize;
+            let mut best_dist = color::lab_distance_sq(&pi.lab, &centroids[0]);
+            for c in 1..k {
+                let d = color::lab_distance_sq(&pi.lab, &centroids[c]);
+                if d < best_dist {
+                    best_dist = d;
+                    best = c;
+                }
+            }
+            assignments[i] = best;
+        }
+        return assignments;
+    }
 
     let mut rng = SeededRng::new(seed);
 
@@ -541,15 +612,31 @@ fn quantize_to_palette(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Collect unique `Rgb` values from pixel data, preserving scan order.
-fn unique_rgb_from_data(data: &[PixelInfo]) -> Vec<Rgb> {
+/// Collect unique `Rgb` values from pixel data in scan order, bailing out
+/// with `None` as soon as more than `cap` unique colours are seen.
+///
+/// The result is only ever needed when the image qualifies for the
+/// exact-histogram shortcut (unique colours <= target), so there is no
+/// reason to keep scanning a photo with hundreds of thousands of unique
+/// colours: the previous implementation did a linear `Vec::contains` per
+/// pixel, which is O(pixels x unique) -- tens of billions of comparisons
+/// (~20s+) on a 1-megapixel gradient photo. The set membership test uses
+/// a hash set; scan order (and therefore layer order) is preserved by the
+/// separate `unique` vec, so behaviour is identical for images that
+/// qualify.
+fn unique_rgb_up_to(data: &[PixelInfo], cap: usize) -> Option<Vec<Rgb>> {
+    let mut seen: std::collections::HashSet<(u8, u8, u8)> =
+        std::collections::HashSet::with_capacity(cap + 1);
     let mut unique: Vec<Rgb> = Vec::new();
     for pi in data {
-        if !unique.contains(&pi.rgb) {
+        if seen.insert((pi.rgb.r, pi.rgb.g, pi.rgb.b)) {
+            if unique.len() >= cap {
+                return None;
+            }
             unique.push(pi.rgb);
         }
     }
-    unique
+    Some(unique)
 }
 
 #[cfg(test)]

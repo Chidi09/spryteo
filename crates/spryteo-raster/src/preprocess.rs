@@ -15,6 +15,18 @@ use spryteo_core::{Mode, RasterImage};
 ///   remains proportional to image resolution: `σ_space = max(1.0, min(width, height) / 200.0)`.
 /// - `σ_color` is fixed at `20.0` to reflect typical color transitions in the standard `0-255` range.
 /// - The local search window radius is set to `2 * ceil(σ_space)` to bound the computation.
+///
+/// # Performance
+///
+/// Implemented as a *separable* bilateral filter: a horizontal 1D pass
+/// followed by a vertical 1D pass, each using the same spatial/colour
+/// Gaussians. This is the standard real-time approximation of the true
+/// 2D bilateral filter -- O(2r) neighbours per pixel instead of O(r^2)
+/// (46 vs 529 taps at the radius a 1024px photo gets). The full 2D
+/// version took ~20s per megapixel (each tap paying two `exp()` calls),
+/// freezing the browser tab, since WASM runs on the main thread. Both
+/// Gaussian weights come from precomputed lookup tables (pixel channel
+/// values are integers, so colour distances form a small discrete set).
 pub fn bilateral_filter(image: &RasterImage) -> RasterImage {
     let width = image.width;
     let height = image.height;
@@ -27,59 +39,80 @@ pub fn bilateral_filter(image: &RasterImage) -> RasterImage {
 
     let radius = (2.0 * sigma_space).ceil() as i32;
 
-    let mut filtered_pixels = image.pixels.clone();
-
     let two_sigma_space_sq = 2.0 * sigma_space * sigma_space;
     let two_sigma_color_sq = 2.0 * sigma_color * sigma_color;
 
-    for y in 0..height {
-        for x in 0..width {
-            let center_idx = 4 * (y * width + x) as usize;
-            let center_r = image.pixels[center_idx] as f64;
-            let center_g = image.pixels[center_idx + 1] as f64;
-            let center_b = image.pixels[center_idx + 2] as f64;
+    // Precomputed Gaussian weight tables (see doc comment above).
+    let spatial_lut: Vec<f64> = (-radius..=radius)
+        .map(|d| (-((d * d) as f64) / two_sigma_space_sq).exp())
+        .collect();
+    const MAX_COLOR_DIST_SQ: usize = 3 * 255 * 255;
+    let color_lut: Vec<f64> = (0..=MAX_COLOR_DIST_SQ)
+        .map(|d| (-(d as f64) / two_sigma_color_sq).exp())
+        .collect();
 
-            let mut sum_r = 0.0;
-            let mut sum_g = 0.0;
-            let mut sum_b = 0.0;
-            let mut sum_w = 0.0;
+    // One 1D bilateral pass along either axis. `stride` is the pixel
+    // step between neighbours on the axis (1 for horizontal, `width`
+    // for vertical); `len` is the number of pixels along the axis.
+    let one_d_pass = |src: &[u8], horizontal: bool| -> Vec<u8> {
+        let mut out = src.to_vec();
+        let (outer, len) = if horizontal {
+            (height as usize, width as usize)
+        } else {
+            (width as usize, height as usize)
+        };
+        for o in 0..outer {
+            for i in 0..len {
+                let pixel = if horizontal { o * len + i } else { i * (width as usize) + o };
+                let center_idx = 4 * pixel;
+                let center_r = src[center_idx] as i32;
+                let center_g = src[center_idx + 1] as i32;
+                let center_b = src[center_idx + 2] as i32;
 
-            let y_min = (y as i32 - radius).max(0);
-            let y_max = (y as i32 + radius).min(height as i32 - 1);
-            let x_min = (x as i32 - radius).max(0);
-            let x_max = (x as i32 + radius).min(width as i32 - 1);
+                let mut sum_r = 0.0;
+                let mut sum_g = 0.0;
+                let mut sum_b = 0.0;
+                let mut sum_w = 0.0;
 
-            for ny in y_min..=y_max {
-                for nx in x_min..=x_max {
-                    let neighbor_idx = 4 * (ny * width as i32 + nx) as usize;
-                    let neighbor_r = image.pixels[neighbor_idx] as f64;
-                    let neighbor_g = image.pixels[neighbor_idx + 1] as f64;
-                    let neighbor_b = image.pixels[neighbor_idx + 2] as f64;
+                let lo = (i as i32 - radius).max(0) as usize;
+                let hi = ((i as i32 + radius) as usize).min(len - 1);
+                for j in lo..=hi {
+                    let neighbor_pixel = if horizontal {
+                        o * len + j
+                    } else {
+                        j * (width as usize) + o
+                    };
+                    let idx = 4 * neighbor_pixel;
+                    let nr = src[idx] as i32;
+                    let ng = src[idx + 1] as i32;
+                    let nb = src[idx + 2] as i32;
 
-                    let d_space_sq =
-                        ((nx - x as i32) as f64).powi(2) + ((ny - y as i32) as f64).powi(2);
-                    let d_color_sq = (neighbor_r - center_r).powi(2)
-                        + (neighbor_g - center_g).powi(2)
-                        + (neighbor_b - center_b).powi(2);
+                    let dr = nr - center_r;
+                    let dg = ng - center_g;
+                    let db = nb - center_b;
+                    let d_color_sq = (dr * dr + dg * dg + db * db) as usize;
 
-                    let w_space = (-d_space_sq / two_sigma_space_sq).exp();
-                    let w_color = (-d_color_sq / two_sigma_color_sq).exp();
-                    let w = w_space * w_color;
+                    let w = spatial_lut[(j as i32 - i as i32 + radius) as usize]
+                        * color_lut[d_color_sq];
 
-                    sum_r += w * neighbor_r;
-                    sum_g += w * neighbor_g;
-                    sum_b += w * neighbor_b;
+                    sum_r += w * nr as f64;
+                    sum_g += w * ng as f64;
+                    sum_b += w * nb as f64;
                     sum_w += w;
                 }
-            }
 
-            if sum_w > 0.0 {
-                filtered_pixels[center_idx] = (sum_r / sum_w).round().clamp(0.0, 255.0) as u8;
-                filtered_pixels[center_idx + 1] = (sum_g / sum_w).round().clamp(0.0, 255.0) as u8;
-                filtered_pixels[center_idx + 2] = (sum_b / sum_w).round().clamp(0.0, 255.0) as u8;
+                if sum_w > 0.0 {
+                    out[center_idx] = (sum_r / sum_w).round().clamp(0.0, 255.0) as u8;
+                    out[center_idx + 1] = (sum_g / sum_w).round().clamp(0.0, 255.0) as u8;
+                    out[center_idx + 2] = (sum_b / sum_w).round().clamp(0.0, 255.0) as u8;
+                }
             }
         }
-    }
+        out
+    };
+
+    let horizontal = one_d_pass(&image.pixels, true);
+    let filtered_pixels = one_d_pass(&horizontal, false);
 
     RasterImage {
         width,

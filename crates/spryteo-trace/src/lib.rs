@@ -125,8 +125,12 @@ fn extract_layer_contours(mask: &[u8], width: u32, height: u32, turdsize: u32) -
     // Group background (value <= 127) using 4-connectivity.
     let size = w_padded * h_padded;
     let mut labels = vec![0usize; size];
-    let mut component_sizes = std::collections::BTreeMap::new();
-    let mut component_is_fg = std::collections::BTreeMap::new();
+    // Indexed by label (labels are dense, starting at 1; index 0 unused).
+    // These were BTreeMaps, but the despeckle pass below looks both up
+    // once per pixel, and a log-time pointer-chasing lookup per pixel is
+    // measurably slow at photo sizes.
+    let mut component_sizes: Vec<usize> = vec![0];
+    let mut component_is_fg: Vec<bool> = vec![false];
     let mut next_label = 1;
 
     for y in 0..h_padded {
@@ -144,47 +148,38 @@ fn extract_layer_contours(mask: &[u8], width: u32, height: u32, turdsize: u32) -
             queue.push((x, y));
             let mut count = 0;
 
+            // Neighbour offsets in the same visit order the previous
+            // per-pixel Vec-building code produced (8-connectivity scans
+            // dy then dx; 4-connectivity uses the explicit list), so BFS
+            // queue order -- and therefore all downstream output -- is
+            // unchanged. Building a fresh Vec per visited pixel was one
+            // heap allocation per pixel across the whole image, per layer.
+            const NEIGHBORS_8: [(isize, isize); 8] = [
+                (-1, -1),
+                (0, -1),
+                (1, -1),
+                (-1, 0),
+                (1, 0),
+                (-1, 1),
+                (0, 1),
+                (1, 1),
+            ];
+            const NEIGHBORS_4: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+            let deltas: &[(isize, isize)] = if is_fg { &NEIGHBORS_8 } else { &NEIGHBORS_4 };
+
             let mut head = 0;
             while head < queue.len() {
                 let (cx, cy) = queue[head];
                 head += 1;
                 count += 1;
 
-                // Neighbors logic
-                let neighbors = if is_fg {
-                    // 8-connectivity
-                    let mut n = Vec::new();
-                    for dy in -1..=1 {
-                        for dx in -1..=1 {
-                            if dx == 0 && dy == 0 {
-                                continue;
-                            }
-                            let nx = cx as isize + dx;
-                            let ny = cy as isize + dy;
-                            if nx >= 0
-                                && nx < w_padded as isize
-                                && ny >= 0
-                                && ny < h_padded as isize
-                            {
-                                n.push((nx as usize, ny as usize));
-                            }
-                        }
+                for &(dx, dy) in deltas {
+                    let nx = cx as isize + dx;
+                    let ny = cy as isize + dy;
+                    if nx < 0 || nx >= w_padded as isize || ny < 0 || ny >= h_padded as isize {
+                        continue;
                     }
-                    n
-                } else {
-                    // 4-connectivity
-                    let mut n = Vec::new();
-                    for &(dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                        let nx = cx as isize + dx;
-                        let ny = cy as isize + dy;
-                        if nx >= 0 && nx < w_padded as isize && ny >= 0 && ny < h_padded as isize {
-                            n.push((nx as usize, ny as usize));
-                        }
-                    }
-                    n
-                };
-
-                for (nx, ny) in neighbors {
+                    let (nx, ny) = (nx as usize, ny as usize);
                     let nidx = ny * w_padded + nx;
                     if labels[nidx] == 0 {
                         let n_is_fg = padded_mask[nidx] > 127;
@@ -196,8 +191,9 @@ fn extract_layer_contours(mask: &[u8], width: u32, height: u32, turdsize: u32) -
                 }
             }
 
-            component_sizes.insert(lbl, count);
-            component_is_fg.insert(lbl, is_fg);
+            debug_assert_eq!(component_sizes.len(), lbl);
+            component_sizes.push(count);
+            component_is_fg.push(is_fg);
         }
     }
 
@@ -212,8 +208,8 @@ fn extract_layer_contours(mask: &[u8], width: u32, height: u32, turdsize: u32) -
             if lbl == external_bg_label {
                 continue;
             }
-            let is_fg = component_is_fg[&lbl];
-            let comp_size = component_sizes[&lbl];
+            let is_fg = component_is_fg[lbl];
+            let comp_size = component_sizes[lbl];
             if comp_size < turdsize as usize {
                 if is_fg {
                     padded_mask[idx] = 0;

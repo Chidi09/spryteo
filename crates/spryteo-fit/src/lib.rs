@@ -63,8 +63,29 @@ fn fit_single_contour(contour: &Contour, tolerance: f32, smoothness: f32) -> Cur
     let mut min_len = usize::MAX;
     let mut min_deviation = f64::INFINITY;
 
-    for i_0 in 0..n {
-        let poly = greedy_polygon(points, i_0, tolerance as f64);
+    // Shared across every starting-point attempt below (not reset per
+    // call) so the *total* admissibility-check work for this whole
+    // contour is bounded to O(n), regardless of how many of the n
+    // starting points turn out to be expensive -- see greedy_polygon's
+    // doc comment for why this budget exists.
+    let mut budget: i64 = (n as i64).saturating_mul(200);
+
+    // `compute_squared_deviation` below is itself O(n) per starting point,
+    // so trying literally all n starting points is O(n^2) regardless of
+    // the budget above (which only bounds greedy_polygon's own internal
+    // search). For small/typical contours this is fine and every
+    // starting point is tried, matching prior behavior exactly. For very
+    // long contours (thousands of points -- e.g. quantization-band
+    // boundaries in a smooth-gradient photo), sample a bounded number of
+    // evenly-spaced starting points instead: diminishing returns on
+    // trying every single rotation for a contour that long, and this is
+    // what actually keeps whole-contour cost bounded rather than merely
+    // per-step cost.
+    const MAX_STARTING_POINTS: usize = 64;
+    let stride = (n / MAX_STARTING_POINTS).max(1);
+
+    for i_0 in (0..n).step_by(stride) {
+        let poly = greedy_polygon(points, i_0, tolerance as f64, &mut budget);
         let len = poly.len();
         if len >= 3 {
             let deviation = compute_squared_deviation(points, &poly);
@@ -241,14 +262,31 @@ fn fit_single_contour(contour: &Contour, tolerance: f32, smoothness: f32) -> Cur
 }
 
 /// Checks if a segment from start to end (indices modulo N) is admissible.
-fn is_admissible(points: &[(f64, f64)], start: usize, end: usize, tolerance: f64) -> bool {
+/// Checks admissibility, decrementing `budget` by the number of points
+/// examined. If `budget` is already exhausted, returns `false`
+/// immediately without examining anything -- this is what bounds
+/// `greedy_polygon`'s worst case (see its doc comment).
+fn is_admissible(
+    points: &[(f64, f64)],
+    start: usize,
+    end: usize,
+    tolerance: f64,
+    budget: &mut i64,
+) -> bool {
     let n = points.len();
     if end <= start + 1 {
         return true;
     }
+    if *budget <= 0 {
+        return false;
+    }
     let a = points[start % n];
     let b = points[end % n];
     for k in (start + 1)..end {
+        *budget -= 1;
+        if *budget <= 0 {
+            return false;
+        }
         let p = points[k % n];
         if perpendicular_distance(p, a, b) > tolerance {
             return false;
@@ -258,20 +296,46 @@ fn is_admissible(points: &[(f64, f64)], start: usize, end: usize, tolerance: f64
 }
 
 /// Greedily extends the admissible segment as far as possible from a starting index.
-fn greedy_polygon(points: &[(f64, f64)], i_0: usize, tolerance: f64) -> Vec<usize> {
+///
+/// # Worst-case complexity guard
+///
+/// For each step, the candidate search below scans backward from the far
+/// end of the remaining points, and each candidate check
+/// (`is_admissible`) is itself O(distance). In the worst case (long,
+/// nearly-straight contours -- e.g. quantization-band boundaries in a
+/// smooth-gradient photo) this makes a single `greedy_polygon` call
+/// O(n^3), and since `fit_single_contour` calls it once per starting
+/// point, the whole-contour cost is O(n^4). Confirmed in practice: a
+/// single 1024x1024 photo-mode conversion took ~560s in this stage
+/// alone, hanging the browser tab (WASM runs synchronously on the main
+/// thread) for real, non-synthetic uploads.
+///
+/// `budget` bounds total admissibility-check work per call. Once
+/// exhausted, the candidate search falls back to the smallest safe step
+/// (`curr + 1`) instead of the expensive backward scan -- always
+/// correct (just less optimally simplified for the remainder of that
+/// one contour), and guarantees termination instead of an unbounded
+/// hang. Budget is sized per-call in `fit_single_contour` so small/
+/// typical contours never come close to it.
+fn greedy_polygon(points: &[(f64, f64)], i_0: usize, tolerance: f64, budget: &mut i64) -> Vec<usize> {
     let n = points.len();
     let mut vertices = vec![i_0];
     let mut curr = i_0;
     while curr < i_0 + n {
-        if curr != i_0 && is_admissible(points, curr, i_0 + n, tolerance) {
+        if curr != i_0 && is_admissible(points, curr, i_0 + n, tolerance, budget) {
             vertices.push(i_0 + n);
             break;
         }
         let mut next_val = curr + 1;
-        for candidate in (curr + 2..=i_0 + n).rev() {
-            if is_admissible(points, curr, candidate, tolerance) {
-                next_val = candidate;
-                break;
+        if *budget > 0 {
+            for candidate in (curr + 2..=i_0 + n).rev() {
+                if is_admissible(points, curr, candidate, tolerance, budget) {
+                    next_val = candidate;
+                    break;
+                }
+                if *budget <= 0 {
+                    break;
+                }
             }
         }
         vertices.push(next_val);
