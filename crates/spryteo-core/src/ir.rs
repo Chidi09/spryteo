@@ -8,6 +8,32 @@ pub struct Rgb {
     pub b: u8,
 }
 
+/// A gradient stop representing a color at a specific offset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GradientStop {
+    pub offset: f32, // 0.0..=1.0
+    pub color: Rgb,
+}
+
+/// A fill specification for a scene node, supporting solid colors and gradients.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Fill {
+    Solid(Rgb),
+    LinearGradient {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,                  // gradient vector, in the shape's local coordinate space
+        stops: Vec<GradientStop>, // ordered by offset, at least 2 entries
+    },
+    RadialGradient {
+        cx: f64,
+        cy: f64,
+        r: f64, // circle in the shape's local coordinate space
+        stops: Vec<GradientStop>,
+    },
+}
+
 // ── Stage 1: Decode & normalise ─────────────────────────────────────────────
 
 /// A decoded and normalised raster image ready for the pipeline.
@@ -196,7 +222,7 @@ pub enum Shape {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
-    pub fill: Option<Rgb>,
+    pub fill: Option<Fill>,
     pub stroke: Option<Stroke>,
     pub transform: Transform,
     pub shape: Shape,

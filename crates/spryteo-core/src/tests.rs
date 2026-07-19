@@ -100,11 +100,11 @@ fn scene_graph_serde_round_trip() {
             id: "g-root".into(),
             nodes: vec![Node {
                 id: "s-abc".into(),
-                fill: Some(Rgb {
+                fill: Some(Fill::Solid(Rgb {
                     r: 0,
                     g: 128,
                     b: 255,
-                }),
+                })),
                 stroke: Some(Stroke {
                     color: Rgb { r: 0, g: 0, b: 0 },
                     width: 1.5,
@@ -124,7 +124,7 @@ fn scene_graph_serde_round_trip() {
                 id: "g-child".into(),
                 nodes: vec![Node {
                     id: "s-def".into(),
-                    fill: Some(Rgb { r: 255, g: 0, b: 0 }),
+                    fill: Some(Fill::Solid(Rgb { r: 255, g: 0, b: 0 })),
                     stroke: None,
                     transform: Transform {
                         translate_x: 0.0,
@@ -229,7 +229,7 @@ fn scene_graph_deterministic_serialization() {
             nodes: vec![
                 Node {
                     id: "s-1".into(),
-                    fill: Some(Rgb { r: 255, g: 0, b: 0 }),
+                    fill: Some(Fill::Solid(Rgb { r: 255, g: 0, b: 0 })),
                     stroke: None,
                     transform: Transform {
                         translate_x: 0.0,
@@ -244,7 +244,7 @@ fn scene_graph_deterministic_serialization() {
                 },
                 Node {
                     id: "s-2".into(),
-                    fill: Some(Rgb { r: 0, g: 0, b: 255 }),
+                    fill: Some(Fill::Solid(Rgb { r: 0, g: 0, b: 255 })),
                     stroke: None,
                     transform: Transform {
                         translate_x: 5.0,

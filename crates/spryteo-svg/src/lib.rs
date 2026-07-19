@@ -1,12 +1,27 @@
 //! SceneGraph to SVG emission, optimizer, metadata sidecar.
 
 use spryteo_core::ir::{
-    Bbox, ConvertResult, CurveSet, Group, Meta, Node, NodeMeta, PathElement, Primitive, Rgb,
+    Bbox, ConvertResult, CurveSet, Fill, Group, Meta, Node, NodeMeta, PathElement, Primitive, Rgb,
     SceneGraph, Shape, Stats, Stroke, Transform,
 };
 use spryteo_core::options::{ConvertOptions, Grouping, IdStyle, OutputFormat, Preset, TOrigin};
 use spryteo_geom::{dedupe_ids, stable_id};
 use std::fmt::Write;
+
+/// Helper to extract a representative color from a `Fill`.
+///
+/// For solid fills, this is the solid color itself.
+/// For gradient fills, it uses the color of the first gradient stop as a sensible representative color
+/// for metadata consumers, keeping the metadata sidecar clean and lightweight.
+fn get_representative_color(fill: &Option<Fill>) -> Option<Rgb> {
+    match fill {
+        Some(Fill::Solid(rgb)) => Some(*rgb),
+        Some(Fill::LinearGradient { stops, .. }) | Some(Fill::RadialGradient { stops, .. }) => {
+            stops.first().map(|stop| stop.color)
+        }
+        None => None,
+    }
+}
 
 /// Extracts the endpoints from a sequence of path elements.
 ///
@@ -320,6 +335,114 @@ fn escape_html(s: &str) -> String {
     escaped
 }
 
+fn collect_gradients(scene: &SceneGraph) -> Vec<(String, &Fill)> {
+    let mut grads = Vec::new();
+    for group in &scene.groups {
+        for node in &group.nodes {
+            if let Some(ref fill) = node.fill {
+                match fill {
+                    Fill::LinearGradient { .. } | Fill::RadialGradient { .. } => {
+                        grads.push((node.id.clone(), fill));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    grads
+}
+
+fn serialize_defs(grads: &[(String, &Fill)], opts: &ConvertOptions) -> String {
+    if grads.is_empty() {
+        return String::new();
+    }
+    let precision = opts.precision as usize;
+    let pretty = matches!(opts.output, OutputFormat::SvgPretty | OutputFormat::Jsx);
+    let is_jsx = matches!(opts.output, OutputFormat::Jsx);
+    let stop_color_attr = if is_jsx { "stopColor" } else { "stop-color" };
+    let mut out = String::new();
+
+    let indent_defs = if pretty { "  " } else { "" };
+    let indent_grad = if pretty { "    " } else { "" };
+    let indent_stop = if pretty { "      " } else { "" };
+    let newline = if pretty { "\n" } else { "" };
+
+    write!(out, "{}<defs>{}", indent_defs, newline).unwrap();
+    for (node_id, fill) in grads {
+        let grad_id = format!("grad-{}", node_id);
+        match fill {
+            Fill::LinearGradient {
+                x1,
+                y1,
+                x2,
+                y2,
+                stops,
+            } => {
+                write!(
+                    out,
+                    "{}<linearGradient id=\"{}\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">{}",
+                    indent_grad,
+                    escape_html(&grad_id),
+                    format_coord(*x1, precision),
+                    format_coord(*y1, precision),
+                    format_coord(*x2, precision),
+                    format_coord(*y2, precision),
+                    newline
+                )
+                .unwrap();
+                for stop in stops {
+                    let offset_pct = (stop.offset * 100.0).round() as i32;
+                    write!(
+                        out,
+                        "{}<stop offset=\"{}%\" {}=\"#{:02x}{:02x}{:02x}\" />{}",
+                        indent_stop,
+                        offset_pct,
+                        stop_color_attr,
+                        stop.color.r,
+                        stop.color.g,
+                        stop.color.b,
+                        newline
+                    )
+                    .unwrap();
+                }
+                write!(out, "{}</linearGradient>{}", indent_grad, newline).unwrap();
+            }
+            Fill::RadialGradient { cx, cy, r, stops } => {
+                write!(
+                    out,
+                    "{}<radialGradient id=\"{}\" cx=\"{}\" cy=\"{}\" r=\"{}\">{}",
+                    indent_grad,
+                    escape_html(&grad_id),
+                    format_coord(*cx, precision),
+                    format_coord(*cy, precision),
+                    format_coord(*r, precision),
+                    newline
+                )
+                .unwrap();
+                for stop in stops {
+                    let offset_pct = (stop.offset * 100.0).round() as i32;
+                    write!(
+                        out,
+                        "{}<stop offset=\"{}%\" {}=\"#{:02x}{:02x}{:02x}\" />{}",
+                        indent_stop,
+                        offset_pct,
+                        stop_color_attr,
+                        stop.color.r,
+                        stop.color.g,
+                        stop.color.b,
+                        newline
+                    )
+                    .unwrap();
+                }
+                write!(out, "{}</radialGradient>{}", indent_grad, newline).unwrap();
+            }
+            Fill::Solid(_) => {}
+        }
+    }
+    write!(out, "{}</defs>{}", indent_defs, newline).unwrap();
+    out
+}
+
 /// Serializes the scene graph into an SVG string according to conversion options.
 fn serialize_svg(scene: &SceneGraph, width: u32, height: u32, opts: &ConvertOptions) -> String {
     let precision = opts.precision as usize;
@@ -334,6 +457,10 @@ fn serialize_svg(scene: &SceneGraph, width: u32, height: u32, opts: &ConvertOpti
     } else {
         write!(out, "<svg viewBox=\"0 0 {} {}\">", width, height).unwrap();
     }
+
+    let grads = collect_gradients(scene);
+    let defs_str = serialize_defs(&grads, opts);
+    out.push_str(&defs_str);
 
     for group in &scene.groups {
         let use_group = !matches!(opts.grouping, Grouping::Flat);
@@ -368,13 +495,17 @@ fn serialize_svg(scene: &SceneGraph, width: u32, height: u32, opts: &ConvertOpti
             }
 
             match &node.fill {
-                Some(rgb) => {
+                Some(Fill::Solid(rgb)) => {
                     write!(
                         node_attrs,
                         " fill=\"#{:02x}{:02x}{:02x}\"",
                         rgb.r, rgb.g, rgb.b
                     )
                     .unwrap();
+                }
+                Some(Fill::LinearGradient { .. }) | Some(Fill::RadialGradient { .. }) => {
+                    let grad_id = format!("grad-{}", node.id);
+                    write!(node_attrs, " fill=\"url(#{})\"", escape_html(&grad_id)).unwrap();
                 }
                 None => {
                     write!(node_attrs, " fill=\"none\"").unwrap();
@@ -623,18 +754,19 @@ pub fn build_scene_graph(
     curves: &CurveSet,
     id_style: &IdStyle,
     transform_origin: &TOrigin,
-    fills: &[Rgb],
+    fills: &[Fill],
     arcs: bool,
 ) -> SceneGraph {
     let mut groups = Vec::new();
 
     let mut ids = Vec::new();
     for (i, curve) in curves.curves.iter().enumerate() {
-        let fill = fills.get(i).copied();
+        let fill = fills.get(i).cloned();
+        let rep_fill = get_representative_color(&fill);
         let id = match id_style {
             IdStyle::Hash => {
                 let points = extract_endpoints(&curve.segments);
-                stable_id(&points, fill, i)
+                stable_id(&points, rep_fill, i)
             }
             IdStyle::Sequential => {
                 format!("s-{}", i)
@@ -649,7 +781,7 @@ pub fn build_scene_graph(
     }
 
     for (i, curve) in curves.curves.iter().enumerate() {
-        let fill = fills.get(i).copied();
+        let fill = fills.get(i).cloned();
         let id = ids[i].clone();
 
         let is_arc_fallback = match &curve.primitive {
@@ -749,7 +881,7 @@ pub fn emit_svg(
                 bbox,
                 centroid,
                 area,
-                fill: node.fill,
+                fill: get_representative_color(&node.fill),
                 group: group.id.clone(),
                 z_order: node_index,
                 suggested_draw_order: node_index,
@@ -1245,7 +1377,7 @@ pub fn emit_stroke_svg(
                 bbox,
                 centroid,
                 area,
-                fill: node.fill,
+                fill: get_representative_color(&node.fill),
                 group: group.id.clone(),
                 z_order: node_index,
                 suggested_draw_order: node_index,
@@ -1275,7 +1407,9 @@ pub fn emit_stroke_svg(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spryteo_core::ir::{Curve, CurveSet, PathElement, Primitive, Rgb, Shape};
+    use spryteo_core::ir::{
+        Curve, CurveSet, Fill, GradientStop, PathElement, Primitive, Rgb, Shape,
+    };
     use spryteo_core::options::{ConvertOptions, IdStyle, OutputFormat, Preset, TOrigin};
 
     fn make_test_options() -> ConvertOptions {
@@ -1329,7 +1463,10 @@ mod tests {
         let curves = CurveSet {
             curves: vec![curve1, curve2],
         };
-        let fills = vec![Rgb { r: 255, g: 0, b: 0 }, Rgb { r: 0, g: 0, b: 255 }];
+        let fills = vec![
+            Fill::Solid(Rgb { r: 255, g: 0, b: 0 }),
+            Fill::Solid(Rgb { r: 0, g: 0, b: 255 }),
+        ];
 
         let scene = build_scene_graph(&curves, &IdStyle::Hash, &TOrigin::Centroid, &fills, false);
 
@@ -1355,7 +1492,7 @@ mod tests {
         let curves = CurveSet {
             curves: vec![curve],
         };
-        let fills = vec![Rgb { r: 0, g: 255, b: 0 }];
+        let fills = vec![Fill::Solid(Rgb { r: 0, g: 255, b: 0 })];
 
         let scene = build_scene_graph(
             &curves,
@@ -1390,11 +1527,11 @@ mod tests {
         let curves = CurveSet {
             curves: vec![curve],
         };
-        let fills = vec![Rgb {
+        let fills = vec![Fill::Solid(Rgb {
             r: 128,
             g: 128,
             b: 128,
-        }];
+        })];
 
         let scene = build_scene_graph(
             &curves,
@@ -1427,7 +1564,7 @@ mod tests {
         let curves = CurveSet {
             curves: vec![curve],
         };
-        let fills = vec![Rgb { r: 255, g: 0, b: 0 }];
+        let fills = vec![Fill::Solid(Rgb { r: 255, g: 0, b: 0 })];
 
         let scene_hash = build_scene_graph(&curves, &IdStyle::Hash, &TOrigin::Baked, &fills, false);
         let mut opts = make_test_options();
@@ -1464,11 +1601,11 @@ mod tests {
         let curves = CurveSet {
             curves: vec![curve],
         };
-        let fills = vec![Rgb {
+        let fills = vec![Fill::Solid(Rgb {
             r: 255,
             g: 255,
             b: 255,
-        }];
+        })];
 
         let scene = build_scene_graph(&curves, &IdStyle::None, &TOrigin::Baked, &fills, false);
 
@@ -1496,7 +1633,7 @@ mod tests {
         let curves = CurveSet {
             curves: vec![curve],
         };
-        let fills = vec![Rgb { r: 0, g: 0, b: 0 }];
+        let fills = vec![Fill::Solid(Rgb { r: 0, g: 0, b: 0 })];
 
         let scene = build_scene_graph(&curves, &IdStyle::None, &TOrigin::Baked, &fills, false);
 
@@ -1529,7 +1666,7 @@ mod tests {
     fn test_sanitize_injection() {
         let node = Node {
             id: "<script>alert('hack')</script>".to_string(),
-            fill: Some(Rgb { r: 0, g: 0, b: 0 }),
+            fill: Some(Fill::Solid(Rgb { r: 0, g: 0, b: 0 })),
             stroke: None,
             transform: Transform {
                 translate_x: 0.0,
@@ -1571,11 +1708,11 @@ mod tests {
         let curves = CurveSet {
             curves: vec![curve],
         };
-        let fills = vec![Rgb {
+        let fills = vec![Fill::Solid(Rgb {
             r: 255,
             g: 100,
             b: 50,
-        }];
+        })];
 
         let scene = build_scene_graph(&curves, &IdStyle::Hash, &TOrigin::Centroid, &fills, false);
 
@@ -1754,5 +1891,243 @@ mod tests {
 
         assert_eq!(res1.svg, res2.svg, "outputs should be byte-identical");
         assert_eq!(res1.meta.stats.byte_count, res2.meta.stats.byte_count);
+    }
+
+    #[test]
+    fn test_gradient_emission_linear_radial_determinism() {
+        // 1. Linear gradient test
+        let curve_linear = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let fills_linear = vec![Fill::LinearGradient {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 10.0,
+            y2: 10.0,
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: Rgb { r: 255, g: 0, b: 0 },
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: Rgb { r: 0, g: 0, b: 255 },
+                },
+            ],
+        }];
+        let curves_linear = CurveSet {
+            curves: vec![curve_linear],
+        };
+        let scene_linear = build_scene_graph(
+            &curves_linear,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills_linear,
+            false,
+        );
+        let opts = make_test_options();
+        let res_linear = emit_svg(&scene_linear, 100, 100, &opts);
+
+        assert!(
+            res_linear.svg.contains("<defs>"),
+            "linear: should contain defs block"
+        );
+        assert!(res_linear.svg.contains("<linearGradient id=\"grad-s-0\" x1=\"0.00\" y1=\"0.00\" x2=\"10.00\" y2=\"10.00\">"), "linear: should contain linearGradient with correct coordinates");
+        assert!(
+            res_linear
+                .svg
+                .contains("<stop offset=\"0%\" stop-color=\"#ff0000\" />"),
+            "linear: stop 1"
+        );
+        assert!(
+            res_linear
+                .svg
+                .contains("<stop offset=\"100%\" stop-color=\"#0000ff\" />"),
+            "linear: stop 2"
+        );
+        assert!(
+            res_linear.svg.contains("fill=\"url(#grad-s-0)\""),
+            "linear: shape should reference gradient"
+        );
+
+        // 2. Radial gradient test
+        let curve_radial = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(20.0, 20.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let fills_radial = vec![Fill::RadialGradient {
+            cx: 50.0,
+            cy: 50.0,
+            r: 30.0,
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: Rgb {
+                        r: 255,
+                        g: 255,
+                        b: 0,
+                    },
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: Rgb {
+                        r: 0,
+                        g: 255,
+                        b: 255,
+                    },
+                },
+            ],
+        }];
+        let curves_radial = CurveSet {
+            curves: vec![curve_radial],
+        };
+        let scene_radial = build_scene_graph(
+            &curves_radial,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills_radial,
+            false,
+        );
+        let res_radial = emit_svg(&scene_radial, 100, 100, &opts);
+
+        assert!(
+            res_radial.svg.contains("<defs>"),
+            "radial: should contain defs block"
+        );
+        assert!(
+            res_radial
+                .svg
+                .contains("<radialGradient id=\"grad-s-0\" cx=\"50.00\" cy=\"50.00\" r=\"30.00\">"),
+            "radial: should contain radialGradient with correct coordinates"
+        );
+        assert!(
+            res_radial
+                .svg
+                .contains("<stop offset=\"0%\" stop-color=\"#ffff00\" />"),
+            "radial: stop 1"
+        );
+        assert!(
+            res_radial
+                .svg
+                .contains("<stop offset=\"100%\" stop-color=\"#00ffff\" />"),
+            "radial: stop 2"
+        );
+        assert!(
+            res_radial.svg.contains("fill=\"url(#grad-s-0)\""),
+            "radial: shape should reference gradient"
+        );
+
+        // 3. Two different nodes with gradients - check no clash and two distinct definitions
+        let curve_two_1 = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+            ],
+            primitive: None,
+        };
+        let curve_two_2 = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(20.0, 0.0),
+            ],
+            primitive: None,
+        };
+        let curves_two = CurveSet {
+            curves: vec![curve_two_1, curve_two_2],
+        };
+        let fills_two = vec![
+            Fill::LinearGradient {
+                x1: 0.0,
+                y1: 0.0,
+                x2: 1.0,
+                y2: 1.0,
+                stops: vec![
+                    GradientStop {
+                        offset: 0.0,
+                        color: Rgb { r: 255, g: 0, b: 0 },
+                    },
+                    GradientStop {
+                        offset: 1.0,
+                        color: Rgb { r: 0, g: 0, b: 255 },
+                    },
+                ],
+            },
+            Fill::RadialGradient {
+                cx: 2.0,
+                cy: 2.0,
+                r: 3.0,
+                stops: vec![
+                    GradientStop {
+                        offset: 0.0,
+                        color: Rgb { r: 0, g: 255, b: 0 },
+                    },
+                    GradientStop {
+                        offset: 1.0,
+                        color: Rgb {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                        },
+                    },
+                ],
+            },
+        ];
+        let scene_two = build_scene_graph(
+            &curves_two,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills_two,
+            false,
+        );
+        let res_two = emit_svg(&scene_two, 100, 100, &opts);
+        assert!(res_two.svg.contains("id=\"grad-s-0\""));
+        assert!(res_two.svg.contains("id=\"grad-s-1\""));
+        assert!(res_two.svg.contains("fill=\"url(#grad-s-0)\""));
+        assert!(res_two.svg.contains("fill=\"url(#grad-s-1)\""));
+
+        // 4. Solid color round-trip (regression guard)
+        let curve_solid = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+            ],
+            primitive: None,
+        };
+        let curves_solid = CurveSet {
+            curves: vec![curve_solid],
+        };
+        let fills_solid = vec![Fill::Solid(Rgb {
+            r: 12,
+            g: 34,
+            b: 56,
+        })];
+        let scene_solid = build_scene_graph(
+            &curves_solid,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills_solid,
+            false,
+        );
+        let res_solid = emit_svg(&scene_solid, 100, 100, &opts);
+        assert!(
+            res_solid.svg.contains("fill=\"#0c2238\""),
+            "solid fill serialization regression check"
+        );
+
+        // 5. Determinism: emit twice and assert identical output
+        let res_two_second = emit_svg(&scene_two, 100, 100, &opts);
+        assert_eq!(
+            res_two.svg, res_two_second.svg,
+            "SVG outputs must be byte-identical"
+        );
     }
 }
