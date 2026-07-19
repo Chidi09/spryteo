@@ -145,7 +145,9 @@ fn try_circle(points: &[(f64, f64)], tolerance: f64) -> Option<(f64, f64, f64)> 
         .map(|&(x, y)| (((x - cx).powi(2) + (y - cy).powi(2)).sqrt() - r).abs())
         .fold(0.0_f64, f64::max);
 
-    if max_resid <= tolerance {
+    // The tolerance must also be small relative to the radius: at r ≈ 2 an
+    // absolute 0.5px budget would let a 3×3 pixel square pass as a circle.
+    if max_resid <= tolerance.min(0.05 * r) {
         Some((cx, cy, r))
     } else {
         None
@@ -183,7 +185,8 @@ fn try_ellipse(points: &[(f64, f64)], tolerance: f64) -> Option<(f64, f64, f64, 
         })
         .fold(0.0_f64, f64::max);
 
-    if max_resid <= tolerance {
+    // Same relative bound as the circle fit, on the smaller half-axis.
+    if max_resid <= tolerance.min(0.05 * rx.min(ry)) {
         Some((cx, cy, rx, ry))
     } else {
         None

@@ -13,6 +13,7 @@ install:
   - curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
   - export PATH=$HOME/.cargo/bin:$PATH
   - rustup component add rustfmt clippy
+  - curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
   - rustc --version
   - cargo --version
 
@@ -24,4 +25,6 @@ build_script:
 
 test_script:
   - export PATH=$HOME/.cargo/bin:$PATH
-  - cargo test --workspace
+  - cargo test --workspace --release
+  - wasm-pack build bindings/wasm --target web --release
+  - test $(gzip -c bindings/wasm/pkg/spryteo_wasm_bg.wasm | wc -c) -lt 819200

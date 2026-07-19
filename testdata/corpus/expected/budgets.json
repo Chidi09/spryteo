@@ -1,0 +1,106 @@
+{
+  "icons/chevron_48": {
+    "bytes": 2919,
+    "nodes": 5
+  },
+  "icons/circle_256": {
+    "bytes": 11298,
+    "nodes": 69
+  },
+  "icons/circle_48": {
+    "bytes": 2158,
+    "nodes": 14
+  },
+  "icons/overlapping_256": {
+    "bytes": 4519,
+    "nodes": 3
+  },
+  "icons/ring_256": {
+    "bytes": 580,
+    "nodes": 3
+  },
+  "icons/ring_48": {
+    "bytes": 514,
+    "nodes": 3
+  },
+  "icons/rounded_rect_256": {
+    "bytes": 2108,
+    "nodes": 13
+  },
+  "icons/rounded_rect_48": {
+    "bytes": 556,
+    "nodes": 3
+  },
+  "icons/star_256": {
+    "bytes": 91176,
+    "nodes": 450
+  },
+  "icons/traffic_light_256": {
+    "bytes": 2718,
+    "nodes": 19
+  },
+  "line-art/arcs_256": {
+    "bytes": 45147,
+    "nodes": 27
+  },
+  "line-art/segments_256": {
+    "bytes": 18790,
+    "nodes": 35
+  },
+  "line-art/spiral_256": {
+    "bytes": 69462,
+    "nodes": 4
+  },
+  "line-art/squiggle_256": {
+    "bytes": 143773,
+    "nodes": 399
+  },
+  "line-art/zigzag_256": {
+    "bytes": 190197,
+    "nodes": 876
+  },
+  "photos/gradient_d_256": {
+    "bytes": 6036,
+    "nodes": 8
+  },
+  "photos/gradient_h_256": {
+    "bytes": 2916,
+    "nodes": 8
+  },
+  "photos/gradient_noise_256": {
+    "bytes": 2916,
+    "nodes": 8
+  },
+  "photos/gradient_r_256": {
+    "bytes": 2604,
+    "nodes": 8
+  },
+  "photos/gradient_v_256": {
+    "bytes": 2916,
+    "nodes": 8
+  },
+  "photos/landscape_256": {
+    "bytes": 380,
+    "nodes": 2
+  },
+  "pixel-art/brick_32": {
+    "bytes": 1676,
+    "nodes": 11
+  },
+  "pixel-art/checkerboard_16": {
+    "bytes": 792,
+    "nodes": 5
+  },
+  "pixel-art/dither_64": {
+    "bytes": 808,
+    "nodes": 5
+  },
+  "pixel-art/sprite_32": {
+    "bytes": 1889,
+    "nodes": 4
+  },
+  "pixel-art/star_32": {
+    "bytes": 774,
+    "nodes": 2
+  }
+}

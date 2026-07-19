@@ -459,9 +459,19 @@ fn serialize_svg(
     let fill_rule_attr = if is_jsx { "fillRule" } else { "fill-rule" };
 
     if pretty {
-        writeln!(out, "<svg viewBox=\"0 0 {} {}\">", width, height).unwrap();
+        writeln!(
+            out,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\">",
+            width, height
+        )
+        .unwrap();
     } else {
-        write!(out, "<svg viewBox=\"0 0 {} {}\">", width, height).unwrap();
+        write!(
+            out,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\">",
+            width, height
+        )
+        .unwrap();
     }
 
     let grads = collect_gradients(scene);
@@ -822,7 +832,13 @@ pub fn build_scene_graph(
             }
         };
 
-        let (_, centroid, _) = get_shape_geom(&shape, arcs);
+        let (bbox, centroid, _) = get_shape_geom(&shape, arcs);
+
+        // Tiny quantization slivers can survive despeckle and collapse to a
+        // single point during fitting; a zero-extent shape renders nothing.
+        if (bbox.x_max - bbox.x_min) < 1e-6 && (bbox.y_max - bbox.y_min) < 1e-6 {
+            continue;
+        }
 
         let transform = match transform_origin {
             TOrigin::Centroid => {
@@ -1043,9 +1059,19 @@ fn serialize_stroke_svg(
     };
 
     if pretty {
-        writeln!(out, "<svg viewBox=\"0 0 {} {}\">", width, height).unwrap();
+        writeln!(
+            out,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\">",
+            width, height
+        )
+        .unwrap();
     } else {
-        write!(out, "<svg viewBox=\"0 0 {} {}\">", width, height).unwrap();
+        write!(
+            out,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\">",
+            width, height
+        )
+        .unwrap();
     }
 
     let mut nodes_with_ids = Vec::new();

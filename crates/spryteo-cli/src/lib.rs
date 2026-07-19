@@ -709,7 +709,7 @@ mod tests {
         let mut img = ImageBuffer::new(16, 16);
         for x in 0..16 {
             for y in 0..16 {
-                if x >= 4 && x < 12 && y >= 4 && y < 12 {
+                if (4..12).contains(&x) && (4..12).contains(&y) {
                     img.put_pixel(x, y, Rgba([255, 0, 0, 255])); // Red
                 } else {
                     img.put_pixel(x, y, Rgba([255, 255, 255, 255])); // White

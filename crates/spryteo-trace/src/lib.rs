@@ -368,7 +368,11 @@ fn extract_layer_contours(mask: &[u8], width: u32, height: u32, turdsize: u32) -
         let mut points = Vec::new();
         for vertex in &loop_vertices {
             let (px, py) = vertex.to_coord(&padded_mask, w_padded);
-            points.push((px - 1.0, py - 1.0));
+            // Grid samples sit at pixel centers: padded sample (x, y) is the
+            // center of image pixel (x-1, y-1), i.e. image coord (x-0.5, y-0.5).
+            // Subtracting only the 1-sample padding would shift all geometry
+            // half a pixel up-left of the viewBox.
+            points.push((px - 0.5, py - 0.5));
         }
 
         // Determine if this loop is foreground or background
@@ -390,7 +394,7 @@ fn extract_layer_contours(mask: &[u8], width: u32, height: u32, turdsize: u32) -
             }
         };
 
-        let g_active_orig = (g_active.0 as f64 - 1.0, g_active.1 as f64 - 1.0);
+        let g_active_orig = (g_active.0 as f64 - 0.5, g_active.1 as f64 - 0.5);
         let is_fg_contour = point_in_polygon(g_active_orig, &points);
 
         let area = polygon_area(&points);
@@ -565,11 +569,12 @@ mod tests {
             .map(|p| p.1)
             .fold(f64::NEG_INFINITY, f64::max);
 
-        // Bounding box should roughly match the square extent (1..4)
-        assert!((min_x - 0.5).abs() < 0.1);
-        assert!((max_x - 4.5).abs() < 0.1);
-        assert!((min_y - 0.5).abs() < 0.1);
-        assert!((max_y - 4.5).abs() < 0.1);
+        // Pixels 1..=4 cover image space 1.0..5.0; the traced boundary sits
+        // half a pixel outside the on-pixel centers.
+        assert!((min_x - 1.0).abs() < 0.1);
+        assert!((max_x - 5.0).abs() < 0.1);
+        assert!((min_y - 1.0).abs() < 0.1);
+        assert!((max_y - 5.0).abs() < 0.1);
     }
 
     #[test]
@@ -641,7 +646,8 @@ mod tests {
         let hole = &parent.children[0];
         assert!(hole.children.is_empty());
 
-        // Bounding box of hole should roughly match 3,3
+        // Hole pixel 3 covers image space 3.0..4.0; the traced boundary sits
+        // half a pixel inside the surrounding on-pixel centers.
         let min_x = hole
             .points
             .iter()
@@ -652,8 +658,8 @@ mod tests {
             .iter()
             .map(|p| p.0)
             .fold(f64::NEG_INFINITY, f64::max);
-        assert!((min_x - 2.5).abs() < 0.1);
-        assert!((max_x - 3.5).abs() < 0.1);
+        assert!((min_x - 3.0).abs() < 0.1);
+        assert!((max_x - 4.0).abs() < 0.1);
     }
 
     #[test]
