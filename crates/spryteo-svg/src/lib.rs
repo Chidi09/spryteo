@@ -825,6 +825,70 @@ fn serialize_svg(
 /// Per the Phase 1 roadmap, "connected component" grouping is simplified: we produce
 /// one group (`<g>`) per curve. This is because the flattened `CurveSet` does not carry
 /// the parent/child nesting relationships needed to group nested holes/contours.
+/// Helper function to perform a point-in-polygon test (ray casting).
+fn point_in_polygon(point: (f64, f64), polygon: &[(f64, f64)]) -> bool {
+    let (px, py) = point;
+    let mut inside = false;
+    let n = polygon.len();
+    if n < 3 {
+        return false;
+    }
+    let mut j = n - 1;
+    for i in 0..n {
+        let (ix, iy) = polygon[i];
+        let (jx, jy) = polygon[j];
+        if ((iy > py) != (jy > py)) && (px < (jx - ix) * (py - iy) / (jy - iy) + ix) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+fn bbox_contains(b: &Bbox, a: &Bbox) -> bool {
+    a.x_min >= b.x_min && a.x_max <= b.x_max && a.y_min >= b.y_min && a.y_max <= b.y_max
+}
+
+/// True when shape A is strictly inside shape B: A's area must be strictly
+/// smaller (the 0.98 factor rejects the near-identical boundaries that
+/// stacked layering produces in adjacent layers, which would otherwise
+/// report mutual containment) and every sampled boundary vertex of A must
+/// fall inside B's outer polygon. Purely geometric — paint-order ties are
+/// resolved by keeping the existing (deterministic) shape order instead.
+fn is_shape_inside(
+    poly_a: &[(f64, f64)],
+    bbox_a: &Bbox,
+    area_a: f64,
+    poly_b: &[(f64, f64)],
+    bbox_b: &Bbox,
+    area_b: f64,
+) -> bool {
+    if area_a <= 0.0 || area_b <= 0.0 || area_a >= area_b * 0.98 {
+        return false;
+    }
+    if !bbox_contains(bbox_b, bbox_a) {
+        return false;
+    }
+    if poly_a.is_empty() || poly_b.len() < 3 {
+        return false;
+    }
+    poly_a.iter().all(|&p| point_in_polygon(p, poly_b))
+}
+
+/// Builds a `SceneGraph` from a `CurveSet`.
+///
+/// ## Parameters
+/// - `curves`: The input `CurveSet` containing curves to group and convert.
+/// - `id_style`: The ID generation style (Hash, Sequential, or None).
+/// - `transform_origin`: Controls whether shape coordinates are relative to centroid or absolute.
+/// - `fills`: An additional slice of RGB fill colors, one per curve in `curves.curves`.
+///   Must be ordered the same way. If missing, the fill is set to `None`.
+/// - `arcs`: If false, and a `Primitive::Arc` appears, it will fall back to its raw path representation.
+///
+/// ## Grouping Simplification
+/// Per the Phase 1 roadmap, "connected component" grouping is simplified: we produce
+/// one group (`<g>`) per curve. This is because the flattened `CurveSet` does not carry
+/// the parent/child nesting relationships needed to group nested holes/contours.
 pub fn build_scene_graph(
     curves: &CurveSet,
     id_style: &IdStyle,
@@ -855,7 +919,61 @@ pub fn build_scene_graph(
         dedupe_ids(&mut ids);
     }
 
-    for (i, curve) in curves.curves.iter().enumerate() {
+    let n = curves.curves.len();
+    let mut polys = Vec::with_capacity(n);
+    let mut bboxes = Vec::with_capacity(n);
+    let mut areas = Vec::with_capacity(n);
+
+    for curve in &curves.curves {
+        let is_arc_fallback = match &curve.primitive {
+            Some(Primitive::Arc { .. }) => !arcs,
+            _ => false,
+        };
+
+        let shape = if is_arc_fallback {
+            Shape::Path(curve.segments.clone())
+        } else {
+            match &curve.primitive {
+                Some(prim) => Shape::Primitive(prim.clone()),
+                None => Shape::Path(curve.segments.clone()),
+            }
+        };
+
+        let poly = extract_endpoints(&curve.segments);
+        let (bbox, _, area) = get_shape_geom(&shape, arcs);
+
+        polys.push(poly);
+        bboxes.push(bbox);
+        areas.push(area);
+    }
+
+    // Containment depth: how many shapes strictly contain this one. Painting
+    // in ascending depth order guarantees contained detail (a letter inside a
+    // badge inside a background) is never covered by its container — a
+    // correctness property no per-layer total order can provide.
+    let mut depths = vec![0usize; n];
+    for i in 0..n {
+        let mut count = 0;
+        for j in 0..n {
+            if i != j
+                && is_shape_inside(
+                    &polys[i], &bboxes[i], areas[i], &polys[j], &bboxes[j], areas[j],
+                )
+            {
+                count += 1;
+            }
+        }
+        depths[i] = count;
+    }
+
+    // Stable: shapes at equal depth keep their existing quantization order,
+    // preserving current behavior (and byte-identical output) for scenes
+    // without nesting.
+    let mut ordered_indices: Vec<usize> = (0..n).collect();
+    ordered_indices.sort_by_key(|&i| depths[i]);
+
+    for &i in &ordered_indices {
+        let curve = &curves.curves[i];
         let fill = fills.get(i).cloned();
         let id = ids[i].clone();
 
@@ -2356,5 +2474,174 @@ mod tests {
         assert!(!res_off.svg.contains("fill=\"currentColor\""));
         assert!(res_off.svg.contains("fill=\"#ff0000\""));
         assert!(!res_off.meta.current_color_applied);
+    }
+
+    #[test]
+    fn test_containment_sorting() {
+        // (a) Shape inside shape gets higher depth and paints later.
+        // We input Inner first, then Outer.
+        // Inner: square (20, 20) to (80, 80)
+        let inner = Curve {
+            segments: vec![
+                PathElement::MoveTo(20.0, 20.0),
+                PathElement::LineTo(80.0, 20.0),
+                PathElement::LineTo(80.0, 80.0),
+                PathElement::LineTo(20.0, 80.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        // Outer: square (0, 0) to (100, 100)
+        let outer = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(100.0, 0.0),
+                PathElement::LineTo(100.0, 100.0),
+                PathElement::LineTo(0.0, 100.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+
+        let curves = CurveSet {
+            curves: vec![inner.clone(), outer.clone()],
+        };
+        let fills = vec![
+            Fill::Solid(Rgb { r: 255, g: 0, b: 0 }), // Inner fill
+            Fill::Solid(Rgb { r: 0, g: 0, b: 255 }), // Outer fill
+        ];
+
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        // Outer should be painted first (index 0) because it contains Inner.
+        // Inner (index 1) should be painted second.
+        assert_eq!(scene.groups.len(), 2);
+        // We can check their IDs. Inner has original index 0, so its ID is "s-0". Outer has original index 1, ID is "s-1".
+        // With reordering, "s-1" (outer) should come first, then "s-0" (inner).
+        assert_eq!(scene.groups[0].nodes[0].id, "s-1");
+        assert_eq!(scene.groups[1].nodes[0].id, "s-0");
+
+        // (b) Two disjoint shapes keep order.
+        // Shape A: (0, 0) to (10, 10)
+        let shape_a = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+                PathElement::LineTo(0.0, 10.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        // Shape B: (20, 0) to (30, 10)
+        let shape_b = Curve {
+            segments: vec![
+                PathElement::MoveTo(20.0, 0.0),
+                PathElement::LineTo(30.0, 0.0),
+                PathElement::LineTo(30.0, 10.0),
+                PathElement::LineTo(20.0, 10.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+
+        // Order [A, B] -> [A, B]
+        let curves_ab = CurveSet {
+            curves: vec![shape_a.clone(), shape_b.clone()],
+        };
+        let scene_ab = build_scene_graph(
+            &curves_ab,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &[
+                Fill::Solid(Rgb { r: 0, g: 0, b: 0 }),
+                Fill::Solid(Rgb { r: 0, g: 0, b: 0 }),
+            ],
+            false,
+        );
+        assert_eq!(scene_ab.groups[0].nodes[0].id, "s-0");
+        assert_eq!(scene_ab.groups[1].nodes[0].id, "s-1");
+
+        // Order [B, A] -> [B, A]
+        let curves_ba = CurveSet {
+            curves: vec![shape_b.clone(), shape_a.clone()],
+        };
+        let scene_ba = build_scene_graph(
+            &curves_ba,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &[
+                Fill::Solid(Rgb { r: 0, g: 0, b: 0 }),
+                Fill::Solid(Rgb { r: 0, g: 0, b: 0 }),
+            ],
+            false,
+        );
+        assert_eq!(scene_ba.groups[0].nodes[0].id, "s-0"); // original index 0 (which was shape_b)
+        assert_eq!(scene_ba.groups[1].nodes[0].id, "s-1"); // original index 1 (which was shape_a)
+
+        // (c) Near-identical boundaries keep order.
+        // Shape C: (0, 0) to (100, 100) -> area 10000
+        let shape_c = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(100.0, 0.0),
+                PathElement::LineTo(100.0, 100.0),
+                PathElement::LineTo(0.0, 100.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        // Shape D: (0.5, 0.5) to (99.5, 99.5) -> area 99 * 99 = 9801.
+        // 9801 >= 9800 (which is 10000 * 0.98). So they are near-identical!
+        let shape_d = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.5, 0.5),
+                PathElement::LineTo(99.5, 0.5),
+                PathElement::LineTo(99.5, 99.5),
+                PathElement::LineTo(0.5, 99.5),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+
+        // Order [C, D] -> [C, D]
+        let curves_cd = CurveSet {
+            curves: vec![shape_c.clone(), shape_d.clone()],
+        };
+        let scene_cd = build_scene_graph(
+            &curves_cd,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &[
+                Fill::Solid(Rgb { r: 0, g: 0, b: 0 }),
+                Fill::Solid(Rgb { r: 0, g: 0, b: 0 }),
+            ],
+            false,
+        );
+        assert_eq!(scene_cd.groups[0].nodes[0].id, "s-0");
+        assert_eq!(scene_cd.groups[1].nodes[0].id, "s-1");
+
+        // Order [D, C] -> [D, C]
+        let curves_dc = CurveSet {
+            curves: vec![shape_d.clone(), shape_c.clone()],
+        };
+        let scene_dc = build_scene_graph(
+            &curves_dc,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &[
+                Fill::Solid(Rgb { r: 0, g: 0, b: 0 }),
+                Fill::Solid(Rgb { r: 0, g: 0, b: 0 }),
+            ],
+            false,
+        );
+        assert_eq!(scene_dc.groups[0].nodes[0].id, "s-0");
+        assert_eq!(scene_dc.groups[1].nodes[0].id, "s-1");
     }
 }

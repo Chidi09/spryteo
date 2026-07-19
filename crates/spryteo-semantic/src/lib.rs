@@ -190,7 +190,10 @@ pub fn group_by_masks(
     let mut cursor = 0;
     let mut layer_node_ranges = Vec::new();
     for (layer_idx, layer_contours) in contour_set.layers.iter().enumerate() {
-        let count: usize = layer_contours.iter().map(count_contour_and_children).sum();
+        let count: usize = layer_contours
+            .iter()
+            .map(Contour::emitted_curve_count)
+            .sum();
         layer_node_ranges.push((layer_idx, cursor..cursor + count));
         cursor += count;
     }
@@ -364,14 +367,6 @@ pub fn group_by_masks(
         },
         new_meta,
     )
-}
-
-fn count_contour_and_children(c: &Contour) -> usize {
-    1 + c
-        .children
-        .iter()
-        .map(count_contour_and_children)
-        .sum::<usize>()
 }
 
 fn find_parents_in_scene(scene: &SceneGraph, meta: &Meta) -> Vec<Option<usize>> {
@@ -811,13 +806,18 @@ mod tests {
         let mut cursor = 0;
         let mut layer_node_ranges = Vec::new();
         for (layer_idx, layer_contours) in contour_set.layers.iter().enumerate() {
-            let count: usize = layer_contours.iter().map(count_contour_and_children).sum();
+            let count: usize = layer_contours
+                .iter()
+                .map(Contour::emitted_curve_count)
+                .sum();
             layer_node_ranges.push((layer_idx, cursor..cursor + count));
             cursor += count;
         }
 
-        assert_eq!(cursor, 4, "Total node count must be 4");
-        assert_eq!(layer_node_ranges[0].1, 0..3);
-        assert_eq!(layer_node_ranges[1].1, 3..4);
+        // c_parent absorbs its two holes as subpaths of one shape, so layer 0
+        // emits a single node; c_other emits the second.
+        assert_eq!(cursor, 2, "Total node count must be 2");
+        assert_eq!(layer_node_ranges[0].1, 0..1);
+        assert_eq!(layer_node_ranges[1].1, 1..2);
     }
 }

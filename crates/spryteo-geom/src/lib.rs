@@ -145,9 +145,11 @@ fn try_circle(points: &[(f64, f64)], tolerance: f64) -> Option<(f64, f64, f64)> 
         .map(|&(x, y)| (((x - cx).powi(2) + (y - cy).powi(2)).sqrt() - r).abs())
         .fold(0.0_f64, f64::max);
 
-    // The tolerance must also be small relative to the radius: at r ≈ 2 an
-    // absolute 0.5px budget would let a 3×3 pixel square pass as a circle.
-    if max_resid <= tolerance.min(0.05 * r) {
+    // Scale the budget with the radius, bounded both ways: at r ≈ 2 an
+    // absolute 0.5px budget would let a 3×3 pixel square pass as a circle,
+    // while at r ≈ 100 the anti-aliasing wiggle on a genuine circle exceeds
+    // a fixed 0.5px and it would wrongly fall through to the rect fit.
+    if max_resid <= tolerance.max(0.01 * r).min(0.05 * r) {
         Some((cx, cy, r))
     } else {
         None
@@ -185,8 +187,9 @@ fn try_ellipse(points: &[(f64, f64)], tolerance: f64) -> Option<(f64, f64, f64, 
         })
         .fold(0.0_f64, f64::max);
 
-    // Same relative bound as the circle fit, on the smaller half-axis.
-    if max_resid <= tolerance.min(0.05 * rx.min(ry)) {
+    // Same radius-scaled bound as the circle fit, on the smaller half-axis.
+    let r_min = rx.min(ry);
+    if max_resid <= tolerance.max(0.01 * r_min).min(0.05 * r_min) {
         Some((cx, cy, rx, ry))
     } else {
         None
@@ -203,6 +206,22 @@ fn try_rect(points: &[(f64, f64)], tolerance: f64) -> Option<Primitive> {
     let height = y_max - y_min;
 
     if width < 1e-10 || height < 1e-10 {
+        return None;
+    }
+
+    // Decisive rect-vs-curve discriminator: a (rounded) rectangle fills
+    // nearly all of its bounding box, while a circle fills only pi/4 = 78.5%
+    // and an ellipse or stadium even less. Without this gate a circle whose
+    // stricter fits failed on anti-aliasing wiggle would be "promoted" to a
+    // rect — i.e. repainted as its bounding square. The 0.93 bound still
+    // admits rounded rects with corner radius up to ~0.29*sqrt(w*h).
+    let mut poly_area = 0.0;
+    for i in 0..points.len() {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % points.len()];
+        poly_area += x1 * y2 - x2 * y1;
+    }
+    if (poly_area / 2.0).abs() < 0.93 * width * height {
         return None;
     }
 
@@ -301,6 +320,9 @@ fn try_rect(points: &[(f64, f64)], tolerance: f64) -> Option<Primitive> {
                 ry: cr,
             })
         } else {
+            // Inconsistent radius estimates are estimator noise on what the
+            // area gate above already certified as rectangle-like (skinny
+            // rects make the quarter-circle estimator meaningless).
             Some(Primitive::Rect {
                 x: x_min,
                 y: y_min,
@@ -436,8 +458,8 @@ mod tests {
         for i in 0..=pts_per_corner {
             let t = i as f64 / pts_per_corner as f64;
             let angle = std::f64::consts::FRAC_PI_2 * t;
-            let px = x + w - r + r * angle.cos();
-            let py = y + r - r * angle.sin();
+            let px = x + w - r + r * angle.sin();
+            let py = y + r - r * angle.cos();
             pts.push((px, py));
         }
         // Right edge (top to bottom)
@@ -450,8 +472,8 @@ mod tests {
         for i in 0..=pts_per_corner {
             let t = i as f64 / pts_per_corner as f64;
             let angle = std::f64::consts::FRAC_PI_2 * t;
-            let px = x + w - r + r * (std::f64::consts::FRAC_PI_2 - angle).cos();
-            let py = y + h - r + r * (std::f64::consts::FRAC_PI_2 - angle).sin();
+            let px = x + w - r + r * angle.cos();
+            let py = y + h - r + r * angle.sin();
             pts.push((px, py));
         }
         // Bottom edge (right to left)
@@ -464,8 +486,8 @@ mod tests {
         for i in 0..=pts_per_corner {
             let t = i as f64 / pts_per_corner as f64;
             let angle = std::f64::consts::FRAC_PI_2 * t;
-            let px = x + r - r * angle.cos();
-            let py = y + h - r + r * angle.sin();
+            let px = x + r - r * angle.sin();
+            let py = y + h - r + r * angle.cos();
             pts.push((px, py));
         }
         // Left edge (bottom to top)
@@ -478,8 +500,8 @@ mod tests {
         for i in 0..=pts_per_corner {
             let t = i as f64 / pts_per_corner as f64;
             let angle = std::f64::consts::FRAC_PI_2 * t;
-            let px = x + r - r * (std::f64::consts::FRAC_PI_2 - angle).cos();
-            let py = y + r - r * (std::f64::consts::FRAC_PI_2 - angle).sin();
+            let px = x + r - r * angle.cos();
+            let py = y + r - r * angle.sin();
             pts.push((px, py));
         }
         pts

@@ -109,6 +109,23 @@ pub struct Contour {
     pub children: Vec<Contour>,
 }
 
+impl Contour {
+    /// Number of paint shapes this contour tree emits after fitting: the
+    /// contour absorbs its direct children as hole subpaths of one
+    /// `fill-rule="evenodd"` path, while islands inside those holes
+    /// (grandchildren) start new shapes of their own. Every surface that
+    /// aligns per-curve data (fills, grouping) with `fit_contours` output
+    /// must use this count.
+    pub fn emitted_curve_count(&self) -> usize {
+        1 + self
+            .children
+            .iter()
+            .flat_map(|hole| hole.children.iter())
+            .map(Contour::emitted_curve_count)
+            .sum::<usize>()
+    }
+}
+
 /// All contours extracted from a `LayerStack`, grouped per layer in paint
 /// order.
 #[derive(Debug, Clone, Serialize, Deserialize)]

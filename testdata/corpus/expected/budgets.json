@@ -4,11 +4,11 @@
     "nodes": 2
   },
   "icons/circle_256": {
-    "bytes": 852,
+    "bytes": 760,
     "nodes": 5
   },
   "icons/circle_48": {
-    "bytes": 822,
+    "bytes": 2355,
     "nodes": 5
   },
   "icons/overlapping_256": {
@@ -16,7 +16,7 @@
     "nodes": 3
   },
   "icons/ring_256": {
-    "bytes": 580,
+    "bytes": 491,
     "nodes": 3
   },
   "icons/ring_48": {
@@ -36,7 +36,7 @@
     "nodes": 3
   },
   "icons/traffic_light_256": {
-    "bytes": 2718,
+    "bytes": 5190,
     "nodes": 19
   },
   "line-art/arcs_256": {
@@ -72,7 +72,7 @@
     "nodes": 6
   },
   "photos/gradient_r_256": {
-    "bytes": 2604,
+    "bytes": 2472,
     "nodes": 8
   },
   "photos/gradient_v_256": {
@@ -80,7 +80,7 @@
     "nodes": 5
   },
   "photos/landscape_256": {
-    "bytes": 380,
+    "bytes": 2007,
     "nodes": 2
   },
   "pixel-art/brick_32": {
@@ -104,11 +104,11 @@
     "nodes": 2
   },
   "real/dj_logo_1024": {
-    "bytes": 146809,
-    "nodes": 330
+    "bytes": 122755,
+    "nodes": 96
   },
   "real/runner_lineart_480": {
-    "bytes": 13677,
-    "nodes": 47
+    "bytes": 13386,
+    "nodes": 39
   }
 }

@@ -3,17 +3,9 @@
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use spryteo_core::{
-    ClassifiedInput, Contour, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode,
+    ClassifiedInput, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode,
     RasterImage, SpryteoError, Tri,
 };
-
-fn count_contour_and_children(c: &Contour) -> usize {
-    1 + c
-        .children
-        .iter()
-        .map(count_contour_and_children)
-        .sum::<usize>()
-}
 
 /// Whether gradient detection should be attempted for the resolved input mode,
 /// per `ConvertOptions.gradients`: `On` always tries, `Off` never does,
@@ -51,7 +43,7 @@ fn build_fills(
         };
         let mut count = 0;
         for contour in contours {
-            count += count_contour_and_children(contour);
+            count += contour.emitted_curve_count();
         }
         for _ in 0..count {
             fills.push(fill.clone());

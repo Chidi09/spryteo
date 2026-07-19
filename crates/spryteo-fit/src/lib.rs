@@ -44,10 +44,26 @@ pub fn fit_contours(contours: &ContourSet, tolerance: f32, smoothness: f32) -> C
 
 /// Recursively flattens a nested contour and its children, fitting each to a `Curve`.
 fn flatten_contour(contour: &Contour, curves: &mut Vec<Curve>, tolerance: f32, smoothness: f32) {
-    let curve = fit_single_contour(contour, tolerance, smoothness);
+    let mut curve = fit_single_contour(contour, tolerance, smoothness);
+    // Holes become additional subpaths of THIS path, cut out by
+    // fill-rule="evenodd" — a letter "O" is one path with two subpaths,
+    // never a second same-colored shape painted on top (which would cover
+    // whatever sits underneath the hole). Islands inside a hole
+    // (grandchildren) are genuinely separate shapes and recurse as new
+    // top-level curves, painting after their holed container.
+    if !contour.children.is_empty() {
+        // A path with hole subpaths can no longer be a single primitive.
+        curve.primitive = None;
+        for hole in &contour.children {
+            let hole_curve = fit_single_contour(hole, tolerance, smoothness);
+            curve.segments.extend(hole_curve.segments);
+        }
+    }
     curves.push(curve);
-    for child in &contour.children {
-        flatten_contour(child, curves, tolerance, smoothness);
+    for hole in &contour.children {
+        for island in &hole.children {
+            flatten_contour(island, curves, tolerance, smoothness);
+        }
     }
 }
 
@@ -1129,10 +1145,17 @@ mod tests {
         };
 
         let curve_set = fit_contours(&set, 0.5, 0.5);
-        // Should produce exactly two curves
-        assert_eq!(curve_set.curves.len(), 2);
-        assert_finite_elements(&curve_set.curves[0].segments);
-        assert_finite_elements(&curve_set.curves[1].segments);
+        // One shape: the hole is a second subpath of the same evenodd path,
+        // never a separate same-colored curve painted on top.
+        assert_eq!(curve_set.curves.len(), 1);
+        let segments = &curve_set.curves[0].segments;
+        assert_finite_elements(segments);
+        let move_tos = segments
+            .iter()
+            .filter(|e| matches!(e, PathElement::MoveTo(_, _)))
+            .count();
+        assert_eq!(move_tos, 2, "outer boundary + hole subpath");
+        assert!(curve_set.curves[0].primitive.is_none());
     }
 
     #[test]

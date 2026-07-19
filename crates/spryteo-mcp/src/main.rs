@@ -8,7 +8,7 @@ use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
 };
 use spryteo_core::{
-    ClassifiedInput, Contour, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode,
+    ClassifiedInput, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode,
     RasterImage, SpryteoError, Tri,
 };
 
@@ -92,14 +92,6 @@ impl ServerHandler for SpryteoServer {
 
 // ── Pipeline Implementation Helpers (duplicating WASM/CLI patterns) ─────────
 
-fn count_contour_and_children(c: &Contour) -> usize {
-    1 + c
-        .children
-        .iter()
-        .map(count_contour_and_children)
-        .sum::<usize>()
-}
-
 fn should_try_gradients(gradients: &Tri, resolved_mode: &Mode) -> bool {
     match gradients {
         Tri::On => true,
@@ -129,7 +121,7 @@ fn build_fills(
         };
         let mut count = 0;
         for contour in contours {
-            count += count_contour_and_children(contour);
+            count += contour.emitted_curve_count();
         }
         for _ in 0..count {
             fills.push(fill.clone());

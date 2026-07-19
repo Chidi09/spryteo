@@ -1,6 +1,6 @@
 use spryteo_core::{
-    ClassifiedInput, Contour, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode,
-    Preset, RasterImage, SpryteoError, Tri,
+    ClassifiedInput, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode, Preset,
+    RasterImage, SpryteoError, Tri,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -75,14 +75,6 @@ pub fn parse_preset(s: &str) -> Result<Preset, String> {
     }
 }
 
-fn count_contour_and_children(c: &Contour) -> usize {
-    1 + c
-        .children
-        .iter()
-        .map(count_contour_and_children)
-        .sum::<usize>()
-}
-
 /// Whether gradient detection should be attempted for the resolved input mode,
 /// per `ConvertOptions.gradients`: `On` always tries, `Off` never does,
 /// `Auto` tries only for `Mode::Photo` (icons keep flat fills).
@@ -125,7 +117,7 @@ pub fn build_fills(
         };
         let mut count = 0;
         for contour in contours {
-            count += count_contour_and_children(contour);
+            count += contour.emitted_curve_count();
         }
         for _ in 0..count {
             fills.push(fill.clone());
@@ -442,11 +434,12 @@ mod tests {
         };
         let opts = ConvertOptions::default();
         let fills = build_fills(&image, &layer_stack, &contour_set, &Mode::Icon, &opts);
-        assert_eq!(fills.len(), 4);
+        // contour_a absorbs its hole (contour_b) as a subpath of one shape,
+        // so layer 0 emits one fill; layer 1 emits one per top-level contour.
+        assert_eq!(fills.len(), 3);
         assert_eq!(fills[0], Fill::Solid(red));
-        assert_eq!(fills[1], Fill::Solid(red));
+        assert_eq!(fills[1], Fill::Solid(green));
         assert_eq!(fills[2], Fill::Solid(green));
-        assert_eq!(fills[3], Fill::Solid(green));
     }
 
     #[test]
