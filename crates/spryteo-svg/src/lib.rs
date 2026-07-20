@@ -8,6 +8,15 @@ use spryteo_core::options::{ConvertOptions, Grouping, IdStyle, OutputFormat, Pre
 use spryteo_geom::{dedupe_ids, stable_id};
 use std::fmt::Write;
 
+/// Shapes whose final fitted geometry has area at or below this threshold
+/// are degenerate (single-point/collinear slivers that survived raster-level
+/// turdsize filtering but collapsed during curve fitting) and are dropped
+/// here rather than emitted as zero-area paths. This is deliberately a tiny
+/// epsilon, not a user-tunable size filter -- --turdsize is still the real
+/// size control; this only catches true degenerate geometry that
+/// numerically rounds to ~zero area, not small-but-real shapes.
+const DEGENERATE_AREA_EPSILON: f64 = 1e-6;
+
 /// Helper to extract a representative color from a `Fill`.
 ///
 /// For solid fills, this is the solid color itself.
@@ -1383,13 +1392,15 @@ pub fn build_scene_graph(
             }
         };
 
-        let (bbox, centroid, _) = get_shape_geom(&shape, arcs);
-
-        // Tiny quantization slivers can survive despeckle and collapse to a
-        // single point during fitting; a zero-extent shape renders nothing.
-        if (bbox.x_max - bbox.x_min) < 1e-6 && (bbox.y_max - bbox.y_min) < 1e-6 {
+        // Degenerate shapes (single-point / collinear slivers) can survive
+        // raster-level turdsize filtering and collapse to zero area during
+        // curve fitting. Filter them out here by post-fit geometric area,
+        // which is a stricter guarantee than raster pixel count.
+        if areas[i] <= DEGENERATE_AREA_EPSILON {
             continue;
         }
+
+        let (_bbox, centroid, _) = get_shape_geom(&shape, arcs);
 
         let transform = match transform_origin {
             TOrigin::Centroid => {
@@ -2135,8 +2146,9 @@ mod tests {
     fn test_emit_path() {
         let curve = Curve {
             segments: vec![
-                PathElement::MoveTo(1.0, 2.0),
-                PathElement::LineTo(3.0, 4.0),
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
                 PathElement::ClosePath,
             ],
             primitive: None,
@@ -2163,7 +2175,9 @@ mod tests {
 
         let res = emit_svg(&scene, 100, 100, &opts, None);
         assert!(res.svg.contains("<path"));
-        assert!(res.svg.contains("d=\"M 1.00 2.00 L 3.00 4.00 Z\""));
+        assert!(res
+            .svg
+            .contains("d=\"M 0.00 0.00 L 10.00 0.00 L 10.00 10.00 Z\""));
         assert_all_numbers_finite(&res.svg);
     }
 
@@ -2212,6 +2226,7 @@ mod tests {
             segments: vec![
                 PathElement::MoveTo(12.3456, 78.91011),
                 PathElement::LineTo(0.0001, -0.0),
+                PathElement::LineTo(5.0, 5.0),
             ],
             primitive: None,
         };
@@ -2516,6 +2531,7 @@ mod tests {
         let curve_linear = Curve {
             segments: vec![
                 PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
                 PathElement::LineTo(10.0, 10.0),
                 PathElement::ClosePath,
             ],
@@ -2576,6 +2592,7 @@ mod tests {
         let curve_radial = Curve {
             segments: vec![
                 PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(20.0, 0.0),
                 PathElement::LineTo(20.0, 20.0),
                 PathElement::ClosePath,
             ],
@@ -2648,13 +2665,17 @@ mod tests {
             segments: vec![
                 PathElement::MoveTo(0.0, 0.0),
                 PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+                PathElement::ClosePath,
             ],
             primitive: None,
         };
         let curve_two_2 = Curve {
             segments: vec![
-                PathElement::MoveTo(0.0, 0.0),
-                PathElement::LineTo(20.0, 0.0),
+                PathElement::MoveTo(20.0, 0.0),
+                PathElement::LineTo(30.0, 0.0),
+                PathElement::LineTo(30.0, 10.0),
+                PathElement::ClosePath,
             ],
             primitive: None,
         };
@@ -2716,6 +2737,8 @@ mod tests {
             segments: vec![
                 PathElement::MoveTo(0.0, 0.0),
                 PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+                PathElement::ClosePath,
             ],
             primitive: None,
         };
@@ -2756,6 +2779,7 @@ mod tests {
                 segments: vec![
                     PathElement::MoveTo(0.0, 0.0),
                     PathElement::LineTo(10.0, 0.0),
+                    PathElement::LineTo(10.0, 10.0),
                     PathElement::ClosePath,
                 ],
                 primitive: None,
@@ -2791,14 +2815,16 @@ mod tests {
                     segments: vec![
                         PathElement::MoveTo(0.0, 0.0),
                         PathElement::LineTo(10.0, 0.0),
+                        PathElement::LineTo(10.0, 10.0),
                         PathElement::ClosePath,
                     ],
                     primitive: None,
                 },
                 Curve {
                     segments: vec![
-                        PathElement::MoveTo(10.0, 10.0),
-                        PathElement::LineTo(20.0, 20.0),
+                        PathElement::MoveTo(20.0, 10.0),
+                        PathElement::LineTo(30.0, 10.0),
+                        PathElement::LineTo(30.0, 20.0),
                         PathElement::ClosePath,
                     ],
                     primitive: None,
@@ -2828,6 +2854,7 @@ mod tests {
                 segments: vec![
                     PathElement::MoveTo(0.0, 0.0),
                     PathElement::LineTo(10.0, 0.0),
+                    PathElement::LineTo(10.0, 10.0),
                     PathElement::ClosePath,
                 ],
                 primitive: None,
@@ -3504,6 +3531,7 @@ mod tests {
             segments: vec![
                 PathElement::MoveTo(0.0, 0.0),
                 PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
                 PathElement::ClosePath,
             ],
             primitive: None,
@@ -3571,5 +3599,129 @@ mod tests {
             "should NOT contain style tag when no ids present"
         );
         assert!(!svg.contains("@keyframes"), "should NOT contain keyframes");
+    }
+
+    #[test]
+    fn test_build_scene_graph_drops_zero_area_curve() {
+        // A normal triangle with area 50.0
+        let normal = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        // A degenerate curve with area 0.0 (single point + ClosePath)
+        let degenerate = Curve {
+            segments: vec![PathElement::MoveTo(5.0, 5.0), PathElement::ClosePath],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![normal, degenerate],
+        };
+        let fills = vec![
+            Fill::Solid(Rgb { r: 255, g: 0, b: 0 }),
+            Fill::Solid(Rgb { r: 0, g: 0, b: 255 }),
+        ];
+
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        assert_eq!(
+            scene.groups.len(),
+            1,
+            "only the normal curve should survive"
+        );
+        // The surviving node should be the non-degenerate one (index 0, "s-0")
+        assert_eq!(scene.groups[0].nodes[0].id, "s-0");
+    }
+
+    #[test]
+    fn test_build_scene_graph_keeps_tiny_but_real_area() {
+        // A small 2x2 square with area 4.0 (well above epsilon)
+        let tiny = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(2.0, 0.0),
+                PathElement::LineTo(2.0, 2.0),
+                PathElement::LineTo(0.0, 2.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        // A normal triangle with area 50.0
+        let normal = Curve {
+            segments: vec![
+                PathElement::MoveTo(10.0, 10.0),
+                PathElement::LineTo(20.0, 10.0),
+                PathElement::LineTo(20.0, 20.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![tiny, normal],
+        };
+        let fills = vec![
+            Fill::Solid(Rgb { r: 255, g: 0, b: 0 }),
+            Fill::Solid(Rgb { r: 0, g: 0, b: 255 }),
+        ];
+
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        assert_eq!(
+            scene.groups.len(),
+            2,
+            "both tiny-but-real and normal shapes should survive"
+        );
+    }
+
+    #[test]
+    fn test_build_scene_graph_all_degenerate_produces_empty_scene() {
+        let deg1 = Curve {
+            segments: vec![PathElement::MoveTo(1.0, 1.0), PathElement::ClosePath],
+            primitive: None,
+        };
+        let deg2 = Curve {
+            segments: vec![
+                PathElement::MoveTo(2.0, 2.0),
+                PathElement::LineTo(3.0, 3.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![deg1, deg2],
+        };
+        let fills = vec![
+            Fill::Solid(Rgb { r: 255, g: 0, b: 0 }),
+            Fill::Solid(Rgb { r: 0, g: 0, b: 255 }),
+        ];
+
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        assert!(
+            scene.groups.is_empty(),
+            "all-degenerate input should produce empty scene"
+        );
     }
 }
