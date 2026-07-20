@@ -84,11 +84,31 @@ pub struct ResizeInfo {
 /// Cached encoder output (image embedding) for reuse across grid points.
 pub struct Embedding {
     raw: Vec<f32>,
+    /// Preprocessing metadata (scale, dimensions) used to create this embedding.
+    /// Needed downstream to map coordinates correctly between original image
+    /// space and the encoder's input space.
+    pub resize_info: ResizeInfo,
 }
 
 impl Embedding {
     pub fn new(data: Vec<f32>) -> Self {
-        Self { raw: data }
+        Self {
+            raw: data,
+            resize_info: ResizeInfo {
+                original_width: 0,
+                original_height: 0,
+                scale: 1.0,
+                resized_width: 0,
+                resized_height: 0,
+            },
+        }
+    }
+
+    pub fn with_resize_info(data: Vec<f32>, resize_info: ResizeInfo) -> Self {
+        Self {
+            raw: data,
+            resize_info,
+        }
     }
 
     pub fn data(&self) -> &[f32] {
@@ -197,6 +217,36 @@ pub fn preprocess_for_sam(image: &RasterImage) -> (Vec<f32>, ResizeInfo) {
     };
 
     (tensor, info)
+}
+
+/// Convert a raster image to a raw HWC f32 tensor with no normalization.
+///
+/// Extracts RGB from RGBA and casts to f32, returning the data in HWC layout
+/// (height-major, then width, then 3 RGB channels) at the image's native
+/// resolution.  The returned `ResizeInfo` has `scale=1.0` since no resize or
+/// padding is applied.
+///
+/// This is the preprocessing path for encoder models whose ONNX input declares
+/// shape `[-1, -1, 3]` (rank 3, HWC, no batch dimension) — the ONNX graph
+/// itself is expected to perform internal resize and normalization.
+pub fn image_to_hwc_f32(image: &RasterImage) -> (Vec<f32>, ResizeInfo) {
+    let h = image.height;
+    let w = image.width;
+    let total = (h * w) as usize;
+    let mut data = Vec::with_capacity(total * 3);
+    for pixel in image.pixels.chunks_exact(4) {
+        data.push(pixel[0] as f32);
+        data.push(pixel[1] as f32);
+        data.push(pixel[2] as f32);
+    }
+    let info = ResizeInfo {
+        original_width: w,
+        original_height: h,
+        scale: 1.0,
+        resized_width: w,
+        resized_height: h,
+    };
+    (data, info)
 }
 
 // ── Grid generation (pure) ───────────────────────────────────────────────────
@@ -434,47 +484,92 @@ impl SamModel {
     /// This is the expensive step.  The returned `Embedding` should be reused
     /// across all decoder calls in `segment_everything`.
     pub fn embed(&mut self, image: &RasterImage) -> Result<Embedding, SamError> {
-        let (tensor_data, _resize_info) = preprocess_for_sam(image);
+        // ── Introspect encoder input shape at runtime ────────────────────
+        //
+        // Collect owned metadata from the first input so we don't hold a
+        // borrow on `self.encoder` across the `run()` call below.
+        let (first_input_name, input_rank) = {
+            let inputs = self.encoder.inputs();
+            let first = inputs
+                .first()
+                .ok_or_else(|| SamError::Shape("Encoder has no inputs".to_string()))?;
+            let name = first.name().to_string();
+            let rank = match first.dtype() {
+                ort::value::ValueType::Tensor { shape, .. } => shape.len(),
+                _ => return Err(SamError::Shape("Encoder input is not a tensor".to_string())),
+            };
+            (name, rank)
+        };
 
-        let array =
-            ndarray::Array4::from_shape_vec(ndarray::Dim([1usize, 3, 1024, 1024]), tensor_data)
-                .map_err(|e| SamError::Shape(e.to_string()))?;
-
-        let input_names: Vec<String> = self
-            .encoder
-            .inputs()
-            .iter()
-            .map(|i| i.name().to_string())
-            .collect();
-        let first_input_name = input_names
-            .first()
-            .ok_or_else(|| SamError::Shape("Encoder has no inputs".to_string()))?;
-
-        let tr = ort::value::TensorRef::from_array_view(array.view())
-            .map_err(|e| SamError::Inference(e.to_string()))?;
-
-        let output_names: Vec<String> = self
+        let first_output_name: String = self
             .encoder
             .outputs()
-            .iter()
-            .map(|o| o.name().to_string())
-            .collect();
-        let first_output_name = output_names
             .first()
-            .ok_or_else(|| SamError::Shape("Encoder has no outputs".to_string()))?
-            .clone();
+            .map(|o| o.name().to_string())
+            .ok_or_else(|| SamError::Shape("Encoder has no outputs".to_string()))?;
 
-        let outputs = self
-            .encoder
-            .run(ort::inputs![first_input_name.as_str() => tr])
-            .map_err(|e| SamError::Inference(e.to_string()))?;
+        let embedding = match input_rank {
+            // Rank 4: NCHW (e.g. [1,3,1024,1024]) — the standard SAM
+            // preprocessing with resize-to-1024, pad, ImageNet normalize.
+            4 => {
+                let (tensor_data, resize_info) = preprocess_for_sam(image);
+                let array = ndarray::Array4::from_shape_vec(
+                    ndarray::Dim([1usize, 3, 1024, 1024]),
+                    tensor_data,
+                )
+                .map_err(|e| SamError::Shape(e.to_string()))?;
 
-        let out_array = outputs[first_output_name.as_str()]
-            .try_extract_array::<f32>()
-            .map_err(|e| SamError::Shape(e.to_string()))?;
+                let tr = ort::value::TensorRef::from_array_view(array.view())
+                    .map_err(|e| SamError::Inference(e.to_string()))?;
 
-        let data: Vec<f32> = out_array.iter().copied().collect();
-        Ok(Embedding::new(data))
+                let outputs = self
+                    .encoder
+                    .run(ort::inputs![first_input_name => tr])
+                    .map_err(|e| SamError::Inference(e.to_string()))?;
+
+                let out_array = outputs[first_output_name.as_str()]
+                    .try_extract_array::<f32>()
+                    .map_err(|e| SamError::Shape(e.to_string()))?;
+
+                let data: Vec<f32> = out_array.iter().copied().collect();
+                Embedding::with_resize_info(data, resize_info)
+            }
+            // Rank 3: HWC (e.g. [-1,-1,3]) — community MobileSAM export where
+            // the graph does its own internal resize and normalization.  Feed
+            // raw RGB pixels (0-255, f32, no normalize, no pad) at native
+            // resolution.
+            3 => {
+                let (pixels_hwc, resize_info) = image_to_hwc_f32(image);
+                let h = resize_info.original_height as usize;
+                let w = resize_info.original_width as usize;
+                let array =
+                    ndarray::Array3::from_shape_vec(ndarray::Dim([h, w, 3usize]), pixels_hwc)
+                        .map_err(|e| SamError::Shape(e.to_string()))?;
+
+                let tr = ort::value::TensorRef::from_array_view(array.view())
+                    .map_err(|e| SamError::Inference(e.to_string()))?;
+
+                let outputs = self
+                    .encoder
+                    .run(ort::inputs![first_input_name => tr])
+                    .map_err(|e| SamError::Inference(e.to_string()))?;
+
+                let out_array = outputs[first_output_name.as_str()]
+                    .try_extract_array::<f32>()
+                    .map_err(|e| SamError::Shape(e.to_string()))?;
+
+                let data: Vec<f32> = out_array.iter().copied().collect();
+                Embedding::with_resize_info(data, resize_info)
+            }
+            other => {
+                return Err(SamError::Shape(format!(
+                    "Unexpected encoder input rank: {}. Expected 3 (HWC) or 4 (NCHW).",
+                    other
+                )))
+            }
+        };
+
+        Ok(embedding)
     }
 
     /// Run the decoder for a single point prompt.
@@ -538,10 +633,10 @@ impl SamModel {
                 coords.view().into_dyn()
             } else if lower.contains("point_label") {
                 labels.view().into_dyn()
-            } else if lower.contains("mask_input") {
-                mask_input.view().into_dyn()
             } else if lower.contains("has_mask") {
                 has_mask.view().into_dyn()
+            } else if lower.contains("mask_input") {
+                mask_input.view().into_dyn()
             } else if lower.contains("orig_im") || lower.contains("orig_size") {
                 orig_size.view().into_dyn()
             } else {
@@ -640,14 +735,14 @@ impl SamModel {
     /// 5. Returns a `Vec<Mask>` where each mask ID is `sam-<index>`.
     pub fn segment_everything(
         &mut self,
-        image: &RasterImage,
+        _image: &RasterImage,
         embedding: &Embedding,
         opts: &AutoMaskOptions,
     ) -> Result<Vec<Mask>, SamError> {
-        let ow = image.width;
-        let oh = image.height;
-        let max_dim = ow.max(oh).max(1);
-        let scale = 1024.0 / max_dim as f32;
+        let ri = &embedding.resize_info;
+        let ow = ri.original_width;
+        let oh = ri.original_height;
+        let scale = ri.scale;
 
         let points = generate_grid(ow, oh, opts.points_per_side, scale);
         let orig_size = (oh as f32, ow as f32);
@@ -704,17 +799,9 @@ impl SamModel {
         let mask_w = mask_dims.1;
         let mask_h = mask_dims.0;
 
-        let resize_info = ResizeInfo {
-            original_width: ow,
-            original_height: oh,
-            scale,
-            resized_width: ((ow as f32 * scale).round().max(1.0)) as u32,
-            resized_height: ((oh as f32 * scale).round().max(1.0)) as u32,
-        };
-
         let mut result = Vec::with_capacity(kept.len());
         for (i, (binary_mask, _score)) in kept.into_iter().enumerate() {
-            let upsampled = upsample_mask(&binary_mask, mask_w, mask_h, ow, oh, &resize_info);
+            let upsampled = upsample_mask(&binary_mask, mask_w, mask_h, ow, oh, ri);
             result.push(Mask {
                 id: format!("sam-{}", i),
                 width: ow,
@@ -1010,6 +1097,83 @@ mod tests {
         let up = upsample_mask(&mask, 1024, 1024, 512, 512, &info);
         assert_eq!(up.len(), 512 * 512);
         assert_eq!(up[0], 255);
+    }
+
+    // ── image_to_hwc_f32 tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_hwc_produces_correct_shape() {
+        let image = RasterImage {
+            width: 30,
+            height: 20,
+            pixels: vec![128u8; 30 * 20 * 4],
+        };
+        let (data, info) = image_to_hwc_f32(&image);
+        assert_eq!(data.len(), 30 * 20 * 3);
+        assert_eq!(info.original_width, 30);
+        assert_eq!(info.original_height, 20);
+        assert!((info.scale - 1.0).abs() < 1e-6);
+        assert_eq!(info.resized_width, 30);
+        assert_eq!(info.resized_height, 20);
+    }
+
+    #[test]
+    fn test_hwc_pixel_values_raw_rgb_no_normalization() {
+        // image width=3, height=2 → 6 RGBA pixels = 24 bytes
+        let mut pixels = vec![0u8; 2 * 3 * 4];
+        // pixel (row=0, col=0): R=10 G=20 B=30
+        pixels[0] = 10;
+        pixels[1] = 20;
+        pixels[2] = 30;
+        pixels[3] = 255;
+        // pixel (row=0, col=1): R=100 G=150 B=200
+        pixels[4] = 100;
+        pixels[5] = 150;
+        pixels[6] = 200;
+        pixels[7] = 255;
+        // pixel (row=1, col=0): R=200 G=100 B=50  (stride = 3*4 = 12)
+        pixels[12] = 200;
+        pixels[13] = 100;
+        pixels[14] = 50;
+        pixels[15] = 255;
+        let image = RasterImage {
+            width: 3,
+            height: 2,
+            pixels,
+        };
+        let (data, _) = image_to_hwc_f32(&image);
+        // HWC layout: row 0 [RGB RGB RGB], row 1 [RGB RGB RGB]
+        // pixel (0,0): R=10, G=20, B=30
+        assert!((data[0] - 10.0).abs() < 1e-5);
+        assert!((data[1] - 20.0).abs() < 1e-5);
+        assert!((data[2] - 30.0).abs() < 1e-5);
+        // pixel (0,1): R=100, G=150, B=200
+        assert!((data[3] - 100.0).abs() < 1e-5);
+        assert!((data[4] - 150.0).abs() < 1e-5);
+        assert!((data[5] - 200.0).abs() < 1e-5);
+        // pixel (1,0): R=200, G=100, B=50 (row 1 starts at index 3*cols = 9)
+        assert!((data[9] - 200.0).abs() < 1e-5);
+        assert!((data[10] - 100.0).abs() < 1e-5);
+        assert!((data[11] - 50.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_hwc_alpha_channel_ignored() {
+        let mut pixels = vec![0u8; 4];
+        pixels[0] = 42;
+        pixels[1] = 43;
+        pixels[2] = 44;
+        pixels[3] = 0; // fully transparent, should be ignored
+        let image = RasterImage {
+            width: 1,
+            height: 1,
+            pixels,
+        };
+        let (data, _) = image_to_hwc_f32(&image);
+        assert_eq!(data.len(), 3);
+        assert!((data[0] - 42.0).abs() < 1e-5);
+        assert!((data[1] - 43.0).abs() < 1e-5);
+        assert!((data[2] - 44.0).abs() < 1e-5);
     }
 
     // ── AutoMaskOptions defaults ─────────────────────────────────────────
