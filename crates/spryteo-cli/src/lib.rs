@@ -374,24 +374,6 @@ pub fn format_meta_report(meta: &spryteo_core::Meta) -> String {
     out
 }
 
-/// Extract `id="..."` attribute values from SVG markup, in document order.
-/// Not a full XML parser -- sufficient for re-deriving a summary when no
-/// `Meta` sidecar is available (`spryteo inspect` without `--meta`).
-fn extract_ids(svg: &str) -> Vec<&str> {
-    let mut ids = Vec::new();
-    let mut rest = svg;
-    while let Some(start) = rest.find("id=\"") {
-        rest = &rest[start + 4..];
-        if let Some(end) = rest.find('"') {
-            ids.push(&rest[..end]);
-            rest = &rest[end + 1..];
-        } else {
-            break;
-        }
-    }
-    ids
-}
-
 fn extract_view_box(svg: &str) -> Option<&str> {
     let start = svg.find("viewBox=\"")? + "viewBox=\"".len();
     let rest = &svg[start..];
@@ -399,18 +381,329 @@ fn extract_view_box(svg: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
-/// Re-derive a lightweight summary directly from SVG markup, for
-/// `spryteo inspect` when no `--meta` sidecar path is given. Cannot recover
-/// centroid/area/group tree (never embedded in the markup itself), only
-/// element counts, IDs, and viewBox.
+/// Information about a single shape, re-derived from SVG markup.
+struct ParsedShape {
+    id: Option<String>,
+    parent_group: Option<String>,
+    fill: Option<String>,
+    bbox: Option<(f64, f64, f64, f64)>,
+    centroid: Option<(f64, f64)>,
+}
+
+/// Extract the value of `name="..."` from inside an SVG tag (without the
+/// leading `<` and tag name — the attribute portion only).
+///
+/// Requires the match to be preceded by a space or be at position 0, so
+/// that searching for `d="` does not falsely match inside `id="s-1"`.
+fn attr_value<'a>(content: &'a str, name: &str) -> Option<&'a str> {
+    let pattern = format!("{}=\"", name);
+    let bytes = content.as_bytes();
+    let mut search_start = 0;
+    loop {
+        let remainder = &content[search_start..];
+        let rel = remainder.find(&pattern)?;
+        let abs = search_start + rel;
+        if abs == 0 || bytes[abs - 1] == b' ' {
+            let value_start = abs + pattern.len();
+            let rest = &content[value_start..];
+            let end = rest.find('"')?;
+            return Some(&rest[..end]);
+        }
+        search_start = abs + 1;
+    }
+}
+
+/// Parse `translate(x, y)` from a `transform` attribute value.
+fn parse_translate(transform: Option<&str>) -> (f64, f64) {
+    let t = match transform {
+        Some(s) => s,
+        None => return (0.0, 0.0),
+    };
+    if let Some(args) = t.strip_prefix("translate(") {
+        if let Some(end) = args.find(')') {
+            let coords = &args[..end];
+            if let Some(comma_pos) = coords.find(',') {
+                let x = coords[..comma_pos].trim().parse().unwrap_or(0.0);
+                let y = coords[comma_pos + 1..].trim().parse().unwrap_or(0.0);
+                return (x, y);
+            }
+            // fallback: space-separated
+            let mut parts = coords.split_whitespace();
+            let x = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            let y = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            return (x, y);
+        }
+    }
+    (0.0, 0.0)
+}
+
+/// Compute the axis-aligned bounding box of a path's `d` attribute string.
+///
+/// Parses M, L, C, A, and Z commands.  For cubic Beziers (C), control-point
+/// coordinates are included so the returned bbox is a safe over-estimate
+/// (never smaller than the true curve extent).  A tight Bezier bbox
+/// requires derivative root-finding and is out of scope for this lightweight
+/// re-derivation.
+fn parse_path_d(d: &str) -> (f64, f64, f64, f64) {
+    let mut x_min = f64::INFINITY;
+    let mut x_max = f64::NEG_INFINITY;
+    let mut y_min = f64::INFINITY;
+    let mut y_max = f64::NEG_INFINITY;
+
+    let mut update = |x: f64, y: f64| {
+        if x < x_min {
+            x_min = x;
+        }
+        if x > x_max {
+            x_max = x;
+        }
+        if y < y_min {
+            y_min = y;
+        }
+        if y > y_max {
+            y_max = y;
+        }
+    };
+
+    let tokens: Vec<&str> = d.split_whitespace().collect();
+    let mut i = 0;
+    let mut cmd = ' ';
+
+    while i < tokens.len() {
+        let token = tokens[i];
+        let first = token.chars().next().unwrap_or(' ');
+        if first.is_ascii_alphabetic() {
+            cmd = first;
+            i += 1;
+            continue;
+        }
+        match cmd {
+            'M' | 'L' | 'm' | 'l' => {
+                if i + 1 < tokens.len() {
+                    if let (Ok(x), Ok(y)) = (tokens[i].parse(), tokens[i + 1].parse()) {
+                        update(x, y);
+                    }
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            'C' | 'c' => {
+                if i + 5 < tokens.len() {
+                    for j in 0..3 {
+                        if let (Ok(x), Ok(y)) =
+                            (tokens[i + j * 2].parse(), tokens[i + j * 2 + 1].parse())
+                        {
+                            update(x, y);
+                        }
+                    }
+                    i += 6;
+                } else {
+                    i += 1;
+                }
+            }
+            'A' | 'a' => {
+                if i + 6 < tokens.len() {
+                    if let (Ok(x), Ok(y)) = (tokens[i + 5].parse(), tokens[i + 6].parse()) {
+                        update(x, y);
+                    }
+                    i += 7;
+                } else {
+                    i += 1;
+                }
+            }
+            'Z' | 'z' => {
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    if x_min.is_infinite() {
+        x_min = 0.0;
+    }
+    if x_max.is_infinite() {
+        x_max = 0.0;
+    }
+    if y_min.is_infinite() {
+        y_min = 0.0;
+    }
+    if y_max.is_infinite() {
+        y_max = 0.0;
+    }
+
+    (x_min, y_min, x_max, y_max)
+}
+
+/// Walk the SVG text once, linearly, and for every shape element (circle,
+/// ellipse, rect, path) in document order extract id, parent group, fill,
+/// bounding box, and bbox-centroid approximation.
+///
+/// Group nesting is tracked via a stack pushed/popped on `<g>` / `</g>`.
+/// The centoid reported here is a bbox-centre approximation, NOT the true
+/// area-weighted geometric centroid (which would require integrating the
+/// fitted path/primitive geometry).  Area is not computed.
+fn parse_svg_shapes(svg: &str) -> Vec<ParsedShape> {
+    let mut shapes = Vec::new();
+    let mut group_stack: Vec<String> = Vec::new();
+    let chars: Vec<char> = svg.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+
+    while i < n {
+        if chars[i] != '<' {
+            i += 1;
+            continue;
+        }
+        i += 1; // skip '<'
+        if i >= n {
+            break;
+        }
+
+        // Closing tag: </g>
+        if chars[i] == '/' {
+            i += 1;
+            let tag_start = i;
+            while i < n && chars[i] != '>' {
+                i += 1;
+            }
+            let tag: String = chars[tag_start..i].iter().collect();
+            let tag_name = tag
+                .split(|c: char| c.is_whitespace() || c == '>')
+                .next()
+                .unwrap_or("");
+            if tag_name == "g" {
+                group_stack.pop();
+            }
+            if i < n {
+                i += 1;
+            }
+            continue;
+        }
+
+        // Read tag name
+        let tag_start = i;
+        while i < n && !chars[i].is_whitespace() && chars[i] != '>' && chars[i] != '/' {
+            i += 1;
+        }
+        let tag_name: String = chars[tag_start..i].iter().collect();
+
+        // Read rest of the tag (attributes) until '>'
+        let attr_start = i;
+        while i < n && chars[i] != '>' {
+            i += 1;
+        }
+        let attr_content: String = chars[attr_start..i].iter().collect();
+        if i < n {
+            i += 1;
+        } // skip '>'
+
+        match tag_name.as_str() {
+            "g" => {
+                let gid = attr_value(&attr_content, "id").map(|s| s.to_string());
+                group_stack.push(gid.unwrap_or_default());
+            }
+            "circle" | "ellipse" | "rect" | "path" => {
+                let sid = attr_value(&attr_content, "id").map(|s| s.to_string());
+                let fill = attr_value(&attr_content, "fill").map(|s| s.to_string());
+                let transform = attr_value(&attr_content, "transform");
+                let translate = parse_translate(transform);
+                let parent_group = group_stack.last().filter(|g| !g.is_empty()).cloned();
+
+                let bbox = match tag_name.as_str() {
+                    "circle" => {
+                        let cx: f64 = attr_value(&attr_content, "cx")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let cy: f64 = attr_value(&attr_content, "cy")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let r: f64 = attr_value(&attr_content, "r")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        Some((cx - r, cy - r, cx + r, cy + r))
+                    }
+                    "ellipse" => {
+                        let cx: f64 = attr_value(&attr_content, "cx")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let cy: f64 = attr_value(&attr_content, "cy")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let rx: f64 = attr_value(&attr_content, "rx")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let ry: f64 = attr_value(&attr_content, "ry")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        Some((cx - rx, cy - ry, cx + rx, cy + ry))
+                    }
+                    "rect" => {
+                        let x: f64 = attr_value(&attr_content, "x")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let y: f64 = attr_value(&attr_content, "y")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let w: f64 = attr_value(&attr_content, "width")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let h: f64 = attr_value(&attr_content, "height")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        Some((x, y, x + w, y + h))
+                    }
+                    "path" => attr_value(&attr_content, "d").map(parse_path_d),
+                    _ => None,
+                };
+
+                let bbox = bbox.map(|(x1, y1, x2, y2)| {
+                    (
+                        x1 + translate.0,
+                        y1 + translate.1,
+                        x2 + translate.0,
+                        y2 + translate.1,
+                    )
+                });
+
+                let centroid = bbox.map(|(x1, y1, x2, y2)| ((x1 + x2) / 2.0, (y1 + y2) / 2.0));
+
+                shapes.push(ParsedShape {
+                    id: sid,
+                    parent_group,
+                    fill,
+                    bbox,
+                    centroid,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    shapes
+}
+
+/// Re-derive a per-shape summary directly from SVG markup, for
+/// `spryteo inspect` when no `--meta` sidecar path is given.
+///
+/// bbox, fill, and immediate-parent-group membership are mechanically
+/// recovered from the shape attributes and group nesting in the markup.
+/// The centroid shown is a bbox-centre approximation (not the true
+/// area-weighted centroid).  Area and exact draw-order (z-order) are not
+/// recoverable without the --meta sidecar (they require path-geometry
+/// integration and the internal per-layer stacking order).
 pub fn derive_svg_summary(svg: &str) -> String {
     let path_count = svg.matches("<path").count();
     let group_count = svg.matches("<g ").count() + svg.matches("<g>").count();
-    let ids = extract_ids(svg);
     let view_box = extract_view_box(svg).unwrap_or("(none)");
+    let shapes = parse_svg_shapes(svg);
 
     let mut out = String::new();
-    out.push_str("no --meta sidecar given; showing values re-derived from SVG markup only\n");
+    out.push_str("no --meta sidecar given; bbox/fill/group re-derived from SVG markup\n");
+    out.push_str("(centroid is a bbox-centre approximation; area and true draw-order are not\n");
+    out.push_str(" recoverable without --meta)\n");
     out.push_str(&format!(
         "paths={} groups={} bytes={} viewBox={}\n\n",
         path_count,
@@ -418,7 +711,32 @@ pub fn derive_svg_summary(svg: &str) -> String {
         svg.len(),
         view_box
     ));
-    out.push_str(&format!("ids ({}): {}\n", ids.len(), ids.join(", ")));
+
+    for s in &shapes {
+        let id_str = s.id.as_deref().unwrap_or("-");
+        let group_str = s.parent_group.as_deref().unwrap_or("-");
+        let fill_str = s.fill.as_deref().unwrap_or("-");
+        match s.bbox {
+            Some((x1, y1, x2, y2)) => {
+                let (cx, cy) = s.centroid.unwrap_or((0.0, 0.0));
+                out.push_str(&format!(
+                    "{:<16} group={:<12} fill={:<9} bbox=({:.1},{:.1},{:.1},{:.1}) centroid=({:.1},{:.1})\n",
+                    id_str, group_str, fill_str, x1, y1, x2, y2, cx, cy,
+                ));
+            }
+            None => {
+                out.push_str(&format!(
+                    "{:<16} group={:<12} fill={:<9} bbox=- centroid=-\n",
+                    id_str, group_str, fill_str,
+                ));
+            }
+        }
+    }
+
+    if shapes.is_empty() {
+        out.push_str("(no shapes found)\n");
+    }
+
     out
 }
 
@@ -769,13 +1087,15 @@ mod tests {
 
     #[test]
     fn test_derive_svg_summary() {
-        let svg = r#"<svg viewBox="0 0 24 24"><g id="g-root"><path id="s-1" d="M0 0"/></g></svg>"#;
+        let svg =
+            r#"<svg viewBox="0 0 24 24"><g id="g-root"><path id="s-1" d="M 0.0 0.0"/></g></svg>"#;
         let summary = derive_svg_summary(svg);
         assert!(summary.contains("paths=1"));
         assert!(summary.contains("groups=1"));
         assert!(summary.contains("viewBox=0 0 24 24"));
         assert!(summary.contains("g-root"));
         assert!(summary.contains("s-1"));
+        assert!(summary.contains("bbox=(0.0,0.0,0.0,0.0)"));
     }
 
     #[test]
@@ -783,7 +1103,113 @@ mod tests {
         let svg = "<svg></svg>";
         let summary = derive_svg_summary(svg);
         assert!(summary.contains("paths=0"));
-        assert!(summary.contains("ids (0):"));
+        assert!(summary.contains("(no shapes found)"));
+    }
+
+    #[test]
+    fn test_derive_svg_summary_circle_and_path() {
+        let svg = concat!(
+            r#"<svg viewBox="0 0 100 100">"#,
+            r##"<circle cx="50.0" cy="50.0" r="10.0" id="s-1" fill="#ff0000"/>"##,
+            r##"<path d="M 0.0 0.0 L 20.0 0.0 L 20.0 20.0 L 0.0 20.0 Z" id="s-2" fill="#00ff00"/>"##,
+            r#"</svg>"#,
+        );
+        let summary = derive_svg_summary(svg);
+        assert!(summary.contains("s-1"));
+        assert!(summary.contains("s-2"));
+        assert!(summary.contains("bbox=(40.0,40.0,60.0,60.0)"));
+        assert!(summary.contains("bbox=(0.0,0.0,20.0,20.0)"));
+    }
+
+    #[test]
+    fn test_derive_svg_summary_transform() {
+        let svg = concat!(
+            r#"<svg viewBox="0 0 100 100">"#,
+            r##"<circle cx="5.0" cy="5.0" r="5.0" id="s-1" fill="#ff0000" transform="translate(10.0, 20.0)"/>"##,
+            r#"</svg>"#,
+        );
+        let summary = derive_svg_summary(svg);
+        // Without transform: bbox=(0.0,0.0,10.0,10.0); with translate(10,20): (10,20,20,30)
+        assert!(summary.contains("bbox=(10.0,20.0,20.0,30.0)"));
+    }
+
+    #[test]
+    fn test_derive_svg_summary_nested_groups() {
+        let svg = concat!(
+            r#"<svg viewBox="0 0 100 100">"#,
+            r#"<g id="g-outer"><g id="g-inner"><path id="s-1" d="M 0.0 0.0 L 10.0 0.0 L 10.0 10.0 Z"/></g></g>"#,
+            r#"</svg>"#,
+        );
+        let summary = derive_svg_summary(svg);
+        assert!(
+            summary.contains("group=g-inner"),
+            "expected s-1's parent group to be g-inner, got: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn test_derive_svg_summary_cubic_bezier_bbox_includes_control_points() {
+        let svg = concat!(
+            r#"<svg viewBox="0 0 100 100">"#,
+            r##"<path id="s-1" d="M 0.0 0.0 C 0.0 100.0 100.0 100.0 100.0 0.0" fill="#ff0000"/>"##,
+            r#"</svg>"#,
+        );
+        let summary = derive_svg_summary(svg);
+        assert!(
+            summary.contains("bbox=(0.0,0.0,100.0,100.0)"),
+            "expected control-point-inclusive bbox, got: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn test_derive_svg_summary_id_style_none() {
+        let svg = concat!(
+            r#"<svg viewBox="0 0 100 100">"#,
+            r##"<circle cx="50.0" cy="50.0" r="10.0" fill="#ff0000"/>"##,
+            r##"<path d="M 0.0 0.0 L 20.0 0.0 L 20.0 20.0 Z" fill="#00ff00"/>"##,
+            r#"</svg>"#,
+        );
+        let summary = derive_svg_summary(svg);
+        // Every data line should start with '-' (no id), not with 's-' or similar
+        for line in summary.lines().filter(|l| l.contains("bbox=")) {
+            assert!(
+                line.starts_with('-'),
+                "expected '-' for id column in line: {}",
+                line
+            );
+        }
+        assert!(summary.contains("fill=#ff0000"));
+        assert!(summary.contains("fill=#00ff00"));
+        assert!(summary.contains("bbox=(40.0,40.0,60.0,60.0)"));
+        assert!(summary.contains("bbox=(0.0,0.0,20.0,20.0)"));
+    }
+
+    #[test]
+    fn test_derive_svg_summary_fill_none_current_color_gradient() {
+        let svg = concat!(
+            r#"<svg viewBox="0 0 100 100">"#,
+            r#"<path id="s-none" d="M 0 0" fill="none"/>"#,
+            r#"<path id="s-cc" d="M 10 10" fill="currentColor"/>"#,
+            r#"<path id="s-grad" d="M 20 20" fill="url(#grad-s-0)"/>"#,
+            r#"</svg>"#,
+        );
+        let summary = derive_svg_summary(svg);
+        assert!(summary.contains("fill=none"));
+        assert!(summary.contains("fill=currentColor"));
+        assert!(summary.contains("fill=url(#grad-s-0)"));
+    }
+
+    #[test]
+    fn test_parse_path_d_arc_endpoint() {
+        let svg = concat!(
+            r#"<svg viewBox="0 0 100 100">"#,
+            r##"<path id="s-arc" d="M 0.0 0.0 A 5.0 5.0 0 1 0 10.0 10.0" fill="#ff0000"/>"##,
+            r#"</svg>"#,
+        );
+        let summary = derive_svg_summary(svg);
+        assert!(summary.contains("bbox=(0.0,0.0,10.0,10.0)"));
     }
 
     #[test]
