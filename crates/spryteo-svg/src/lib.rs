@@ -335,21 +335,20 @@ fn escape_html(s: &str) -> String {
     escaped
 }
 
-fn collect_gradients(scene: &SceneGraph) -> Vec<(String, &Fill)> {
-    let mut grads = Vec::new();
-    for group in &scene.groups {
-        for node in &group.nodes {
-            if let Some(ref fill) = node.fill {
-                match fill {
-                    Fill::LinearGradient { .. } | Fill::RadialGradient { .. } => {
-                        grads.push((node.id.clone(), fill));
-                    }
-                    _ => {}
+fn collect_gradients<'a>(group: &'a Group, grads: &mut Vec<(String, &'a Fill)>) {
+    for node in &group.nodes {
+        if let Some(ref fill) = node.fill {
+            match fill {
+                Fill::LinearGradient { .. } | Fill::RadialGradient { .. } => {
+                    grads.push((node.id.clone(), fill));
                 }
+                _ => {}
             }
         }
     }
-    grads
+    for child in &group.groups {
+        collect_gradients(child, grads);
+    }
 }
 
 fn serialize_defs(grads: &[(String, &Fill)], opts: &ConvertOptions) -> String {
@@ -479,6 +478,292 @@ fn analyze_scene_fills(scene: &SceneGraph) -> (Option<Rgb>, bool) {
     }
 }
 
+/// Recursively serializes a group and its children (nodes then nested groups)
+/// into the output buffer, respecting indentation depth for pretty mode.
+#[allow(clippy::too_many_arguments)]
+fn serialize_group(
+    out: &mut String,
+    group: &Group,
+    depth: usize,
+    precision: usize,
+    pretty: bool,
+    fill_rule_attr: &str,
+    current_color_applied: bool,
+    opts: &ConvertOptions,
+) {
+    let g_indent = if pretty {
+        "  ".repeat(depth + 1)
+    } else {
+        String::new()
+    };
+    let mut g_attrs = String::new();
+    if !matches!(opts.id_style, IdStyle::None) && !group.id.is_empty() {
+        write!(g_attrs, " id=\"{}\"", escape_html(&group.id)).unwrap();
+    }
+    if pretty {
+        writeln!(out, "{}<g{}>", g_indent, g_attrs).unwrap();
+    } else {
+        write!(out, "<g{}>", g_attrs).unwrap();
+    }
+
+    for node in &group.nodes {
+        let indent = if pretty {
+            "  ".repeat(depth + 2)
+        } else {
+            String::new()
+        };
+
+        let mut node_attrs = String::new();
+        if !matches!(opts.id_style, IdStyle::None) && !node.id.is_empty() {
+            write!(node_attrs, " id=\"{}\"", escape_html(&node.id)).unwrap();
+        }
+
+        match &node.fill {
+            Some(Fill::Solid(rgb)) => {
+                if current_color_applied {
+                    write!(node_attrs, " fill=\"currentColor\"").unwrap();
+                } else {
+                    write!(
+                        node_attrs,
+                        " fill=\"#{:02x}{:02x}{:02x}\"",
+                        rgb.r, rgb.g, rgb.b
+                    )
+                    .unwrap();
+                }
+            }
+            Some(Fill::LinearGradient { .. }) | Some(Fill::RadialGradient { .. }) => {
+                let grad_id = format!("grad-{}", node.id);
+                write!(node_attrs, " fill=\"url(#{})\"", escape_html(&grad_id)).unwrap();
+            }
+            None => {
+                write!(node_attrs, " fill=\"none\"").unwrap();
+            }
+        }
+
+        let tx = node.transform.translate_x;
+        let ty = node.transform.translate_y;
+        if tx != 0.0 || ty != 0.0 {
+            write!(
+                node_attrs,
+                " transform=\"translate({}, {})\"",
+                format_coord(tx, precision),
+                format_coord(ty, precision)
+            )
+            .unwrap();
+        }
+
+        match &node.shape {
+            Shape::Primitive(prim) => match prim {
+                Primitive::Circle { cx, cy, r } => {
+                    if pretty {
+                        writeln!(
+                            out,
+                            "{}<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{} />",
+                            indent,
+                            format_coord(*cx, precision),
+                            format_coord(*cy, precision),
+                            format_coord(*r, precision),
+                            node_attrs
+                        )
+                        .unwrap();
+                    } else {
+                        write!(
+                            out,
+                            "<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{}/>",
+                            format_coord(*cx, precision),
+                            format_coord(*cy, precision),
+                            format_coord(*r, precision),
+                            node_attrs
+                        )
+                        .unwrap();
+                    }
+                }
+                Primitive::Ellipse {
+                    cx,
+                    cy,
+                    rx,
+                    ry,
+                    rotation: _,
+                } => {
+                    let rot_attr = String::new();
+                    if pretty {
+                        writeln!(
+                            out,
+                            "{}<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{} />",
+                            indent,
+                            format_coord(*cx, precision),
+                            format_coord(*cy, precision),
+                            format_coord(*rx, precision),
+                            format_coord(*ry, precision),
+                            rot_attr,
+                            node_attrs
+                        )
+                        .unwrap();
+                    } else {
+                        write!(
+                            out,
+                            "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{}/>",
+                            format_coord(*cx, precision),
+                            format_coord(*cy, precision),
+                            format_coord(*rx, precision),
+                            format_coord(*ry, precision),
+                            rot_attr,
+                            node_attrs
+                        )
+                        .unwrap();
+                    }
+                }
+                Primitive::Rect {
+                    x,
+                    y,
+                    width,
+                    height,
+                    rx,
+                    ry,
+                } => {
+                    let mut rx_ry_attrs = String::new();
+                    if let Some(val_rx) = rx {
+                        write!(rx_ry_attrs, " rx=\"{}\"", format_coord(*val_rx, precision))
+                            .unwrap();
+                    }
+                    if let Some(val_ry) = ry {
+                        write!(rx_ry_attrs, " ry=\"{}\"", format_coord(*val_ry, precision))
+                            .unwrap();
+                    }
+                    if pretty {
+                        writeln!(
+                            out,
+                            "{}<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{} />",
+                            indent,
+                            format_coord(*x, precision),
+                            format_coord(*y, precision),
+                            format_coord(*width, precision),
+                            format_coord(*height, precision),
+                            rx_ry_attrs,
+                            node_attrs
+                        )
+                        .unwrap();
+                    } else {
+                        write!(
+                            out,
+                            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{}/>",
+                            format_coord(*x, precision),
+                            format_coord(*y, precision),
+                            format_coord(*width, precision),
+                            format_coord(*height, precision),
+                            rx_ry_attrs,
+                            node_attrs
+                        )
+                        .unwrap();
+                    }
+                }
+                Primitive::Arc {
+                    cx,
+                    cy,
+                    rx,
+                    ry,
+                    start_angle,
+                    end_angle,
+                    rotation,
+                } => {
+                    let cx = *cx;
+                    let cy = *cy;
+                    let rx = *rx;
+                    let ry = *ry;
+                    let start_angle = *start_angle;
+                    let end_angle = *end_angle;
+                    let rot = *rotation;
+
+                    let point_on_ellipse = |angle: f64| -> (f64, f64) {
+                        let x_local = rx * angle.cos();
+                        let y_local = ry * angle.sin();
+                        let x_rot = x_local * rot.cos() - y_local * rot.sin();
+                        let y_rot = x_local * rot.sin() + y_local * rot.cos();
+                        (cx + x_rot, cy + y_rot)
+                    };
+
+                    let (x1, y1) = point_on_ellipse(start_angle);
+                    let (x2, y2) = point_on_ellipse(end_angle);
+
+                    let angle_diff = (end_angle - start_angle).abs();
+                    let large_arc_flag = if angle_diff > std::f64::consts::PI {
+                        1
+                    } else {
+                        0
+                    };
+                    let sweep_flag = if end_angle > start_angle { 1 } else { 0 };
+
+                    let d_str = format!(
+                        "M {} {} A {} {} {} {} {} {} {}",
+                        format_coord(x1, precision),
+                        format_coord(y1, precision),
+                        format_coord(rx, precision),
+                        format_coord(ry, precision),
+                        format_coord(rot.to_degrees(), precision),
+                        large_arc_flag,
+                        sweep_flag,
+                        format_coord(x2, precision),
+                        format_coord(y2, precision)
+                    );
+
+                    if pretty {
+                        writeln!(
+                            out,
+                            "{}<path d=\"{}\" {}=\"evenodd\"{} />",
+                            indent, d_str, fill_rule_attr, node_attrs
+                        )
+                        .unwrap();
+                    } else {
+                        write!(
+                            out,
+                            "<path d=\"{}\" {}=\"evenodd\"{}/>",
+                            d_str, fill_rule_attr, node_attrs
+                        )
+                        .unwrap();
+                    }
+                }
+            },
+            Shape::Path(segments) => {
+                let d_str = format_path_data(segments, precision);
+                if pretty {
+                    writeln!(
+                        out,
+                        "{}<path d=\"{}\" {}=\"evenodd\"{} />",
+                        indent, d_str, fill_rule_attr, node_attrs
+                    )
+                    .unwrap();
+                } else {
+                    write!(
+                        out,
+                        "<path d=\"{}\" {}=\"evenodd\"{}/>",
+                        d_str, fill_rule_attr, node_attrs
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+
+    for child in &group.groups {
+        serialize_group(
+            out,
+            child,
+            depth + 1,
+            precision,
+            pretty,
+            fill_rule_attr,
+            current_color_applied,
+            opts,
+        );
+    }
+
+    if pretty {
+        writeln!(out, "{}</g>", g_indent).unwrap();
+    } else {
+        write!(out, "</g>").unwrap();
+    }
+}
+
 /// Serializes the scene graph into an SVG string according to conversion options.
 fn serialize_svg(
     scene: &SceneGraph,
@@ -511,7 +796,10 @@ fn serialize_svg(
         .unwrap();
     }
 
-    let grads = collect_gradients(scene);
+    let mut grads = Vec::new();
+    for group in &scene.groups {
+        collect_gradients(group, &mut grads);
+    }
     let defs_str = serialize_defs(&grads, opts);
     out.push_str(&defs_str);
 
@@ -533,227 +821,223 @@ fn serialize_svg(
         }
     }
 
-    for group in &scene.groups {
-        let use_group = !matches!(opts.grouping, Grouping::Flat);
+    if matches!(opts.grouping, Grouping::Flat) {
+        for group in &scene.groups {
+            for node in &group.nodes {
+                let indent = if pretty { "  " } else { "" };
 
-        if use_group {
-            let indent = if pretty { "  " } else { "" };
-            let mut g_attrs = String::new();
-            if !matches!(opts.id_style, IdStyle::None) && !group.id.is_empty() {
-                write!(g_attrs, " id=\"{}\"", escape_html(&group.id)).unwrap();
-            }
-            if pretty {
-                writeln!(out, "{}<g{}>", indent, g_attrs).unwrap();
-            } else {
-                write!(out, "<g{}>", g_attrs).unwrap();
-            }
-        }
-
-        for node in &group.nodes {
-            let indent = if pretty {
-                if use_group {
-                    "    "
-                } else {
-                    "  "
+                let mut node_attrs = String::new();
+                if !matches!(opts.id_style, IdStyle::None) && !node.id.is_empty() {
+                    write!(node_attrs, " id=\"{}\"", escape_html(&node.id)).unwrap();
                 }
-            } else {
-                ""
-            };
 
-            let mut node_attrs = String::new();
-            if !matches!(opts.id_style, IdStyle::None) && !node.id.is_empty() {
-                write!(node_attrs, " id=\"{}\"", escape_html(&node.id)).unwrap();
-            }
-
-            match &node.fill {
-                Some(Fill::Solid(rgb)) => {
-                    if current_color_applied {
-                        write!(node_attrs, " fill=\"currentColor\"").unwrap();
-                    } else {
-                        write!(
-                            node_attrs,
-                            " fill=\"#{:02x}{:02x}{:02x}\"",
-                            rgb.r, rgb.g, rgb.b
-                        )
-                        .unwrap();
-                    }
-                }
-                Some(Fill::LinearGradient { .. }) | Some(Fill::RadialGradient { .. }) => {
-                    let grad_id = format!("grad-{}", node.id);
-                    write!(node_attrs, " fill=\"url(#{})\"", escape_html(&grad_id)).unwrap();
-                }
-                None => {
-                    write!(node_attrs, " fill=\"none\"").unwrap();
-                }
-            }
-
-            let tx = node.transform.translate_x;
-            let ty = node.transform.translate_y;
-            if tx != 0.0 || ty != 0.0 {
-                write!(
-                    node_attrs,
-                    " transform=\"translate({}, {})\"",
-                    format_coord(tx, precision),
-                    format_coord(ty, precision)
-                )
-                .unwrap();
-            }
-
-            match &node.shape {
-                Shape::Primitive(prim) => match prim {
-                    Primitive::Circle { cx, cy, r } => {
-                        if pretty {
-                            writeln!(
-                                out,
-                                "{}<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{} />",
-                                indent,
-                                format_coord(*cx, precision),
-                                format_coord(*cy, precision),
-                                format_coord(*r, precision),
-                                node_attrs
-                            )
-                            .unwrap();
+                match &node.fill {
+                    Some(Fill::Solid(rgb)) => {
+                        if current_color_applied {
+                            write!(node_attrs, " fill=\"currentColor\"").unwrap();
                         } else {
                             write!(
-                                out,
-                                "<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{}/>",
-                                format_coord(*cx, precision),
-                                format_coord(*cy, precision),
-                                format_coord(*r, precision),
-                                node_attrs
+                                node_attrs,
+                                " fill=\"#{:02x}{:02x}{:02x}\"",
+                                rgb.r, rgb.g, rgb.b
                             )
                             .unwrap();
                         }
                     }
-                    Primitive::Ellipse {
-                        cx,
-                        cy,
-                        rx,
-                        ry,
-                        rotation: _,
-                    } => {
-                        // Rotation is ignored for now as a documented limitation.
-                        let rot_attr = String::new();
-                        if pretty {
-                            writeln!(
-                                out,
-                                "{}<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{} />",
-                                indent,
-                                format_coord(*cx, precision),
-                                format_coord(*cy, precision),
-                                format_coord(*rx, precision),
-                                format_coord(*ry, precision),
-                                rot_attr,
-                                node_attrs
-                            )
-                            .unwrap();
-                        } else {
-                            write!(
-                                out,
-                                "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{}/>",
-                                format_coord(*cx, precision),
-                                format_coord(*cy, precision),
-                                format_coord(*rx, precision),
-                                format_coord(*ry, precision),
-                                rot_attr,
-                                node_attrs
-                            )
-                            .unwrap();
-                        }
+                    Some(Fill::LinearGradient { .. }) | Some(Fill::RadialGradient { .. }) => {
+                        let grad_id = format!("grad-{}", node.id);
+                        write!(node_attrs, " fill=\"url(#{})\"", escape_html(&grad_id)).unwrap();
                     }
-                    Primitive::Rect {
-                        x,
-                        y,
-                        width,
-                        height,
-                        rx,
-                        ry,
-                    } => {
-                        let mut rx_ry_attrs = String::new();
-                        if let Some(val_rx) = rx {
-                            write!(rx_ry_attrs, " rx=\"{}\"", format_coord(*val_rx, precision))
+                    None => {
+                        write!(node_attrs, " fill=\"none\"").unwrap();
+                    }
+                }
+
+                let tx = node.transform.translate_x;
+                let ty = node.transform.translate_y;
+                if tx != 0.0 || ty != 0.0 {
+                    write!(
+                        node_attrs,
+                        " transform=\"translate({}, {})\"",
+                        format_coord(tx, precision),
+                        format_coord(ty, precision)
+                    )
+                    .unwrap();
+                }
+
+                match &node.shape {
+                    Shape::Primitive(prim) => match prim {
+                        Primitive::Circle { cx, cy, r } => {
+                            if pretty {
+                                writeln!(
+                                    out,
+                                    "{}<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{} />",
+                                    indent,
+                                    format_coord(*cx, precision),
+                                    format_coord(*cy, precision),
+                                    format_coord(*r, precision),
+                                    node_attrs
+                                )
                                 .unwrap();
-                        }
-                        if let Some(val_ry) = ry {
-                            write!(rx_ry_attrs, " ry=\"{}\"", format_coord(*val_ry, precision))
+                            } else {
+                                write!(
+                                    out,
+                                    "<circle cx=\"{}\" cy=\"{}\" r=\"{}\"{}/>",
+                                    format_coord(*cx, precision),
+                                    format_coord(*cy, precision),
+                                    format_coord(*r, precision),
+                                    node_attrs
+                                )
                                 .unwrap();
+                            }
                         }
-                        if pretty {
-                            writeln!(
-                                out,
-                                "{}<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{} />",
-                                indent,
-                                format_coord(*x, precision),
-                                format_coord(*y, precision),
-                                format_coord(*width, precision),
-                                format_coord(*height, precision),
-                                rx_ry_attrs,
-                                node_attrs
-                            )
-                            .unwrap();
-                        } else {
-                            write!(
-                                out,
-                                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{}/>",
-                                format_coord(*x, precision),
-                                format_coord(*y, precision),
-                                format_coord(*width, precision),
-                                format_coord(*height, precision),
-                                rx_ry_attrs,
-                                node_attrs
-                            )
-                            .unwrap();
+                        Primitive::Ellipse {
+                            cx,
+                            cy,
+                            rx,
+                            ry,
+                            rotation: _,
+                        } => {
+                            let rot_attr = String::new();
+                            if pretty {
+                                writeln!(
+                                    out,
+                                    "{}<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{} />",
+                                    indent,
+                                    format_coord(*cx, precision),
+                                    format_coord(*cy, precision),
+                                    format_coord(*rx, precision),
+                                    format_coord(*ry, precision),
+                                    rot_attr,
+                                    node_attrs
+                                )
+                                .unwrap();
+                            } else {
+                                write!(
+                                    out,
+                                    "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{}/>",
+                                    format_coord(*cx, precision),
+                                    format_coord(*cy, precision),
+                                    format_coord(*rx, precision),
+                                    format_coord(*ry, precision),
+                                    rot_attr,
+                                    node_attrs
+                                )
+                                .unwrap();
+                            }
                         }
-                    }
-                    Primitive::Arc {
-                        cx,
-                        cy,
-                        rx,
-                        ry,
-                        start_angle,
-                        end_angle,
-                        rotation,
-                    } => {
-                        let cx = *cx;
-                        let cy = *cy;
-                        let rx = *rx;
-                        let ry = *ry;
-                        let start_angle = *start_angle;
-                        let end_angle = *end_angle;
-                        let rot = *rotation;
+                        Primitive::Rect {
+                            x,
+                            y,
+                            width,
+                            height,
+                            rx,
+                            ry,
+                        } => {
+                            let mut rx_ry_attrs = String::new();
+                            if let Some(val_rx) = rx {
+                                write!(rx_ry_attrs, " rx=\"{}\"", format_coord(*val_rx, precision))
+                                    .unwrap();
+                            }
+                            if let Some(val_ry) = ry {
+                                write!(rx_ry_attrs, " ry=\"{}\"", format_coord(*val_ry, precision))
+                                    .unwrap();
+                            }
+                            if pretty {
+                                writeln!(
+                                    out,
+                                    "{}<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{} />",
+                                    indent,
+                                    format_coord(*x, precision),
+                                    format_coord(*y, precision),
+                                    format_coord(*width, precision),
+                                    format_coord(*height, precision),
+                                    rx_ry_attrs,
+                                    node_attrs
+                                )
+                                .unwrap();
+                            } else {
+                                write!(
+                                    out,
+                                    "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{}/>",
+                                    format_coord(*x, precision),
+                                    format_coord(*y, precision),
+                                    format_coord(*width, precision),
+                                    format_coord(*height, precision),
+                                    rx_ry_attrs,
+                                    node_attrs
+                                )
+                                .unwrap();
+                            }
+                        }
+                        Primitive::Arc {
+                            cx,
+                            cy,
+                            rx,
+                            ry,
+                            start_angle,
+                            end_angle,
+                            rotation,
+                        } => {
+                            let cx = *cx;
+                            let cy = *cy;
+                            let rx = *rx;
+                            let ry = *ry;
+                            let start_angle = *start_angle;
+                            let end_angle = *end_angle;
+                            let rot = *rotation;
 
-                        let point_on_ellipse = |angle: f64| -> (f64, f64) {
-                            let x_local = rx * angle.cos();
-                            let y_local = ry * angle.sin();
-                            let x_rot = x_local * rot.cos() - y_local * rot.sin();
-                            let y_rot = x_local * rot.sin() + y_local * rot.cos();
-                            (cx + x_rot, cy + y_rot)
-                        };
+                            let point_on_ellipse = |angle: f64| -> (f64, f64) {
+                                let x_local = rx * angle.cos();
+                                let y_local = ry * angle.sin();
+                                let x_rot = x_local * rot.cos() - y_local * rot.sin();
+                                let y_rot = x_local * rot.sin() + y_local * rot.cos();
+                                (cx + x_rot, cy + y_rot)
+                            };
 
-                        let (x1, y1) = point_on_ellipse(start_angle);
-                        let (x2, y2) = point_on_ellipse(end_angle);
+                            let (x1, y1) = point_on_ellipse(start_angle);
+                            let (x2, y2) = point_on_ellipse(end_angle);
 
-                        let angle_diff = (end_angle - start_angle).abs();
-                        let large_arc_flag = if angle_diff > std::f64::consts::PI {
-                            1
-                        } else {
-                            0
-                        };
-                        let sweep_flag = if end_angle > start_angle { 1 } else { 0 };
+                            let angle_diff = (end_angle - start_angle).abs();
+                            let large_arc_flag = if angle_diff > std::f64::consts::PI {
+                                1
+                            } else {
+                                0
+                            };
+                            let sweep_flag = if end_angle > start_angle { 1 } else { 0 };
 
-                        let d_str = format!(
-                            "M {} {} A {} {} {} {} {} {} {}",
-                            format_coord(x1, precision),
-                            format_coord(y1, precision),
-                            format_coord(rx, precision),
-                            format_coord(ry, precision),
-                            format_coord(rot.to_degrees(), precision),
-                            large_arc_flag,
-                            sweep_flag,
-                            format_coord(x2, precision),
-                            format_coord(y2, precision)
-                        );
+                            let d_str = format!(
+                                "M {} {} A {} {} {} {} {} {} {}",
+                                format_coord(x1, precision),
+                                format_coord(y1, precision),
+                                format_coord(rx, precision),
+                                format_coord(ry, precision),
+                                format_coord(rot.to_degrees(), precision),
+                                large_arc_flag,
+                                sweep_flag,
+                                format_coord(x2, precision),
+                                format_coord(y2, precision)
+                            );
 
+                            if pretty {
+                                writeln!(
+                                    out,
+                                    "{}<path d=\"{}\" {}=\"evenodd\"{} />",
+                                    indent, d_str, fill_rule_attr, node_attrs
+                                )
+                                .unwrap();
+                            } else {
+                                write!(
+                                    out,
+                                    "<path d=\"{}\" {}=\"evenodd\"{}/>",
+                                    d_str, fill_rule_attr, node_attrs
+                                )
+                                .unwrap();
+                            }
+                        }
+                    },
+                    Shape::Path(segments) => {
+                        let d_str = format_path_data(segments, precision);
                         if pretty {
                             writeln!(
                                 out,
@@ -770,35 +1054,21 @@ fn serialize_svg(
                             .unwrap();
                         }
                     }
-                },
-                Shape::Path(segments) => {
-                    let d_str = format_path_data(segments, precision);
-                    if pretty {
-                        writeln!(
-                            out,
-                            "{}<path d=\"{}\" {}=\"evenodd\"{} />",
-                            indent, d_str, fill_rule_attr, node_attrs
-                        )
-                        .unwrap();
-                    } else {
-                        write!(
-                            out,
-                            "<path d=\"{}\" {}=\"evenodd\"{}/>",
-                            d_str, fill_rule_attr, node_attrs
-                        )
-                        .unwrap();
-                    }
                 }
             }
         }
-
-        if use_group {
-            let indent = if pretty { "  " } else { "" };
-            if pretty {
-                writeln!(out, "{}</g>", indent).unwrap();
-            } else {
-                write!(out, "</g>").unwrap();
-            }
+    } else {
+        for group in &scene.groups {
+            serialize_group(
+                &mut out,
+                group,
+                0,
+                precision,
+                pretty,
+                fill_rule_attr,
+                current_color_applied,
+                opts,
+            );
         }
     }
 
@@ -1047,48 +1317,11 @@ pub fn emit_svg(
     opts: &ConvertOptions,
     background_rect_color: Option<Rgb>,
 ) -> ConvertResult {
-    let mut nodes_meta = Vec::new();
-    let mut node_index = 0;
+    let nodes_meta = build_node_metas(scene, opts.arcs);
+
     let mut path_count = 0;
-
     for group in &scene.groups {
-        for node in &group.nodes {
-            let (rel_bbox, rel_centroid, area) = get_shape_geom(&node.shape, opts.arcs);
-
-            let tx = node.transform.translate_x;
-            let ty = node.transform.translate_y;
-
-            let bbox = Bbox {
-                x_min: rel_bbox.x_min + tx,
-                x_max: rel_bbox.x_max + tx,
-                y_min: rel_bbox.y_min + ty,
-                y_max: rel_bbox.y_max + ty,
-            };
-
-            let centroid = (rel_centroid.0 + tx, rel_centroid.1 + ty);
-
-            let is_path = match &node.shape {
-                Shape::Path(_) => true,
-                Shape::Primitive(Primitive::Arc { .. }) => !opts.arcs,
-                _ => false,
-            };
-            if is_path {
-                path_count += 1;
-            }
-
-            nodes_meta.push(NodeMeta {
-                id: node.id.clone(),
-                bbox,
-                centroid,
-                area,
-                fill: get_representative_color(&node.fill),
-                group: group.id.clone(),
-                z_order: node_index,
-                suggested_draw_order: node_index,
-            });
-
-            node_index += 1;
-        }
+        count_paths_recursive(group, opts.arcs, &mut path_count);
     }
 
     let (_target_color, current_color_applied) = if opts.current_color {
@@ -1108,7 +1341,7 @@ pub fn emit_svg(
     let byte_count = svg.len();
 
     let stats = Stats {
-        node_count: node_index,
+        node_count: nodes_meta.len(),
         path_count,
         byte_count,
     };
@@ -1120,6 +1353,79 @@ pub fn emit_svg(
     };
 
     ConvertResult { svg, meta }
+}
+
+/// Walks the scene depth-first in document order and builds `NodeMeta` for every node.
+///
+/// For each group, first its `nodes` are processed, then its `groups` are
+/// recursed into.  Every node's `group` field is set to the id of its
+/// *immediate* parent group (not always the top-level group).  The
+/// `z_order` and `suggested_draw_order` are a running document-order index.
+///
+/// For a scene with no nested groups this produces the same `Vec<NodeMeta>`
+/// as the inline loop that `emit_svg` previously used — same order, same
+/// values (including `group` = top-level group id).
+pub fn build_node_metas(scene: &SceneGraph, arcs: bool) -> Vec<NodeMeta> {
+    fn walk_group(
+        group: &Group,
+        arcs: bool,
+        nodes_meta: &mut Vec<NodeMeta>,
+        node_index: &mut usize,
+    ) {
+        for node in &group.nodes {
+            let (rel_bbox, rel_centroid, area) = get_shape_geom(&node.shape, arcs);
+            let tx = node.transform.translate_x;
+            let ty = node.transform.translate_y;
+
+            let bbox = Bbox {
+                x_min: rel_bbox.x_min + tx,
+                x_max: rel_bbox.x_max + tx,
+                y_min: rel_bbox.y_min + ty,
+                y_max: rel_bbox.y_max + ty,
+            };
+
+            let centroid = (rel_centroid.0 + tx, rel_centroid.1 + ty);
+
+            nodes_meta.push(NodeMeta {
+                id: node.id.clone(),
+                bbox,
+                centroid,
+                area,
+                fill: get_representative_color(&node.fill),
+                group: group.id.clone(),
+                z_order: *node_index,
+                suggested_draw_order: *node_index,
+            });
+
+            *node_index += 1;
+        }
+        for child in &group.groups {
+            walk_group(child, arcs, nodes_meta, node_index);
+        }
+    }
+
+    let mut nodes_meta = Vec::new();
+    let mut node_index = 0;
+    for group in &scene.groups {
+        walk_group(group, arcs, &mut nodes_meta, &mut node_index);
+    }
+    nodes_meta
+}
+
+fn count_paths_recursive(group: &Group, arcs: bool, count: &mut usize) {
+    for node in &group.nodes {
+        let is_path = match &node.shape {
+            Shape::Path(_) => true,
+            Shape::Primitive(Primitive::Arc { .. }) => !arcs,
+            _ => false,
+        };
+        if is_path {
+            *count += 1;
+        }
+    }
+    for child in &group.groups {
+        count_paths_recursive(child, arcs, count);
+    }
 }
 
 /// Builds a `SceneGraph` from a `CurveSet` specifically for stroke-mode.
@@ -2643,5 +2949,317 @@ mod tests {
         );
         assert_eq!(scene_dc.groups[0].nodes[0].id, "s-0");
         assert_eq!(scene_dc.groups[1].nodes[0].id, "s-1");
+    }
+
+    #[test]
+    fn test_nested_groups_build_node_metas() {
+        let inner_node = Node {
+            id: "s-inner".to_string(),
+            fill: Some(Fill::Solid(Rgb { r: 255, g: 0, b: 0 })),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 5.0,
+                cy: 5.0,
+                r: 3.0,
+            }),
+        };
+        let outer_node = Node {
+            id: "s-outer".to_string(),
+            fill: Some(Fill::Solid(Rgb { r: 0, g: 0, b: 255 })),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 0.0,
+                cy: 0.0,
+                r: 10.0,
+            }),
+        };
+        let inner_group = Group {
+            id: "g-s-inner".to_string(),
+            nodes: vec![inner_node],
+            groups: vec![],
+        };
+        let outer_group = Group {
+            id: "g-s-outer".to_string(),
+            nodes: vec![outer_node],
+            groups: vec![inner_group],
+        };
+        let scene = SceneGraph {
+            groups: vec![outer_group],
+        };
+
+        let metas = build_node_metas(&scene, false);
+        assert_eq!(metas.len(), 2);
+        assert_eq!(metas[0].id, "s-outer");
+        assert_eq!(metas[0].group, "g-s-outer");
+        assert_eq!(metas[0].z_order, 0);
+        assert_eq!(metas[1].id, "s-inner");
+        assert_eq!(metas[1].group, "g-s-inner");
+        assert_eq!(metas[1].z_order, 1);
+    }
+
+    #[test]
+    fn test_nested_groups_serialization() {
+        let inner_node = Node {
+            id: "s-inner".to_string(),
+            fill: Some(Fill::Solid(Rgb { r: 255, g: 0, b: 0 })),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 5.0,
+                cy: 5.0,
+                r: 3.0,
+            }),
+        };
+        let outer_node = Node {
+            id: "s-outer".to_string(),
+            fill: Some(Fill::Solid(Rgb { r: 0, g: 0, b: 255 })),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 0.0,
+                cy: 0.0,
+                r: 10.0,
+            }),
+        };
+        let inner_group = Group {
+            id: "g-s-inner".to_string(),
+            nodes: vec![inner_node],
+            groups: vec![],
+        };
+        let outer_group = Group {
+            id: "g-s-outer".to_string(),
+            nodes: vec![outer_node],
+            groups: vec![inner_group],
+        };
+        let scene = SceneGraph {
+            groups: vec![outer_group],
+        };
+
+        let opts = make_test_options();
+        let res = emit_svg(&scene, 100, 100, &opts, None);
+        let svg = &res.svg;
+
+        assert!(svg.contains("<g id=\"g-s-outer\">"));
+        assert!(svg.contains("<g id=\"g-s-inner\">"));
+
+        let outer_open = svg.find("<g id=\"g-s-outer\">").unwrap();
+        let inner_open = svg.find("<g id=\"g-s-inner\">").unwrap();
+        let outer_close = svg.rfind("</svg>").unwrap();
+
+        assert!(
+            outer_open < inner_open,
+            "outer group must open before inner"
+        );
+        assert!(
+            inner_open < outer_close,
+            "inner group must close before svg end"
+        );
+
+        let outer_nodes = svg.find("id=\"s-outer\"").unwrap();
+        let _inner_nodes = svg.find("id=\"s-inner\"").unwrap();
+        assert!(
+            outer_open < outer_nodes,
+            "outer node after outer group open"
+        );
+        assert!(outer_nodes < inner_open, "outer node before inner group");
+    }
+
+    #[test]
+    fn test_nested_group_wrapper_no_nodes() {
+        let inner_node = Node {
+            id: "s-leaf".to_string(),
+            fill: Some(Fill::Solid(Rgb { r: 0, g: 255, b: 0 })),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 2.0,
+                cy: 2.0,
+                r: 1.0,
+            }),
+        };
+        let leaf_group = Group {
+            id: "g-s-leaf".to_string(),
+            nodes: vec![inner_node],
+            groups: vec![],
+        };
+        // g-mask wrapper with no nodes, one child group
+        let mask_group = Group {
+            id: "g-mask-A".to_string(),
+            nodes: vec![],
+            groups: vec![leaf_group],
+        };
+        let scene = SceneGraph {
+            groups: vec![mask_group],
+        };
+
+        let opts = make_test_options();
+        let res = emit_svg(&scene, 100, 100, &opts, None);
+        let svg = &res.svg;
+
+        // mask wrapper must be emitted even though it has no nodes
+        assert!(
+            svg.contains("<g id=\"g-mask-A\">"),
+            "mask wrapper must be present"
+        );
+        assert!(
+            svg.contains("<g id=\"g-s-leaf\">"),
+            "leaf group must be nested"
+        );
+
+        let mask_open = svg.find("<g id=\"g-mask-A\">").unwrap();
+        let leaf_open = svg.find("<g id=\"g-s-leaf\">").unwrap();
+        assert!(
+            mask_open < leaf_open,
+            "mask wrapper opens before leaf group"
+        );
+    }
+
+    #[test]
+    fn test_flat_scene_unchanged_via_build_node_metas() {
+        let node1 = Node {
+            id: "s-0".to_string(),
+            fill: Some(Fill::Solid(Rgb { r: 255, g: 0, b: 0 })),
+            stroke: None,
+            transform: Transform {
+                translate_x: 5.0,
+                translate_y: 10.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 0.0,
+                cy: 0.0,
+                r: 3.0,
+            }),
+        };
+        let node2 = Node {
+            id: "s-1".to_string(),
+            fill: Some(Fill::Solid(Rgb { r: 0, g: 0, b: 255 })),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Path(vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::ClosePath,
+            ]),
+        };
+        let group1 = Group {
+            id: "g-s-0".to_string(),
+            nodes: vec![node1],
+            groups: vec![],
+        };
+        let group2 = Group {
+            id: "g-s-1".to_string(),
+            nodes: vec![node2],
+            groups: vec![],
+        };
+        let scene = SceneGraph {
+            groups: vec![group1, group2],
+        };
+
+        let opts = make_test_options();
+        let res_old = emit_svg(&scene, 100, 100, &opts, None);
+
+        // Verify meta structure: build_node_metas gives the same result as before
+        let metas = build_node_metas(&scene, false);
+        assert_eq!(metas.len(), 2);
+        assert_eq!(metas[0].id, "s-0");
+        assert_eq!(metas[0].group, "g-s-0");
+        assert_eq!(metas[0].z_order, 0);
+        assert_eq!(metas[1].id, "s-1");
+        assert_eq!(metas[1].group, "g-s-1");
+        assert_eq!(metas[1].z_order, 1);
+
+        // Verify SVG output is deterministic
+        let res_new = emit_svg(&scene, 100, 100, &opts, None);
+        assert_eq!(res_old.svg, res_new.svg);
+    }
+
+    #[test]
+    fn test_deep_nesting_four_levels() {
+        fn make_node(id: &str) -> Node {
+            Node {
+                id: id.to_string(),
+                fill: Some(Fill::Solid(Rgb {
+                    r: 128,
+                    g: 128,
+                    b: 128,
+                })),
+                stroke: None,
+                transform: Transform {
+                    translate_x: 0.0,
+                    translate_y: 0.0,
+                },
+                shape: Shape::Primitive(Primitive::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
+                    rx: None,
+                    ry: None,
+                }),
+            }
+        }
+        fn make_group(id: &str, node: Node, children: Vec<Group>) -> Group {
+            Group {
+                id: id.to_string(),
+                nodes: vec![node],
+                groups: children,
+            }
+        }
+
+        let d = make_group("g-d", make_node("s-d"), vec![]);
+        let c = make_group("g-c", make_node("s-c"), vec![d]);
+        let b = make_group("g-b", make_node("s-b"), vec![c]);
+        let a = make_group("g-a", make_node("s-a"), vec![b]);
+        let scene = SceneGraph { groups: vec![a] };
+
+        let metas = build_node_metas(&scene, false);
+        assert_eq!(metas.len(), 4);
+        assert_eq!(metas[0].id, "s-a");
+        assert_eq!(metas[0].group, "g-a");
+        assert_eq!(metas[1].id, "s-b");
+        assert_eq!(metas[1].group, "g-b");
+        assert_eq!(metas[2].id, "s-c");
+        assert_eq!(metas[2].group, "g-c");
+        assert_eq!(metas[3].id, "s-d");
+        assert_eq!(metas[3].group, "g-d");
+
+        let opts = make_test_options();
+        let res = emit_svg(&scene, 100, 100, &opts, None);
+        let svg = &res.svg;
+
+        // Verify correct nesting depth
+        let idx_a_open = svg.find("<g id=\"g-a\">").unwrap();
+        let idx_a_close = svg.rfind("</g>").unwrap();
+        let idx_b = svg.find("<g id=\"g-b\">").unwrap();
+        let idx_c = svg.find("<g id=\"g-c\">").unwrap();
+        let idx_d = svg.find("<g id=\"g-d\">").unwrap();
+        assert!(
+            idx_a_open < idx_b && idx_b < idx_c && idx_c < idx_d,
+            "groups must be nested in order a<b<c<d"
+        );
+        assert!(
+            idx_d < idx_a_close,
+            "innermost group must close before outermost"
+        );
     }
 }

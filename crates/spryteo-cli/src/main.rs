@@ -5,6 +5,25 @@ use spryteo_core::{
     OutputFormat, Preset, Rgb, TOrigin, Tri,
 };
 
+fn parse_masks(path: &std::path::Path) -> Result<Vec<spryteo_semantic::Mask>, String> {
+    let content = std::fs::read(path)
+        .map_err(|e| format!("Failed to read masks file '{}': {}", path.display(), e))?;
+    let masks: Vec<spryteo_semantic::Mask> = serde_json::from_slice(&content)
+        .map_err(|e| format!("Invalid masks JSON in '{}': {}", path.display(), e))?;
+    for mask in &masks {
+        let expected = (mask.width as usize) * (mask.height as usize);
+        if mask.pixels.len() != expected {
+            return Err(format!(
+                "Mask '{}': width*height ({}) does not match pixels length ({})",
+                mask.id,
+                expected,
+                mask.pixels.len()
+            ));
+        }
+    }
+    Ok(masks)
+}
+
 fn parse_layering(s: &str) -> Result<Layering, String> {
     match s.to_lowercase().as_str() {
         "stacked" => Ok(Layering::Stacked),
@@ -220,6 +239,10 @@ struct ConvertArgs {
     /// Write the metadata sidecar as JSON to this path
     #[arg(long)]
     json: Option<std::path::PathBuf>,
+
+    /// JSON file of segmentation masks for --grouping semantic (array of {id, width, height, pixels})
+    #[arg(long)]
+    masks: Option<std::path::PathBuf>,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -278,7 +301,30 @@ fn main() {
                 emit_css: args.css.clone(),
             };
 
-            match run_pipeline(&args.input, &args.output, args.json.as_deref(), &opts) {
+            let masks = match &args.masks {
+                Some(mask_path) => {
+                    if !matches!(opts.grouping, Grouping::Semantic) {
+                        eprintln!("Error: --masks requires --grouping semantic");
+                        std::process::exit(1);
+                    }
+                    match parse_masks(mask_path) {
+                        Ok(m) => m,
+                        Err(msg) => {
+                            eprintln!("Error: {}", msg);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                None => vec![],
+            };
+
+            match run_pipeline(
+                &args.input,
+                &args.output,
+                args.json.as_deref(),
+                &opts,
+                &masks,
+            ) {
                 Ok(result) => {
                     let input_str = args.input.to_string_lossy();
                     let output_str = args.output.to_string_lossy();
