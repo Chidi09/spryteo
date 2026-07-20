@@ -43,7 +43,7 @@ Full flag reference:
 | `--mode <auto\|icon\|pixel-art\|line-art\|photo>` | Override input classification. Default: auto. |
 | `--stroke` | Run the centerline tracer instead of fill-mode outlining. |
 | `--css <draw\|fade\|pop>` | Bake one of the built-in CSS animation presets into the SVG. |
-| `--colors <n>` | Target palette size for quantization. |
+| `--colors <n>` | Target palette size for quantization — a ceiling, not a guarantee: visually indistinguishable clusters are merged after quantization, so the final count can be lower. |
 | `--layering <stacked\|cutout>` | Photo-mode layer composition. |
 | `--gradients <auto\|on\|off>` | Gradient-fill detection. auto only tries it in photo mode. |
 | `--tolerance <px>` | Curve-fit error budget, in pixels. Lower = more path points. |
@@ -235,7 +235,9 @@ underlying option set.
 
 ### Colour & layering
 
-`colors` targets a palette size for quantization. `layering` (photo mode)
+`colors` targets a palette size for quantization — a ceiling, not a
+guarantee, since visually indistinguishable clusters are merged after
+quantization. `layering` (photo mode)
 chooses between `stacked` layers or `cutout` composition. `gradients`
 (`auto | on | off`) detects smooth colour gradients and emits an SVG
 `<linearGradient>`/`<radialGradient>` fill instead of a flat colour where

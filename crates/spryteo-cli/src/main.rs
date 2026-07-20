@@ -160,7 +160,9 @@ struct ConvertArgs {
     #[arg(long, value_parser = parse_preset)]
     css: Option<Preset>,
 
-    /// Target colour palette size (e.g. 8)
+    /// Target colour palette size (e.g. 8). This is a ceiling, not a
+    /// guarantee: visually indistinguishable clusters are merged after
+    /// quantization, so the final count can be lower.
     #[arg(long)]
     colors: Option<u8>,
 
