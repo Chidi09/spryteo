@@ -23,11 +23,13 @@ spryteo-fit = { path = "../spryteo-fit", features = ["parallel"] }
 spryteo-svg = { path = "../spryteo-svg" }
 spryteo-stroke = { path = "../spryteo-stroke" }
 spryteo-semantic = { path = "../spryteo-semantic" }
-
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[features]
+ml = ["spryteo-semantic/ml"]
 
 [[bench]]
 name = "pipeline"

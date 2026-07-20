@@ -271,12 +271,22 @@ pub fn run_pipeline(
         path: input_path.to_path_buf(),
         source,
     })?;
+    run_pipeline_with_bytes(&bytes, output_path, json_path, opts, masks)
+}
 
+/// Like `run_pipeline` but accepts already-read bytes.
+pub fn run_pipeline_with_bytes(
+    bytes: &[u8],
+    output_path: &std::path::Path,
+    json_path: Option<&std::path::Path>,
+    opts: &ConvertOptions,
+    masks: &[spryteo_semantic::Mask],
+) -> Result<ConvertResult, CliError> {
     let result = catch_pipeline_panic(|| {
         if opts.stroke {
-            run_convert_stroke(&bytes, opts)
+            run_convert_stroke(bytes, opts)
         } else {
-            run_convert_with_masks(&bytes, opts, masks)
+            run_convert_with_masks(bytes, opts, masks)
         }
     })?;
 
@@ -294,6 +304,42 @@ pub fn run_pipeline(
     }
 
     Ok(result)
+}
+
+/// Run SAM inference on the decoded raster and return computed masks.
+#[cfg(feature = "ml")]
+pub fn run_sam_inference(
+    bytes: &[u8],
+    opts: &ConvertOptions,
+    encoder_path: &std::path::Path,
+    decoder_path: &std::path::Path,
+) -> Result<Vec<spryteo_semantic::Mask>, CliError> {
+    let raster_image = spryteo_raster::decode(bytes, opts)?;
+
+    let mut model = spryteo_semantic::sam::SamModel::load(encoder_path, decoder_path)
+        .map_err(|e| CliError::Spryteo(SpryteoError::Internal(e.to_string())))?;
+    let embedding = model
+        .embed(&raster_image)
+        .map_err(|e| CliError::Spryteo(SpryteoError::Internal(e.to_string())))?;
+    let sam_opts = spryteo_semantic::sam::AutoMaskOptions::default();
+    let masks = model
+        .segment_everything(&raster_image, &embedding, &sam_opts)
+        .map_err(|e| CliError::Spryteo(SpryteoError::Internal(e.to_string())))?;
+    Ok(masks)
+}
+
+/// Run the full pipeline with automatic SAM mask generation.
+#[cfg(feature = "ml")]
+pub fn run_pipeline_sam(
+    bytes: &[u8],
+    output_path: &std::path::Path,
+    json_path: Option<&std::path::Path>,
+    opts: &ConvertOptions,
+    encoder_path: &std::path::Path,
+    decoder_path: &std::path::Path,
+) -> Result<ConvertResult, CliError> {
+    let masks = run_sam_inference(bytes, opts, encoder_path, decoder_path)?;
+    run_pipeline_with_bytes(bytes, output_path, json_path, opts, &masks)
 }
 
 /// Render a human-readable report from a `Meta` sidecar (as written by

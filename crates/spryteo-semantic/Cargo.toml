@@ -6,9 +6,14 @@ license.workspace = true
 authors.workspace = true
 description = "SAM/ONNX segmentation and semantic grouping heuristics (feature-gated)."
 
+[features]
+ml = ["dep:ort", "dep:ndarray"]
+
 [dependencies]
 spryteo-core = { path = "../spryteo-core" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+ort = { workspace = true, optional = true }
+ndarray = { version = "0.17", optional = true }
 

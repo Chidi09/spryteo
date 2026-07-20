@@ -1,5 +1,9 @@
 use clap::{Args, Parser};
-use spryteo_cli::{derive_svg_summary, format_meta_report, parse_mode, parse_preset, run_pipeline};
+#[cfg(feature = "ml")]
+use spryteo_cli::run_pipeline_sam;
+use spryteo_cli::{
+    derive_svg_summary, format_meta_report, parse_mode, parse_preset, run_pipeline_with_bytes,
+};
 use spryteo_core::{
     AlphaMode, Background, ColorSpec, ConvertOptions, Grouping, IdStyle, Layering, Meta,
     OutputFormat, Preset, Rgb, TOrigin, Tri,
@@ -243,6 +247,16 @@ struct ConvertArgs {
     /// JSON file of segmentation masks for --grouping semantic (array of {id, width, height, pixels})
     #[arg(long)]
     masks: Option<std::path::PathBuf>,
+
+    /// Path to SAM encoder ONNX model (requires --grouping semantic, enables auto-mask generation)
+    #[cfg(feature = "ml")]
+    #[arg(long)]
+    sam_encoder: Option<std::path::PathBuf>,
+
+    /// Path to SAM decoder ONNX model (requires --grouping semantic, enables auto-mask generation)
+    #[cfg(feature = "ml")]
+    #[arg(long)]
+    sam_decoder: Option<std::path::PathBuf>,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -301,6 +315,98 @@ fn main() {
                 emit_css: args.css.clone(),
             };
 
+            let bytes = match std::fs::read(&args.input) {
+                Ok(b) => b,
+                Err(source) => {
+                    eprintln!(
+                        "Error: failed to read '{}': {}",
+                        args.input.display(),
+                        source
+                    );
+                    std::process::exit(1);
+                }
+            };
+
+            #[cfg(feature = "ml")]
+            {
+                let encoder_path = args.sam_encoder.clone().or_else(|| {
+                    std::env::var("SPRYTEO_SAM_ENCODER")
+                        .ok()
+                        .map(std::path::PathBuf::from)
+                });
+                let decoder_path = args.sam_decoder.clone().or_else(|| {
+                    std::env::var("SPRYTEO_SAM_DECODER")
+                        .ok()
+                        .map(std::path::PathBuf::from)
+                });
+                match (encoder_path, decoder_path) {
+                    (Some(ep), Some(dp)) => {
+                        if !matches!(opts.grouping, Grouping::Semantic) {
+                            eprintln!(
+                                "Error: --sam-encoder/--sam-decoder requires --grouping semantic"
+                            );
+                            std::process::exit(1);
+                        }
+                        if args.masks.is_some() {
+                            eprintln!(
+                                "Error: --sam-encoder/--sam-decoder is mutually exclusive with --masks"
+                            );
+                            std::process::exit(1);
+                        }
+                        let result = match run_pipeline_sam(
+                            &bytes,
+                            &args.output,
+                            args.json.as_deref(),
+                            &opts,
+                            &ep,
+                            &dp,
+                        ) {
+                            Ok(r) => r,
+                            Err(err) => {
+                                eprintln!("Error: {}", err);
+                                std::process::exit(err.exit_code());
+                            }
+                        };
+                        let input_str = args.input.to_string_lossy();
+                        let output_str = args.output.to_string_lossy();
+                        if opts.stroke {
+                            println!(
+                                "{} -> {} ({} nodes, {} bytes, {} continuous paths)",
+                                input_str,
+                                output_str,
+                                result.meta.stats.node_count,
+                                result.meta.stats.byte_count,
+                                result.meta.stats.path_count
+                            );
+                        } else {
+                            println!(
+                                "{} -> {} ({} nodes, {} bytes)",
+                                input_str,
+                                output_str,
+                                result.meta.stats.node_count,
+                                result.meta.stats.byte_count
+                            );
+                        }
+                        std::process::exit(0);
+                    }
+                    (Some(_), None) => {
+                        eprintln!(
+                            "Error: --sam-decoder also required when --sam-encoder is set, \
+                             or set SPRYTEO_SAM_DECODER"
+                        );
+                        std::process::exit(1);
+                    }
+                    (None, Some(_)) => {
+                        eprintln!(
+                            "Error: --sam-encoder also required when --sam-decoder is set, \
+                             or set SPRYTEO_SAM_ENCODER"
+                        );
+                        std::process::exit(1);
+                    }
+                    (None, None) => {} // fall through
+                }
+            }
+
             let masks = match &args.masks {
                 Some(mask_path) => {
                     if !matches!(opts.grouping, Grouping::Semantic) {
@@ -318,41 +424,41 @@ fn main() {
                 None => vec![],
             };
 
-            match run_pipeline(
-                &args.input,
+            let result = match run_pipeline_with_bytes(
+                &bytes,
                 &args.output,
                 args.json.as_deref(),
                 &opts,
                 &masks,
             ) {
-                Ok(result) => {
-                    let input_str = args.input.to_string_lossy();
-                    let output_str = args.output.to_string_lossy();
-                    if opts.stroke {
-                        println!(
-                            "{} -> {} ({} nodes, {} bytes, {} continuous paths)",
-                            input_str,
-                            output_str,
-                            result.meta.stats.node_count,
-                            result.meta.stats.byte_count,
-                            result.meta.stats.path_count
-                        );
-                    } else {
-                        println!(
-                            "{} -> {} ({} nodes, {} bytes)",
-                            input_str,
-                            output_str,
-                            result.meta.stats.node_count,
-                            result.meta.stats.byte_count
-                        );
-                    }
-                    std::process::exit(0);
-                }
+                Ok(r) => r,
                 Err(err) => {
                     eprintln!("Error: {}", err);
                     std::process::exit(err.exit_code());
                 }
+            };
+
+            let input_str = args.input.to_string_lossy();
+            let output_str = args.output.to_string_lossy();
+            if opts.stroke {
+                println!(
+                    "{} -> {} ({} nodes, {} bytes, {} continuous paths)",
+                    input_str,
+                    output_str,
+                    result.meta.stats.node_count,
+                    result.meta.stats.byte_count,
+                    result.meta.stats.path_count
+                );
+            } else {
+                println!(
+                    "{} -> {} ({} nodes, {} bytes)",
+                    input_str,
+                    output_str,
+                    result.meta.stats.node_count,
+                    result.meta.stats.byte_count
+                );
             }
+            std::process::exit(0);
         }
         Cli::Inspect(args) => {
             let svg_text = match std::fs::read_to_string(&args.svg) {

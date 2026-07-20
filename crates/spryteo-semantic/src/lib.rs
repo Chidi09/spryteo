@@ -1,8 +1,7 @@
-// TODO(semantic-ml): Real ONNX/MobileSAM integration is deferred future work.
-// Currently, mask generation is performed by the caller, and this crate
-// implements only the semantic grouping and assignment algorithms.
-
 #![allow(clippy::needless_range_loop)]
+
+#[cfg(feature = "ml")]
+pub mod sam;
 
 use serde::{Deserialize, Serialize};
 use spryteo_core::ir::{Contour, ContourSet, Group, LayerStack, Meta, SceneGraph};
