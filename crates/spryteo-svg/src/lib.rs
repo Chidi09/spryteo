@@ -442,6 +442,47 @@ fn serialize_defs(grads: &[(String, &Fill)], opts: &ConvertOptions) -> String {
     out
 }
 
+fn emit_css_draw_style_block(out: &mut String, nodes_with_ids: &[&Node], pretty: bool) {
+    if nodes_with_ids.is_empty() {
+        return;
+    }
+    if pretty {
+        writeln!(out, "  <style>").unwrap();
+        writeln!(out, "    @keyframes sc-draw {{").unwrap();
+        writeln!(out, "      to {{").unwrap();
+        writeln!(out, "        stroke-dashoffset: 0;").unwrap();
+        writeln!(out, "      }}").unwrap();
+        writeln!(out, "    }}").unwrap();
+        for (i, node) in nodes_with_ids.iter().enumerate() {
+            let delay = i * 100;
+            writeln!(out, "    #{} {{", node.id).unwrap();
+            writeln!(out, "      stroke-dasharray: 100;").unwrap();
+            writeln!(out, "      stroke-dashoffset: 100;").unwrap();
+            writeln!(out, "      animation: sc-draw 1s ease forwards;").unwrap();
+            writeln!(out, "      animation-delay: {}ms;", delay).unwrap();
+            writeln!(out, "    }}").unwrap();
+        }
+        writeln!(out, "  </style>").unwrap();
+    } else {
+        write!(
+            out,
+            "<style>@keyframes sc-draw{{to{{stroke-dashoffset:0;}}}}"
+        )
+        .unwrap();
+        for (i, node) in nodes_with_ids.iter().enumerate() {
+            let delay = i * 100;
+            write!(
+                out,
+                "#{} {{stroke-dasharray:100;stroke-dashoffset:100;animation:sc-draw 1s ease forwards;animation-delay:{}ms;}}",
+                node.id,
+                delay
+            )
+            .unwrap();
+        }
+        write!(out, "</style>").unwrap();
+    }
+}
+
 fn analyze_scene_fills(scene: &SceneGraph) -> (Option<Rgb>, bool) {
     let mut flat_fills = Vec::new();
     let mut has_gradient = false;
@@ -481,14 +522,15 @@ fn analyze_scene_fills(scene: &SceneGraph) -> (Option<Rgb>, bool) {
 /// Recursively serializes a group and its children (nodes then nested groups)
 /// into the output buffer, respecting indentation depth for pretty mode.
 #[allow(clippy::too_many_arguments)]
-fn serialize_group(
+fn serialize_group<'a>(
     out: &mut String,
-    group: &Group,
+    group: &'a Group,
     depth: usize,
     precision: usize,
     pretty: bool,
     fill_rule_attr: &str,
     current_color_applied: bool,
+    nodes_with_ids: &mut Vec<&'a Node>,
     opts: &ConvertOptions,
 ) {
     let g_indent = if pretty {
@@ -516,6 +558,7 @@ fn serialize_group(
         let mut node_attrs = String::new();
         if !matches!(opts.id_style, IdStyle::None) && !node.id.is_empty() {
             write!(node_attrs, " id=\"{}\"", escape_html(&node.id)).unwrap();
+            nodes_with_ids.push(node);
         }
 
         match &node.fill {
@@ -538,6 +581,41 @@ fn serialize_group(
             None => {
                 write!(node_attrs, " fill=\"none\"").unwrap();
             }
+        }
+
+        if matches!(opts.emit_css, Some(Preset::Draw)) {
+            match &node.fill {
+                Some(Fill::Solid(rgb)) => {
+                    if current_color_applied {
+                        write!(node_attrs, " stroke=\"currentColor\"").unwrap();
+                    } else {
+                        write!(
+                            node_attrs,
+                            " stroke=\"#{:02x}{:02x}{:02x}\"",
+                            rgb.r, rgb.g, rgb.b
+                        )
+                        .unwrap();
+                    }
+                }
+                Some(Fill::LinearGradient { stops, .. })
+                | Some(Fill::RadialGradient { stops, .. }) => {
+                    if let Some(stop) = stops.first() {
+                        write!(
+                            node_attrs,
+                            " stroke=\"#{:02x}{:02x}{:02x}\"",
+                            stop.color.r, stop.color.g, stop.color.b
+                        )
+                        .unwrap();
+                    }
+                }
+                None => {}
+            }
+            write!(
+                node_attrs,
+                " stroke-width=\"{}\" pathLength=\"100\"",
+                format_coord(1.0, precision)
+            )
+            .unwrap();
         }
 
         let tx = node.transform.translate_x;
@@ -753,6 +831,7 @@ fn serialize_group(
             pretty,
             fill_rule_attr,
             current_color_applied,
+            nodes_with_ids,
             opts,
         );
     }
@@ -821,6 +900,8 @@ fn serialize_svg(
         }
     }
 
+    let mut nodes_with_ids = Vec::new();
+
     if matches!(opts.grouping, Grouping::Flat) {
         for group in &scene.groups {
             for node in &group.nodes {
@@ -829,6 +910,7 @@ fn serialize_svg(
                 let mut node_attrs = String::new();
                 if !matches!(opts.id_style, IdStyle::None) && !node.id.is_empty() {
                     write!(node_attrs, " id=\"{}\"", escape_html(&node.id)).unwrap();
+                    nodes_with_ids.push(node);
                 }
 
                 match &node.fill {
@@ -851,6 +933,41 @@ fn serialize_svg(
                     None => {
                         write!(node_attrs, " fill=\"none\"").unwrap();
                     }
+                }
+
+                if matches!(opts.emit_css, Some(Preset::Draw)) {
+                    match &node.fill {
+                        Some(Fill::Solid(rgb)) => {
+                            if current_color_applied {
+                                write!(node_attrs, " stroke=\"currentColor\"").unwrap();
+                            } else {
+                                write!(
+                                    node_attrs,
+                                    " stroke=\"#{:02x}{:02x}{:02x}\"",
+                                    rgb.r, rgb.g, rgb.b
+                                )
+                                .unwrap();
+                            }
+                        }
+                        Some(Fill::LinearGradient { stops, .. })
+                        | Some(Fill::RadialGradient { stops, .. }) => {
+                            if let Some(stop) = stops.first() {
+                                write!(
+                                    node_attrs,
+                                    " stroke=\"#{:02x}{:02x}{:02x}\"",
+                                    stop.color.r, stop.color.g, stop.color.b
+                                )
+                                .unwrap();
+                            }
+                        }
+                        None => {}
+                    }
+                    write!(
+                        node_attrs,
+                        " stroke-width=\"{}\" pathLength=\"100\"",
+                        format_coord(1.0, precision)
+                    )
+                    .unwrap();
                 }
 
                 let tx = node.transform.translate_x;
@@ -1067,9 +1184,14 @@ fn serialize_svg(
                 pretty,
                 fill_rule_attr,
                 current_color_applied,
+                &mut nodes_with_ids,
                 opts,
             );
         }
+    }
+
+    if let Some(Preset::Draw) = opts.emit_css {
+        emit_css_draw_style_block(&mut out, &nodes_with_ids, pretty);
     }
 
     if pretty {
@@ -1818,43 +1940,7 @@ fn serialize_stroke_svg(
     }
 
     if let Some(Preset::Draw) = opts.emit_css {
-        if !nodes_with_ids.is_empty() {
-            if pretty {
-                writeln!(out, "  <style>").unwrap();
-                writeln!(out, "    @keyframes sc-draw {{").unwrap();
-                writeln!(out, "      to {{").unwrap();
-                writeln!(out, "        stroke-dashoffset: 0;").unwrap();
-                writeln!(out, "      }}").unwrap();
-                writeln!(out, "    }}").unwrap();
-                for (i, node) in nodes_with_ids.iter().enumerate() {
-                    let delay = i * 100;
-                    writeln!(out, "    #{} {{", node.id).unwrap();
-                    writeln!(out, "      stroke-dasharray: 100;").unwrap();
-                    writeln!(out, "      stroke-dashoffset: 100;").unwrap();
-                    writeln!(out, "      animation: sc-draw 1s ease forwards;").unwrap();
-                    writeln!(out, "      animation-delay: {}ms;", delay).unwrap();
-                    writeln!(out, "    }}").unwrap();
-                }
-                writeln!(out, "  </style>").unwrap();
-            } else {
-                write!(
-                    out,
-                    "<style>@keyframes sc-draw{{to{{stroke-dashoffset:0;}}}}"
-                )
-                .unwrap();
-                for (i, node) in nodes_with_ids.iter().enumerate() {
-                    let delay = i * 100;
-                    write!(
-                        out,
-                        "#{} {{stroke-dasharray:100;stroke-dashoffset:100;animation:sc-draw 1s ease forwards;animation-delay:{}ms;}}",
-                        node.id,
-                        delay
-                    )
-                    .unwrap();
-                }
-                write!(out, "</style>").unwrap();
-            }
-        }
+        emit_css_draw_style_block(&mut out, &nodes_with_ids, pretty);
     }
 
     if pretty {
@@ -3261,5 +3347,229 @@ mod tests {
             idx_d < idx_a_close,
             "innermost group must close before outermost"
         );
+    }
+
+    #[test]
+    fn test_fill_emit_css_draw_grouped() {
+        let curve1 = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curve2 = Curve {
+            segments: vec![
+                PathElement::MoveTo(20.0, 20.0),
+                PathElement::LineTo(30.0, 20.0),
+                PathElement::LineTo(30.0, 30.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve1, curve2],
+        };
+        let fills = vec![
+            Fill::Solid(Rgb { r: 255, g: 0, b: 0 }),
+            Fill::Solid(Rgb { r: 0, g: 0, b: 255 }),
+        ];
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::Sequential;
+        opts.emit_css = Some(Preset::Draw);
+        opts.output = OutputFormat::SvgPretty;
+
+        let res = emit_svg(&scene, 100, 100, &opts, None);
+        let svg = &res.svg;
+
+        assert!(svg.contains("<style>"), "should contain style tag");
+        assert!(
+            svg.contains("@keyframes sc-draw"),
+            "should contain keyframes"
+        );
+        assert!(
+            svg.contains("stroke-dasharray: 100;"),
+            "should contain stroke-dasharray"
+        );
+        assert!(
+            svg.contains("pathLength=\"100\""),
+            "should contain pathLength"
+        );
+        assert!(
+            svg.contains("animation-delay: 0ms;"),
+            "should have delay for first node"
+        );
+        assert!(
+            svg.contains("animation-delay: 100ms;"),
+            "should have delay for second node"
+        );
+        assert!(
+            svg.contains("fill=\"#ff0000\""),
+            "should preserve original fill"
+        );
+        assert!(
+            svg.contains("fill=\"#0000ff\""),
+            "should preserve original fill"
+        );
+    }
+
+    #[test]
+    fn test_fill_emit_css_draw_flat_grouping() {
+        let curve1 = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::LineTo(10.0, 10.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curve2 = Curve {
+            segments: vec![
+                PathElement::MoveTo(20.0, 20.0),
+                PathElement::LineTo(30.0, 20.0),
+                PathElement::LineTo(30.0, 30.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve1, curve2],
+        };
+        let fills = vec![
+            Fill::Solid(Rgb { r: 255, g: 0, b: 0 }),
+            Fill::Solid(Rgb { r: 0, g: 0, b: 255 }),
+        ];
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::Sequential;
+        opts.grouping = Grouping::Flat;
+        opts.emit_css = Some(Preset::Draw);
+        opts.output = OutputFormat::SvgPretty;
+
+        let res = emit_svg(&scene, 100, 100, &opts, None);
+        let svg = &res.svg;
+
+        assert!(svg.contains("<style>"), "should contain style tag");
+        assert!(
+            svg.contains("@keyframes sc-draw"),
+            "should contain keyframes"
+        );
+        assert!(
+            svg.contains("stroke-dasharray: 100;"),
+            "should contain stroke-dasharray"
+        );
+        assert!(
+            svg.contains("pathLength=\"100\""),
+            "should contain pathLength"
+        );
+        assert!(
+            svg.contains("animation-delay: 0ms;"),
+            "should have delay for first node"
+        );
+        assert!(
+            svg.contains("animation-delay: 100ms;"),
+            "should have delay for second node"
+        );
+        assert!(
+            svg.contains("fill=\"#ff0000\""),
+            "should preserve original fill"
+        );
+        assert!(
+            svg.contains("fill=\"#0000ff\""),
+            "should preserve original fill"
+        );
+    }
+
+    #[test]
+    fn test_fill_emit_css_none_unchanged() {
+        let curve = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let fills = vec![Fill::Solid(Rgb { r: 255, g: 0, b: 0 })];
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::Sequential;
+
+        let res = emit_svg(&scene, 100, 100, &opts, None);
+        let svg = &res.svg;
+
+        assert!(!svg.contains("<style"), "should NOT contain style tag");
+        assert!(!svg.contains("@keyframes"), "should NOT contain keyframes");
+        assert!(
+            !svg.contains("stroke-dasharray"),
+            "should NOT contain stroke-dasharray in CSS"
+        );
+        assert!(
+            !svg.contains("pathLength=\"100\""),
+            "should NOT contain pathLength"
+        );
+        // Should NOT have an added stroke attribute
+        assert!(
+            svg.contains("fill=\"#ff0000\""),
+            "should contain original fill"
+        );
+    }
+
+    #[test]
+    fn test_fill_emit_css_draw_no_ids_is_noop() {
+        let curve = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let curves = CurveSet {
+            curves: vec![curve],
+        };
+        let fills = vec![Fill::Solid(Rgb { r: 255, g: 0, b: 0 })];
+        let scene = build_scene_graph(&curves, &IdStyle::None, &TOrigin::Baked, &fills, false);
+
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::None;
+        opts.emit_css = Some(Preset::Draw);
+
+        let res = emit_svg(&scene, 100, 100, &opts, None);
+        let svg = &res.svg;
+
+        assert!(
+            !svg.contains("<style"),
+            "should NOT contain style tag when no ids present"
+        );
+        assert!(!svg.contains("@keyframes"), "should NOT contain keyframes");
     }
 }
