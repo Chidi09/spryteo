@@ -1,0 +1,704 @@
+---
+---
+
+<div class="sheet-demo-wrapper sc-stagger">
+  <div class="demo-frame">
+    <div class="demo-header">
+      <span class="demo-live"><span class="live-dot"></span>sheet mode</span>
+      <span>contact sheet &#8594; split &#8594; trace</span>
+    </div>
+
+    <!-- Dropzone Area -->
+    <div id="sheetDropzone" class="demo-area" role="button" tabindex="0" aria-label="Drop an icon contact sheet to convert, or click to browse">
+      <input id="sheetFileInput" class="demo-file-input" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+      
+      <div id="sheetIdleContent" class="demo-idle">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#A3A199" stroke-width="1.4">
+          <rect x="3" y="3" width="7" height="7" rx="1" stroke-linecap="round" stroke-linejoin="round"></rect>
+          <rect x="14" y="3" width="7" height="7" rx="1" stroke-linecap="round" stroke-linejoin="round"></rect>
+          <rect x="3" y="14" width="7" height="7" rx="1" stroke-linecap="round" stroke-linejoin="round"></rect>
+          <rect x="14" y="14" width="7" height="7" rx="1" stroke-linecap="round" stroke-linejoin="round"></rect>
+        </svg>
+        <span class="demo-idle-text">drop an icon contact sheet (.png, .jpg, .webp) &#8212; or click to browse</span>
+        <span class="demo-subtext">or paste image directly from clipboard</span>
+      </div>
+
+      <div id="sheetProcessingContent" class="demo-idle" hidden>
+        <div class="spinner"></div>
+        <span id="sheetProcessingText" class="demo-idle-text">extracting icons&#8230;</span>
+      </div>
+    </div>
+
+    <!-- Success Stats & Action Bar -->
+    <div id="sheetSuccessHeader" class="sheet-success-header" hidden>
+      <div id="sheetStats" class="sheet-stats"></div>
+      <div class="sheet-header-actions">
+        <button id="downloadZipBtn" class="sheet-action-btn primary-action" type="button" aria-label="Download all icons as ZIP">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          download all (.zip)
+        </button>
+        <button id="resetBtn" class="demo-btn" type="button" aria-label="Convert another contact sheet">run again</button>
+      </div>
+    </div>
+
+    <!-- Responsive Grid of Extracted Icons -->
+    <div id="sheetIconGrid" class="sheet-icon-grid" hidden></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  // Store-only ZIP writer (no compression)
+  const crcTable = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    crcTable[n] = c >>> 0;
+  }
+
+  function crc32(bytes: Uint8Array): number {
+    let crc = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) {
+      crc = (crc >>> 8) ^ crcTable[(crc ^ bytes[i]) & 0xff];
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function createZip(files: Array<{ name: string; svg: string }>): Uint8Array {
+    const encoder = new TextEncoder();
+    const entries: Array<{
+      nameBytes: Uint8Array;
+      dataBytes: Uint8Array;
+      crc: number;
+      offset: number;
+    }> = [];
+
+    let totalSize = 0;
+
+    for (const file of files) {
+      const filename = file.name.endsWith('.svg') ? file.name : `${file.name}.svg`;
+      const nameBytes = encoder.encode(filename);
+      const dataBytes = encoder.encode(file.svg);
+      const crc = crc32(dataBytes);
+      entries.push({ nameBytes, dataBytes, crc, offset: totalSize });
+      totalSize += 30 + nameBytes.length + dataBytes.length;
+    }
+
+    let cdSize = 0;
+    for (const entry of entries) {
+      cdSize += 46 + entry.nameBytes.length;
+    }
+
+    totalSize += cdSize + 22;
+
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+    const u8 = new Uint8Array(buffer);
+
+    let offset = 0;
+    const dosTime = 0x0000;
+    const dosDate = 0x5c21; // 2026-01-01 00:00:00
+
+    for (const entry of entries) {
+      entry.offset = offset;
+      view.setUint32(offset, 0x04034b50, true);
+      view.setUint16(offset + 4, 20, true);
+      view.setUint16(offset + 6, 0x0800, true); // UTF-8 flag
+      view.setUint16(offset + 8, 0, true); // Store
+      view.setUint16(offset + 10, dosTime, true);
+      view.setUint16(offset + 12, dosDate, true);
+      view.setUint32(offset + 14, entry.crc, true);
+      view.setUint32(offset + 18, entry.dataBytes.length, true);
+      view.setUint32(offset + 22, entry.dataBytes.length, true);
+      view.setUint16(offset + 26, entry.nameBytes.length, true);
+      view.setUint16(offset + 28, 0, true);
+      offset += 30;
+
+      u8.set(entry.nameBytes, offset);
+      offset += entry.nameBytes.length;
+
+      u8.set(entry.dataBytes, offset);
+      offset += entry.dataBytes.length;
+    }
+
+    const cdStart = offset;
+    for (const entry of entries) {
+      view.setUint32(offset, 0x02014b50, true);
+      view.setUint16(offset + 4, 20, true);
+      view.setUint16(offset + 6, 20, true);
+      view.setUint16(offset + 8, 0x0800, true);
+      view.setUint16(offset + 10, 0, true);
+      view.setUint16(offset + 12, dosTime, true);
+      view.setUint16(offset + 14, dosDate, true);
+      view.setUint32(offset + 16, entry.crc, true);
+      view.setUint32(offset + 20, entry.dataBytes.length, true);
+      view.setUint32(offset + 24, entry.dataBytes.length, true);
+      view.setUint16(offset + 28, entry.nameBytes.length, true);
+      view.setUint16(offset + 30, 0, true);
+      view.setUint16(offset + 32, 0, true);
+      view.setUint16(offset + 34, 0, true);
+      view.setUint16(offset + 36, 0, true);
+      view.setUint32(offset + 38, 0, true);
+      view.setUint32(offset + 42, entry.offset, true);
+      offset += 46;
+
+      u8.set(entry.nameBytes, offset);
+      offset += entry.nameBytes.length;
+    }
+
+    view.setUint32(offset, 0x06054b50, true);
+    view.setUint16(offset + 4, 0, true);
+    view.setUint16(offset + 6, 0, true);
+    view.setUint16(offset + 8, entries.length, true);
+    view.setUint16(offset + 10, entries.length, true);
+    view.setUint32(offset + 12, offset - cdStart, true);
+    view.setUint32(offset + 16, cdStart, true);
+    view.setUint16(offset + 20, 0, true);
+
+    return u8;
+  }
+
+  // --- Worker Setup ---
+  let convertWorker: Worker | null = null;
+  let nextRequestId = 0;
+  const pendingConversions = new Map<
+    number,
+    { resolve: (r: any) => void; reject: (e: Error) => void }
+  >();
+
+  function getWorker(): Worker {
+    if (!convertWorker) {
+      convertWorker = new Worker(new URL('../../wasm/convert.worker.ts', import.meta.url), {
+        type: 'module',
+      });
+      convertWorker.onmessage = (e: MessageEvent) => {
+        const { id, ok, result, error } = e.data as {
+          id: number;
+          ok: boolean;
+          result?: any;
+          error?: string;
+        };
+        const pending = pendingConversions.get(id);
+        if (!pending) return;
+        pendingConversions.delete(id);
+        if (ok) pending.resolve(result ?? {});
+        else pending.reject(new Error(error ?? 'sheet conversion failed'));
+      };
+      convertWorker.onerror = () => {
+        pendingConversions.forEach((p) => p.reject(new Error('conversion worker crashed')));
+        pendingConversions.clear();
+        convertWorker?.terminate();
+        convertWorker = null;
+      };
+    }
+    return convertWorker;
+  }
+
+  async function convertSheet(file: File): Promise<any> {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const worker = getWorker();
+    const id = nextRequestId++;
+    return new Promise((resolve, reject) => {
+      pendingConversions.set(id, { resolve, reject });
+      worker.postMessage({ id, bytes, kind: 'sheet' }, [bytes.buffer]);
+    });
+  }
+
+  // --- DOM Elements ---
+  const dropzone = document.getElementById('sheetDropzone');
+  const fileInput = document.getElementById('sheetFileInput') as HTMLInputElement | null;
+  const idleContent = document.getElementById('sheetIdleContent');
+  const processingContent = document.getElementById('sheetProcessingContent');
+  const processingText = document.getElementById('sheetProcessingText');
+  const successHeader = document.getElementById('sheetSuccessHeader');
+  const statsStrip = document.getElementById('sheetStats');
+  const iconGrid = document.getElementById('sheetIconGrid');
+  const downloadZipBtn = document.getElementById('downloadZipBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  const defaultIdleMarkup = idleContent ? idleContent.innerHTML : '';
+  const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
+  let currentFile: File | null = null;
+  let currentResult: { report: any; icons: Array<{ name: string; svg: string }> } | null = null;
+
+  function validateFile(file: File): string | null {
+    if (!ACCEPTED_TYPES.includes(file.type)) return 'unsupported file — please drop a PNG, JPEG, or WebP contact sheet';
+    if (file.size > 16 * 1024 * 1024) return 'file too large — 16MB max';
+    return null;
+  }
+
+  function showError(message: string): void {
+    if (!dropzone || !idleContent) return;
+    dropzone.classList.add('demo-error');
+    idleContent.innerHTML = `<span class="demo-idle-text demo-error-text">${message}</span>`;
+    if (processingContent) processingContent.hidden = true;
+    idleContent.hidden = false;
+    setTimeout(() => {
+      dropzone.classList.remove('demo-error');
+      if (idleContent) idleContent.innerHTML = defaultIdleMarkup;
+    }, 3200);
+  }
+
+  function downloadSingleSvg(name: string, svg: string): void {
+    const filename = name.endsWith('.svg') ? name : `${name}.svg`;
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadZip(): void {
+    if (!currentFile || !currentResult || !currentResult.icons) return;
+    const baseName = currentFile.name.replace(/\.[^.]+$/, '');
+    const zipName = `${baseName}-icons.zip`;
+    const zipData = createZip(currentResult.icons);
+    const blob = new Blob([zipData.buffer as ArrayBuffer], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = zipName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function renderSuccess(file: File, result: { report: any; icons: Array<{ name: string; svg: string }> }): void {
+    currentFile = file;
+    currentResult = result;
+
+    const report = result.report ?? {};
+    const icons = result.icons ?? [];
+
+    // Format stats strip: "N icons · C×R grid · segmentation: chroma|luminance"
+    const count = report.written ?? icons.length;
+    const cols = report.cols ?? 0;
+    const rows = report.rows ?? 0;
+    const seg = report.segmentation ?? 'chroma';
+    let statsText = `${count} icons · ${cols}×${rows} grid · segmentation: ${seg}`;
+    if (report.text_rows_removed && report.text_rows_removed > 0) {
+      statsText += ` · text rows stripped: ${report.text_rows_removed}`;
+    }
+
+    if (statsStrip) statsStrip.textContent = statsText;
+
+    // Render Grid
+    if (iconGrid) {
+      iconGrid.innerHTML = '';
+      const reportIcons: Array<any> = report.icons ?? [];
+
+      icons.forEach((icon, idx) => {
+        const reportIcon = reportIcons.find((r) => r.name === icon.name) ?? reportIcons[idx];
+        const warnings: string[] = reportIcon?.warnings ?? [];
+        const firstWarning = warnings.length > 0 ? warnings[0] : null;
+
+        const cell = document.createElement('button');
+        cell.className = 'sheet-icon-cell';
+        cell.type = 'button';
+        cell.setAttribute('aria-label', `download ${icon.name}`);
+        if (firstWarning) {
+          cell.setAttribute('title', firstWarning);
+        }
+
+        const svgWrapper = document.createElement('div');
+        svgWrapper.className = 'sheet-svg-wrapper';
+        svgWrapper.innerHTML = icon.svg;
+
+        const label = document.createElement('span');
+        label.className = 'sheet-icon-name';
+        label.textContent = icon.name;
+
+        cell.appendChild(svgWrapper);
+        cell.appendChild(label);
+
+        if (firstWarning) {
+          const badge = document.createElement('span');
+          badge.className = 'warning-badge';
+          badge.setAttribute('title', firstWarning);
+          cell.appendChild(badge);
+        }
+
+        cell.addEventListener('click', () => {
+          downloadSingleSvg(icon.name, icon.svg);
+        });
+
+        iconGrid.appendChild(cell);
+      });
+    }
+
+    // Toggle views
+    if (dropzone) dropzone.hidden = true;
+    if (successHeader) successHeader.hidden = false;
+    if (iconGrid) iconGrid.hidden = false;
+  }
+
+  function resetState(): void {
+    currentFile = null;
+    currentResult = null;
+    if (fileInput) fileInput.value = '';
+    if (successHeader) successHeader.hidden = true;
+    if (iconGrid) {
+      iconGrid.hidden = true;
+      iconGrid.innerHTML = '';
+    }
+    if (processingContent) processingContent.hidden = true;
+    if (idleContent) {
+      idleContent.hidden = false;
+      idleContent.innerHTML = defaultIdleMarkup;
+    }
+    if (dropzone) {
+      dropzone.hidden = false;
+      dropzone.classList.remove('demo-error', 'dragover');
+    }
+  }
+
+  function handleFile(file: File): void {
+    const error = validateFile(file);
+    if (error) {
+      showError(error);
+      return;
+    }
+
+    if (idleContent) idleContent.hidden = true;
+    if (processingContent) {
+      processingContent.hidden = false;
+      if (processingText) processingText.textContent = `${file.name} → extracting icons…`;
+    }
+
+    convertSheet(file)
+      .then((result) => {
+        renderSuccess(file, result);
+      })
+      .catch((err) => {
+        showError(err.message || 'conversion failed');
+      });
+  }
+
+  // --- Event Listeners ---
+  if (dropzone) {
+    ['dragenter', 'dragover'].forEach((evt) => {
+      dropzone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      });
+    });
+    ['dragleave', 'dragend'].forEach((evt) => {
+      dropzone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+      });
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      const files = Array.from((e as DragEvent).dataTransfer?.files ?? []);
+      if (files.length > 0) handleFile(files[0]);
+    });
+    dropzone.addEventListener('click', () => {
+      fileInput?.click();
+    });
+    dropzone.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        fileInput?.click();
+      }
+    });
+  }
+
+  if (fileInput) {
+    fileInput.addEventListener('click', (e) => e.stopPropagation());
+    fileInput.addEventListener('change', () => {
+      const files = Array.from(fileInput.files ?? []);
+      if (files.length > 0) handleFile(files[0]);
+      fileInput.value = '';
+    });
+  }
+
+  // Support paste event
+  window.addEventListener('paste', (e: ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          handleFile(file);
+          break;
+        }
+      }
+    }
+  });
+
+  if (downloadZipBtn) {
+    downloadZipBtn.addEventListener('click', () => {
+      downloadZip();
+    });
+  }
+
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      resetState();
+    });
+  }
+})();
+</script>
+
+<style>
+  /* Elements below toggle visibility via the `hidden` attribute from JS, but
+     several also carry a class that sets `display` (flex/grid). An author
+     `display` rule beats the UA `[hidden]{display:none}` rule, so without this
+     the dropzone, spinner, and empty success header would all stay visible.
+     Make `hidden` authoritative again. */
+  [hidden] {
+    display: none !important;
+  }
+  .sheet-demo-wrapper {
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+  .demo-frame {
+    position: relative;
+    z-index: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    clip-path: polygon(26px 0, 100% 0, 100% 100%, 0 100%, 0 26px);
+    padding: 26px;
+    min-height: 360px;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 300ms ease, filter 300ms ease;
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  .demo-frame:hover {
+    border-color: rgba(198, 255, 75, 0.35);
+    filter: drop-shadow(0 18px 40px rgba(198, 255, 75, 0.16));
+  }
+  .demo-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 18px;
+  }
+  .demo-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .live-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+    animation: sc-pulse-dot 1.8s ease-in-out infinite;
+  }
+  .demo-area {
+    flex: 1;
+    min-height: 280px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 32px 26px;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+  }
+  .demo-area:hover {
+    border-color: var(--accent);
+  }
+  .demo-area.dragover {
+    border-style: solid;
+    border-color: var(--accent);
+    background: rgba(198, 255, 75, 0.05);
+  }
+  .demo-area.demo-error {
+    border-style: solid;
+    border-color: #ff5f56;
+  }
+  .demo-idle {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    text-align: center;
+  }
+  .demo-idle-text {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .demo-subtext {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .demo-error-text {
+    color: #ff5f56;
+  }
+  .spinner {
+    width: 28px;
+    height: 28px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 800ms linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Success Stats Header */
+  .sheet-success-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .sheet-stats {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+  }
+  .sheet-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .sheet-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    cursor: pointer;
+    padding: 8px 16px;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent-ink);
+    background: var(--accent);
+    clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%, 0 10px);
+    transition: transform var(--transition-bounce);
+  }
+  .sheet-action-btn:hover {
+    transform: translateY(-2px);
+  }
+  .demo-btn {
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    padding: 7px 14px;
+    transition: border-color var(--transition-fast);
+  }
+  .demo-btn:hover {
+    border-color: var(--muted);
+  }
+
+  /* Icon Grid */
+  .sheet-icon-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 14px;
+    max-height: 480px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .sheet-icon-grid :global(.sheet-icon-cell) {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 16px 10px;
+    background: #0B0B0A;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    color: var(--text); /* Set explicit color for currentColor stroke icons */
+    transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-bounce);
+  }
+  .sheet-icon-grid :global(.sheet-icon-cell:hover) {
+    border-color: var(--accent);
+    background: rgba(198, 255, 75, 0.04);
+    transform: translateY(-2px);
+  }
+  .sheet-icon-grid :global(.sheet-svg-wrapper) {
+    width: 64px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text); /* Set explicit color */
+  }
+  .sheet-icon-grid :global(.sheet-svg-wrapper svg) {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .sheet-icon-grid :global(.sheet-icon-name) {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    word-break: break-all;
+  }
+  .sheet-icon-grid :global(.warning-badge) {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #f59e0b;
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .live-dot, .spinner, .sheet-icon-cell {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .demo-frame {
+      padding: 18px;
+    }
+    .sheet-success-header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .sheet-icon-grid {
+      grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+      gap: 10px;
+    }
+  }
+</style>
