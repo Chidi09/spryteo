@@ -1619,6 +1619,7 @@ pub fn build_stroke_scene_graph(
             stroke: Some(Stroke {
                 color: Rgb { r: 0, g: 0, b: 0 },
                 width,
+                paint: None,
             }),
             transform: Transform {
                 translate_x: 0.0,

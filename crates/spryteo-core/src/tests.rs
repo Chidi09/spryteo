@@ -111,6 +111,7 @@ fn scene_graph_serde_round_trip() {
                 stroke: Some(Stroke {
                     color: Rgb { r: 0, g: 0, b: 0 },
                     width: 1.5,
+                    paint: None,
                 }),
                 transform: Transform {
                     translate_x: 10.0,
@@ -302,4 +303,69 @@ fn test_camel_case_alias() {
     }
     let deserialized: ConvertOptions = serde_json::from_value(default_val).unwrap();
     assert!(deserialized.current_color);
+}
+
+#[test]
+fn test_stroke_paint_defaults_to_none_and_roundtrips() {
+    // 1) A Stroke with paint: None should serialize to JSON without "paint" key.
+    let stroke = Stroke {
+        color: Rgb { r: 0, g: 0, b: 0 },
+        width: 2.0,
+        paint: None,
+    };
+    let json = serde_json::to_string(&stroke).unwrap();
+    assert!(
+        !json.contains("\"paint\""),
+        "JSON should not contain 'paint' key: {json}"
+    );
+
+    // 2) Deserializing that JSON should produce paint: None (default works).
+    let restored: Stroke = serde_json::from_str(&json).unwrap();
+    assert!(restored.paint.is_none());
+
+    // 3) A Stroke with paint: Some(LinearGradient) round-trips.
+    let stops = vec![
+        GradientStop {
+            offset: 0.0,
+            color: Rgb { r: 255, g: 0, b: 0 },
+        },
+        GradientStop {
+            offset: 1.0,
+            color: Rgb { r: 0, g: 0, b: 255 },
+        },
+    ];
+    let gradient = Fill::LinearGradient {
+        x1: 0.0,
+        y1: 0.0,
+        x2: 100.0,
+        y2: 0.0,
+        stops: stops.clone(),
+    };
+    let stroke2 = Stroke {
+        color: Rgb { r: 0, g: 0, b: 0 },
+        width: 2.0,
+        paint: Some(gradient),
+    };
+    let json2 = serde_json::to_string(&stroke2).unwrap();
+    let restored2: Stroke = serde_json::from_str(&json2).unwrap();
+    match restored2.paint {
+        Some(Fill::LinearGradient {
+            x1,
+            y1,
+            x2,
+            y2,
+            stops: s,
+        }) => {
+            assert!((x1 - 0.0).abs() < f64::EPSILON);
+            assert!((y1 - 0.0).abs() < f64::EPSILON);
+            assert!((x2 - 100.0).abs() < f64::EPSILON);
+            assert!((y2 - 0.0).abs() < f64::EPSILON);
+            assert_eq!(s.len(), 2);
+            assert_eq!(s[0].offset, 0.0);
+            assert_eq!(s[0].color, Rgb { r: 255, g: 0, b: 0 });
+            assert_eq!(s[1].offset, 1.0);
+            assert_eq!(s[1].color, Rgb { r: 0, g: 0, b: 255 });
+        }
+        other => panic!("Expected LinearGradient, got {other:?}"),
+    }
 }

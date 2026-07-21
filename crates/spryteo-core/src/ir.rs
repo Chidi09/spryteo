@@ -212,6 +212,11 @@ pub struct CurveSet {
 pub struct Stroke {
     pub color: Rgb,
     pub width: f64,
+    /// Optional gradient paint. When `Some`, it overrides `color` at emit time;
+    /// `color` remains the fallback for consumers that cannot express a
+    /// gradient stroke. `None` for every stroke produced today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<Fill>,
 }
 
 /// A local transform (translation offset) applied to a scene node.
