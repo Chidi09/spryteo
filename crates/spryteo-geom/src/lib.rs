@@ -2,6 +2,15 @@ use std::fmt::Write;
 
 use spryteo_core::ir::{Primitive, Rgb};
 
+pub mod regularize;
+// Named rather than glob-exported: this module and `recognize` below both deal
+// in primitives, and a glob would silently make any future name collision
+// ambiguous at the crate root.
+pub use regularize::{
+    close_loops, detect_mirror_axis, fit_arc, fit_circle, fit_line, snap_angle, snap_to_grid,
+    unify_widths, weld_endpoints,
+};
+
 /// Number of decimal places used when rounding coordinates for stable ID
 /// hashing.  Currently `3` (0.001 unit precision).
 pub const HASH_PRECISION: u32 = 3;
