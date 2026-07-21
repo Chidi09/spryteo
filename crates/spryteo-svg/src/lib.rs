@@ -1694,6 +1694,7 @@ fn serialize_stroke_svg(
     let precision = opts.precision as usize;
     let pretty = matches!(opts.output, OutputFormat::SvgPretty | OutputFormat::Jsx);
     let is_jsx = matches!(opts.output, OutputFormat::Jsx);
+    let current_color_applied = opts.current_color && analyze_scene_fills(scene).1;
 
     let mut out = String::new();
 
@@ -1733,6 +1734,11 @@ fn serialize_stroke_svg(
     for group in &scene.groups {
         collect_gradients(group, &mut grads);
     }
+    // A fill gradient on an id-less node cannot be referenced here: the fill
+    // write below falls back to the first stop's solid colour instead of a
+    // dangling url, so its "grad-" def would be an orphan. Drop it. (The fill
+    // serializer keeps these — its url(#grad-) referrer matches the def.)
+    grads.retain(|g| g.id != "grad-");
     let defs_str = serialize_defs(&grads, opts);
     out.push_str(&defs_str);
 
@@ -1771,7 +1777,43 @@ fn serialize_stroke_svg(
                 nodes_with_ids.push(node);
             }
 
-            write!(node_attrs, " fill=\"none\"").unwrap();
+            match &node.fill {
+                Some(Fill::Solid(rgb)) => {
+                    if current_color_applied {
+                        write!(node_attrs, " fill=\"currentColor\"").unwrap();
+                    } else {
+                        write!(
+                            node_attrs,
+                            " fill=\"#{:02x}{:02x}{:02x}\"",
+                            rgb.r, rgb.g, rgb.b
+                        )
+                        .unwrap();
+                    }
+                }
+                Some(Fill::LinearGradient { stops, .. })
+                | Some(Fill::RadialGradient { stops, .. }) => {
+                    if !node.id.is_empty() {
+                        let grad_id = format!("grad-{}", node.id);
+                        write!(node_attrs, " fill=\"url(#{})\"", escape_html(&grad_id)).unwrap();
+                    } else if let Some(stop) = stops.first() {
+                        if current_color_applied {
+                            write!(node_attrs, " fill=\"currentColor\"").unwrap();
+                        } else {
+                            write!(
+                                node_attrs,
+                                " fill=\"#{:02x}{:02x}{:02x}\"",
+                                stop.color.r, stop.color.g, stop.color.b
+                            )
+                            .unwrap();
+                        }
+                    } else {
+                        write!(node_attrs, " fill=\"none\"").unwrap();
+                    }
+                }
+                None => {
+                    write!(node_attrs, " fill=\"none\"").unwrap();
+                }
+            }
 
             if let Some(ref stroke) = node.stroke {
                 let is_gradient_stroke = matches!(
@@ -2086,10 +2128,12 @@ pub fn emit_stroke_svg(
         byte_count,
     };
 
+    let current_color_applied = opts.current_color && analyze_scene_fills(scene).1;
+
     let meta = Meta {
         nodes: nodes_meta,
         stats,
-        current_color_applied: false,
+        current_color_applied,
     };
 
     ConvertResult { svg, meta }
@@ -4093,9 +4137,27 @@ mod tests {
                 r: 30.0,
             }),
         };
+        let node_none = Node {
+            id: "none-node".to_string(),
+            fill: None,
+            stroke: Some(Stroke {
+                color: Rgb { r: 0, g: 0, b: 0 },
+                width: 1.0,
+                paint: None,
+            }),
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 10.0,
+                cy: 10.0,
+                r: 5.0,
+            }),
+        };
         let group = Group {
             id: "g-dual-node".to_string(),
-            nodes: vec![node],
+            nodes: vec![node, node_none],
             groups: vec![],
         };
         let scene = SceneGraph {
@@ -4120,8 +4182,254 @@ mod tests {
             "stroke should reference strokegrad- id"
         );
         assert!(
-            svg.contains("fill=\"none\""),
-            "stroke mode always sets fill=\"none\""
+            svg.contains("fill=\"url(#grad-dual-node)\""),
+            "stroke mode sets fill attribute for nodes with fill gradient"
         );
+        assert!(
+            svg.contains("fill=\"none\""),
+            "stroke mode sets fill=\"none\" for nodes whose fill is None"
+        );
+    }
+
+    #[test]
+    fn test_stroke_scene_honors_solid_fill() {
+        let node_filled = Node {
+            id: "filled-node".to_string(),
+            fill: Some(Fill::Solid(Rgb { r: 255, g: 0, b: 0 })),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 10.0,
+                cy: 10.0,
+                r: 5.0,
+            }),
+        };
+        let node_stroked = Node {
+            id: "stroked-node".to_string(),
+            fill: None,
+            stroke: Some(Stroke {
+                color: Rgb { r: 0, g: 0, b: 0 },
+                width: 1.0,
+                paint: None,
+            }),
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 20.0,
+                cy: 20.0,
+                r: 5.0,
+            }),
+        };
+        let group = Group {
+            id: "g1".to_string(),
+            nodes: vec![node_filled, node_stroked],
+            groups: vec![],
+        };
+        let scene = SceneGraph {
+            groups: vec![group],
+        };
+        let opts = make_test_options();
+        let res = emit_stroke_svg(&scene, 100, 100, &opts);
+        let svg = &res.svg;
+
+        assert!(svg.contains("fill=\"#ff0000\""));
+        assert!(svg.contains("fill=\"none\""));
+        assert!(!svg.contains("<defs>"));
+        assert!(!svg.contains("<linearGradient"));
+    }
+
+    #[test]
+    fn test_stroke_scene_honors_linear_gradient_fill_with_id() {
+        let grad = Fill::LinearGradient {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 100.0,
+            y2: 0.0,
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: Rgb { r: 255, g: 0, b: 0 },
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: Rgb { r: 0, g: 0, b: 255 },
+                },
+            ],
+        };
+        let node = Node {
+            id: "grad-node".to_string(),
+            fill: Some(grad),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 10.0,
+                cy: 10.0,
+                r: 5.0,
+            }),
+        };
+        let group = Group {
+            id: "g1".to_string(),
+            nodes: vec![node],
+            groups: vec![],
+        };
+        let scene = SceneGraph {
+            groups: vec![group],
+        };
+        let opts = make_test_options();
+        let res = emit_stroke_svg(&scene, 100, 100, &opts);
+        let svg = &res.svg;
+
+        let def_id_prefix = "<linearGradient id=\"";
+        let def_start = svg
+            .find(def_id_prefix)
+            .expect("should contain linearGradient def");
+        let id_start = def_start + def_id_prefix.len();
+        let id_end = svg[id_start..].find('"').expect("closing quote") + id_start;
+        let def_id = &svg[id_start..id_end];
+
+        let ref_prefix = "fill=\"url(#";
+        let ref_start = svg.find(ref_prefix).expect("should contain url reference");
+        let ref_id_start = ref_start + ref_prefix.len();
+        let ref_id_end = svg[ref_id_start..].find(')').expect("closing paren") + ref_id_start;
+        let ref_id = &svg[ref_id_start..ref_id_end];
+
+        assert_eq!(def_id, ref_id);
+        assert_eq!(def_id, "grad-grad-node");
+        assert!(svg.contains("gradientUnits=\"userSpaceOnUse\""));
+    }
+
+    #[test]
+    fn test_stroke_scene_linear_gradient_fill_empty_id_fallback() {
+        let grad = Fill::LinearGradient {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 100.0,
+            y2: 0.0,
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: Rgb {
+                        r: 128,
+                        g: 64,
+                        b: 32,
+                    },
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: Rgb { r: 0, g: 0, b: 255 },
+                },
+            ],
+        };
+        let node = Node {
+            id: "".to_string(),
+            fill: Some(grad),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 10.0,
+                cy: 10.0,
+                r: 5.0,
+            }),
+        };
+        let group = Group {
+            id: "".to_string(),
+            nodes: vec![node],
+            groups: vec![],
+        };
+        let scene = SceneGraph {
+            groups: vec![group],
+        };
+        let mut opts = make_test_options();
+        opts.id_style = IdStyle::None;
+        let res = emit_stroke_svg(&scene, 100, 100, &opts);
+        let svg = &res.svg;
+
+        assert!(!svg.contains("<linearGradient"));
+        assert!(!svg.contains("url(#"));
+        assert!(svg.contains("fill=\"#804020\""));
+    }
+
+    #[test]
+    fn test_stroke_scene_fill_serialization_determinism() {
+        let grad = Fill::LinearGradient {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 100.0,
+            y2: 0.0,
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: Rgb { r: 255, g: 0, b: 0 },
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: Rgb { r: 0, g: 0, b: 255 },
+                },
+            ],
+        };
+        let node1 = Node {
+            id: "node-1".to_string(),
+            fill: Some(grad),
+            stroke: None,
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Circle {
+                cx: 10.0,
+                cy: 10.0,
+                r: 5.0,
+            }),
+        };
+        let node2 = Node {
+            id: "node-2".to_string(),
+            fill: Some(Fill::Solid(Rgb {
+                r: 10,
+                g: 20,
+                b: 30,
+            })),
+            stroke: Some(Stroke {
+                color: Rgb { r: 0, g: 0, b: 0 },
+                width: 1.5,
+                paint: None,
+            }),
+            transform: Transform {
+                translate_x: 0.0,
+                translate_y: 0.0,
+            },
+            shape: Shape::Primitive(Primitive::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+                rx: None,
+                ry: None,
+            }),
+        };
+        let group = Group {
+            id: "g-main".to_string(),
+            nodes: vec![node1, node2],
+            groups: vec![],
+        };
+        let scene = SceneGraph {
+            groups: vec![group],
+        };
+        let opts = make_test_options();
+
+        let res1 = emit_stroke_svg(&scene, 100, 100, &opts);
+        let res2 = emit_stroke_svg(&scene, 100, 100, &opts);
+
+        assert_eq!(res1.svg, res2.svg);
     }
 }
