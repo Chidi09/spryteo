@@ -30,6 +30,12 @@ pub enum InkSource {
     Mask(Vec<bool>),
 }
 
+/// Max allowed `pixels / (pi * maxDT^2)` for a component to be routed to fill.
+/// A solid disc scores ~1.0, a square 1.27, a triangle 1.65; stroke outlines
+/// (whose area grows with length, not width) measure >= 7.9 on the reference
+/// sheet. 2.5 sits inside that measured gap.
+pub const ROUTE_FILL_COMPACTNESS_MAX: f64 = 2.5;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComponentWidth {
     pub component: usize,    // scan-order index
@@ -110,8 +116,10 @@ pub struct StrokeOptions {
     pub min_component_pixels: usize,
     /// Extend open stroke endpoints outward along local tangent by distance transform radius.
     pub extend_caps: bool,
-    /// Components whose max inscribed full width (2 x max DT) is >= this value are
-    /// routed to `filled_mask` instead of being skeleton-traced. None disables routing.
+    /// Components whose max inscribed full width (2 x max DT) is >= this value AND
+    /// whose area is compact relative to that width (see
+    /// `ROUTE_FILL_COMPACTNESS_MAX`) are routed to `filled_mask` instead of being
+    /// skeleton-traced. None disables routing.
     pub route_fill_above: Option<f64>,
 }
 
@@ -278,7 +286,17 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
                         }
                     }
 
-                    if 2.0 * max_dist >= t {
+                    // Width alone cannot classify at supersampled resolutions: a
+                    // junction blob on a long stroke outline reaches the same max
+                    // inscribed width as a small solid glyph (measured on the
+                    // reference sheet at 4x: stroke junctions 22-27px vs glyphs
+                    // 26-50px — the ranges interleave). Compactness separates them:
+                    // pixels / (pi * maxDT^2) is ~1.0 for a disc, 1.29 for a
+                    // square, 1.65 for a triangle, but >= 7.9 for every stroke
+                    // outline. The 2.5 cutoff sits in that 1.65..7.9 gap.
+                    let compact = comp_pixels.len() as f64
+                        <= ROUTE_FILL_COMPACTNESS_MAX * std::f64::consts::PI * max_dist * max_dist;
+                    if 2.0 * max_dist >= t && compact {
                         if filled_mask.is_empty() {
                             filled_mask = vec![false; size];
                         }
@@ -1091,5 +1109,37 @@ mod tests {
         assert_eq!(res.filled_count, 0);
         assert!(res.filled_mask.is_empty());
         assert!(!res.paths.is_empty());
+    }
+
+    #[test]
+    fn test_route_fill_above_excludes_long_fat_bar() {
+        // A 12x60 bar crosses the width threshold (2*maxDT = 12 >= 8) but its
+        // area/(pi*maxDT^2) ~ 6.4 fails the compactness cut: it is a thick
+        // STROKE, not a filled glyph, and must stay on the skeleton path.
+        // This is the exact failure mode seen at 4x supersample, where a
+        // junction blob on a stroke outline matches a small glyph's width.
+        let w = 80;
+        let h = 80;
+        let mut img = make_empty_image(w, h);
+        let mut mask = vec![false; (w * h) as usize];
+
+        for y in 10..=69 {
+            for x in 10..=21 {
+                mask[(y * w + x) as usize] = true;
+                draw_pixel(&mut img, x, y);
+            }
+        }
+
+        let opts = StrokeOptions {
+            ink: InkSource::Mask(mask),
+            route_fill_above: Some(8.0),
+            ..StrokeOptions::default()
+        };
+
+        let res = trace_stroke_ex(&img, &opts);
+
+        assert_eq!(res.filled_count, 0, "long fat bar must not route to fill");
+        assert!(res.filled_mask.is_empty());
+        assert!(!res.paths.is_empty(), "bar must still be stroke-traced");
     }
 }
