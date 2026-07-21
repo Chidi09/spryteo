@@ -30,6 +30,74 @@ pub enum InkSource {
     Mask(Vec<bool>),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComponentWidth {
+    pub component: usize,    // scan-order index
+    pub max_full_width: f64, // 2.0 * max distance-transform value in the component
+    pub pixels: usize,
+}
+
+pub fn component_widths(mask: &[bool], width: u32, height: u32) -> Vec<ComponentWidth> {
+    if width == 0 || height == 0 || mask.len() != (width as usize * height as usize) {
+        return Vec::new();
+    }
+
+    let dist = skeletonize::compute_distance_transform(mask, width, height);
+
+    let w = width as i32;
+    let h = height as i32;
+    let size = (width * height) as usize;
+    let mut visited = vec![false; size];
+    let mut result = Vec::new();
+    let mut component_idx = 0;
+
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+            if mask[idx] && !visited[idx] {
+                visited[idx] = true;
+                let mut comp_pixel_count = 0;
+                let mut max_dist = dist[idx];
+                let mut queue = std::collections::VecDeque::new();
+                queue.push_back((x, y));
+                comp_pixel_count += 1;
+
+                while let Some((cx, cy)) = queue.pop_front() {
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+                            let nx = cx + dx;
+                            let ny = cy + dy;
+                            if nx >= 0 && nx < w && ny >= 0 && ny < h {
+                                let n_idx = (ny * w + nx) as usize;
+                                if mask[n_idx] && !visited[n_idx] {
+                                    visited[n_idx] = true;
+                                    queue.push_back((nx, ny));
+                                    comp_pixel_count += 1;
+                                    if dist[n_idx] > max_dist {
+                                        max_dist = dist[n_idx];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                result.push(ComponentWidth {
+                    component: component_idx,
+                    max_full_width: 2.0 * max_dist,
+                    pixels: comp_pixel_count,
+                });
+                component_idx += 1;
+            }
+        }
+    }
+
+    result
+}
+
 #[derive(Debug, Clone)]
 pub struct StrokeOptions {
     pub tolerance: f32,
@@ -42,6 +110,9 @@ pub struct StrokeOptions {
     pub min_component_pixels: usize,
     /// Extend open stroke endpoints outward along local tangent by distance transform radius.
     pub extend_caps: bool,
+    /// Components whose max inscribed full width (2 x max DT) is >= this value are
+    /// routed to `filled_mask` instead of being skeleton-traced. None disables routing.
+    pub route_fill_above: Option<f64>,
 }
 
 impl Default for StrokeOptions {
@@ -52,6 +123,7 @@ impl Default for StrokeOptions {
             prune_spurs: true,
             min_component_pixels: 0,
             extend_caps: false,
+            route_fill_above: None,
         }
     }
 }
@@ -77,6 +149,11 @@ pub struct StrokeResultEx {
     pub paths: Vec<StrokePath>,
     /// Number of components that survived `min_component_pixels`.
     pub component_count: usize,
+    /// Union of ink pixels belonging to components routed to fill. Empty Vec when no
+    /// routing happened (route_fill_above None or no component crossed the threshold).
+    pub filled_mask: Vec<bool>,
+    /// Number of components routed to fill.
+    pub filled_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +208,8 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
         return StrokeResultEx {
             paths,
             component_count: 0,
+            filled_mask: Vec::new(),
+            filled_count: 0,
         };
     }
 
@@ -142,6 +221,8 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
                 return StrokeResultEx {
                     paths,
                     component_count: 0,
+                    filled_mask: Vec::new(),
+                    filled_count: 0,
                 };
             }
             m.clone()
@@ -150,7 +231,73 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
 
     // 2. Skeletonize & Distance Transform
     let dist = skeletonize::compute_distance_transform(&ink_mask, image.width, image.height);
-    let mut skeleton = skeletonize::zhang_suen_thinning(&ink_mask, image.width, image.height);
+
+    let mut filled_mask = Vec::new();
+    let mut filled_count = 0;
+
+    let reduced_ink_mask;
+    let tracing_mask = if let Some(t) = opts.route_fill_above {
+        let w = image.width as i32;
+        let h = image.height as i32;
+        let size = (image.width * image.height) as usize;
+        let mut visited = vec![false; size];
+        let mut mask_copy = ink_mask.clone();
+
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) as usize;
+                if mask_copy[idx] && !visited[idx] {
+                    visited[idx] = true;
+                    let mut comp_pixels = Vec::new();
+                    let mut queue = std::collections::VecDeque::new();
+                    queue.push_back((x, y));
+                    comp_pixels.push(idx);
+
+                    let mut max_dist = dist[idx];
+
+                    while let Some((cx, cy)) = queue.pop_front() {
+                        for dy in -1..=1 {
+                            for dx in -1..=1 {
+                                if dx == 0 && dy == 0 {
+                                    continue;
+                                }
+                                let nx = cx + dx;
+                                let ny = cy + dy;
+                                if nx >= 0 && nx < w && ny >= 0 && ny < h {
+                                    let n_idx = (ny * w + nx) as usize;
+                                    if mask_copy[n_idx] && !visited[n_idx] {
+                                        visited[n_idx] = true;
+                                        queue.push_back((nx, ny));
+                                        comp_pixels.push(n_idx);
+                                        if dist[n_idx] > max_dist {
+                                            max_dist = dist[n_idx];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if 2.0 * max_dist >= t {
+                        if filled_mask.is_empty() {
+                            filled_mask = vec![false; size];
+                        }
+                        for &px_idx in &comp_pixels {
+                            filled_mask[px_idx] = true;
+                            mask_copy[px_idx] = false;
+                        }
+                        filled_count += 1;
+                    }
+                }
+            }
+        }
+        reduced_ink_mask = mask_copy;
+        &reduced_ink_mask
+    } else {
+        &ink_mask
+    };
+
+    let mut skeleton = skeletonize::zhang_suen_thinning(tracing_mask, image.width, image.height);
 
     // 3. Prune spurs
     if opts.prune_spurs {
@@ -165,7 +312,7 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
         for y in 0..h {
             for x in 0..w {
                 let idx = (y * w + x) as usize;
-                if ink_mask[idx] && !visited[idx] {
+                if tracing_mask[idx] && !visited[idx] {
                     visited[idx] = true;
                     let mut comp_pixels = Vec::new();
                     let mut queue = std::collections::VecDeque::new();
@@ -182,7 +329,7 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
                                 let ny = cy + dy;
                                 if nx >= 0 && nx < w && ny >= 0 && ny < h {
                                     let n_idx = (ny * w + nx) as usize;
-                                    if ink_mask[n_idx] && !visited[n_idx] {
+                                    if tracing_mask[n_idx] && !visited[n_idx] {
                                         visited[n_idx] = true;
                                         queue.push_back((nx, ny));
                                         comp_pixels.push(n_idx);
@@ -265,7 +412,7 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
                 caps::extend_endpoints(
                     &mut chain_float,
                     &dist,
-                    &ink_mask,
+                    tracing_mask,
                     image.width,
                     image.height,
                 );
@@ -291,6 +438,8 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
     StrokeResultEx {
         paths,
         component_count,
+        filled_mask,
+        filled_count,
     }
 }
 
@@ -782,5 +931,165 @@ mod tests {
                 assert_eq!(curve_json, ex_curve_json);
             }
         }
+    }
+
+    #[test]
+    fn test_component_widths_measures_stroke_and_blob() {
+        let w = 64;
+        let h = 64;
+        let mut mask = vec![false; (w * h) as usize];
+
+        // 3px-wide bar: x in 5..=7, y in 5..=25
+        for y in 5..=25 {
+            for x in 5..=7 {
+                mask[(y * w + x) as usize] = true;
+            }
+        }
+
+        // 12x12 solid square: x in 30..=41, y in 30..=41
+        for y in 30..=41 {
+            for x in 30..=41 {
+                mask[(y * w + x) as usize] = true;
+            }
+        }
+
+        let widths = component_widths(&mask, w, h);
+        assert_eq!(widths.len(), 2);
+        assert_eq!(widths[0].component, 0);
+        assert!(
+            widths[0].max_full_width < 5.0,
+            "Bar max_full_width should be < 5, got {}",
+            widths[0].max_full_width
+        );
+        assert_eq!(widths[1].component, 1);
+        assert!(
+            widths[1].max_full_width >= 11.0,
+            "Square max_full_width should be >= 11, got {}",
+            widths[1].max_full_width
+        );
+    }
+
+    #[test]
+    fn test_route_fill_above_diverts_blob() {
+        let w = 64;
+        let h = 64;
+        let mut img = make_empty_image(w, h);
+        let mut mask = vec![false; (w * h) as usize];
+
+        // 3px-wide bar
+        for y in 5..=25 {
+            for x in 5..=7 {
+                mask[(y * w + x) as usize] = true;
+                draw_pixel(&mut img, x, y);
+            }
+        }
+
+        // 12x12 solid square
+        for y in 30..=41 {
+            for x in 30..=41 {
+                mask[(y * w + x) as usize] = true;
+                draw_pixel(&mut img, x, y);
+            }
+        }
+
+        let opts = StrokeOptions {
+            ink: InkSource::Mask(mask),
+            route_fill_above: Some(8.0),
+            ..StrokeOptions::default()
+        };
+
+        let res = trace_stroke_ex(&img, &opts);
+
+        assert_eq!(res.filled_count, 1);
+        assert_eq!(res.filled_mask.len(), (w * h) as usize);
+
+        // Check filled_mask is true for square pixels
+        assert!(res.filled_mask[(35 * w + 35) as usize]);
+        assert!(res.filled_mask[(30 * w + 30) as usize]);
+        // Check filled_mask is false for bar pixels and background
+        assert!(!res.filled_mask[(15 * w + 6) as usize]);
+        assert!(!res.filled_mask[0]);
+
+        // Assert path(s) exist for the bar, but not the square
+        assert!(!res.paths.is_empty());
+        for p in &res.paths {
+            assert!(p.endpoints[0].1 < 30.0);
+            assert!(p.endpoints[1].1 < 30.0);
+        }
+    }
+
+    #[test]
+    fn test_route_fill_above_none_is_unchanged() {
+        let w = 64;
+        let h = 64;
+        let mut img = make_empty_image(w, h);
+        let mut mask = vec![false; (w * h) as usize];
+
+        for y in 5..=25 {
+            for x in 5..=7 {
+                mask[(y * w + x) as usize] = true;
+                draw_pixel(&mut img, x, y);
+            }
+        }
+        for y in 30..=41 {
+            for x in 30..=41 {
+                mask[(y * w + x) as usize] = true;
+                draw_pixel(&mut img, x, y);
+            }
+        }
+
+        let opts_none = StrokeOptions {
+            ink: InkSource::Mask(mask.clone()),
+            route_fill_above: None,
+            ..StrokeOptions::default()
+        };
+
+        let opts_max = StrokeOptions {
+            ink: InkSource::Mask(mask),
+            route_fill_above: Some(f64::MAX),
+            ..StrokeOptions::default()
+        };
+
+        let res_none = trace_stroke_ex(&img, &opts_none);
+        let res_max = trace_stroke_ex(&img, &opts_max);
+
+        assert!(res_none.filled_mask.is_empty());
+        assert_eq!(res_none.filled_count, 0);
+
+        assert!(res_max.filled_mask.is_empty());
+        assert_eq!(res_max.filled_count, 0);
+
+        assert_eq!(res_none.paths.len(), res_max.paths.len());
+        for (p1, p2) in res_none.paths.iter().zip(res_max.paths.iter()) {
+            assert_eq!(p1.width, p2.width);
+            assert_eq!(p1.endpoints, p2.endpoints);
+        }
+    }
+
+    #[test]
+    fn test_route_fill_above_all_thin_routes_nothing() {
+        let w = 64;
+        let h = 64;
+        let mut img = make_empty_image(w, h);
+        let mut mask = vec![false; (w * h) as usize];
+
+        for y in 5..=25 {
+            for x in 5..=7 {
+                mask[(y * w + x) as usize] = true;
+                draw_pixel(&mut img, x, y);
+            }
+        }
+
+        let opts = StrokeOptions {
+            ink: InkSource::Mask(mask),
+            route_fill_above: Some(8.0),
+            ..StrokeOptions::default()
+        };
+
+        let res = trace_stroke_ex(&img, &opts);
+
+        assert_eq!(res.filled_count, 0);
+        assert!(res.filled_mask.is_empty());
+        assert!(!res.paths.is_empty());
     }
 }
