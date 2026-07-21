@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use resvg::usvg::{Options, Tree};
-use spryteo_cli::run_convert;
+use spryteo_cli::{run_convert, run_convert_stroke};
 use spryteo_core::{ConvertOptions, Mode};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -79,7 +79,9 @@ fn test_corpus_quality_harness() {
     // "real" holds user-supplied evaluation images (png/gif, converted in
     // Auto mode). Its SSIM gate starts looser than the synthetic categories;
     // raise it as the engine improves rather than treating 0.80 as the goal.
-    let categories = ["icons", "pixel-art", "line-art", "photos", "real"];
+    // "stroke" exercises the centerline pipeline (run_convert_stroke), which the other
+    // categories never touch -- they all go through run_convert's fill pipeline.
+    let categories = ["icons", "pixel-art", "line-art", "photos", "real", "stroke"];
 
     let mut current_budgets: BTreeMap<String, Budget> = BTreeMap::new();
     let budgets_path = expected_dir.join("budgets.json");
@@ -127,16 +129,27 @@ fn test_corpus_quality_harness() {
                 _ => Mode::Auto,
             };
 
+            let is_stroke = category == "stroke";
             let opts = ConvertOptions {
                 mode,
+                stroke: is_stroke,
                 ..ConvertOptions::default()
             };
 
-            // 1. Convert
-            let res = run_convert(&png_bytes, &opts).expect("run_convert failed");
+            // 1. Convert. run_convert does not dispatch on opts.stroke -- only
+            //    run_pipeline_with_bytes does -- so the stroke path is selected here.
+            let convert = |bytes: &[u8]| {
+                if is_stroke {
+                    run_convert_stroke(bytes, &opts)
+                } else {
+                    run_convert(bytes, &opts)
+                }
+            };
+
+            let res = convert(&png_bytes).expect("convert failed");
 
             // 2. DETERMINISM: convert twice; identical SVG
-            let res2 = run_convert(&png_bytes, &opts).expect("second run_convert failed");
+            let res2 = convert(&png_bytes).expect("second convert failed");
             assert_eq!(res.svg, res2.svg, "DETERMINISM failed for {}", key);
 
             let golden_path = expected_dir.join(category).join(format!("{}.svg", name));
@@ -212,7 +225,7 @@ fn test_corpus_quality_harness() {
                     let b_blend = b * alpha_frac + 255.0 * (1.0 - alpha_frac);
 
                     let mut luma = 0.299 * r_blend + 0.587 * g_blend + 0.114 * b_blend;
-                    if category == "line-art" {
+                    if category == "line-art" || is_stroke {
                         luma = if luma >= 128.0 { 255.0 } else { 0.0 };
                     }
                     input_luma[y * width + x] = luma;
@@ -279,6 +292,10 @@ fn test_corpus_quality_harness() {
                 "photos" => 0.85,
                 "line-art" => 0.90,
                 "real" => 0.80,
+                // Centerline tracing. Lowest observed is cross_256 at 0.9293 -- the
+                // degree-4 junction, where Zhang-Suen thinning distorts most. Cap
+                // extension and junction welding should raise these, not lower them.
+                "stroke" => 0.92,
                 _ => 0.0,
             };
 

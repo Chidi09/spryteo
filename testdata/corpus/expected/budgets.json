@@ -110,5 +110,25 @@
   "real/runner_lineart_480": {
     "bytes": 13238,
     "nodes": 18
+  },
+  "stroke/corner_256": {
+    "bytes": 1468,
+    "nodes": 1
+  },
+  "stroke/cross_256": {
+    "bytes": 1108,
+    "nodes": 4
+  },
+  "stroke/loop_256": {
+    "bytes": 5147,
+    "nodes": 1
+  },
+  "stroke/multi_256": {
+    "bytes": 7668,
+    "nodes": 4
+  },
+  "stroke/tee_256": {
+    "bytes": 633,
+    "nodes": 2
   }
 }

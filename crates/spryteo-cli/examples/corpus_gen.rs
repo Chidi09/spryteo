@@ -608,6 +608,101 @@ fn generate_line_art() {
     );
 }
 
+/// Fixtures for the centerline (`--stroke`) pipeline.
+///
+/// These deliberately target the cases the spryteo-stroke unit tests do NOT cover:
+/// multiple disjoint components in one image, genuine closed loops, and junctions of
+/// degree 3 and 4 (which push `traverse_graph` off the Hierholzer path and into its
+/// greedy multi-path fallback). Strokes are kept thin, since centerline tracing is
+/// most fragile on thin strokes and that is the regime the icon-sheet work targets.
+fn generate_stroke() {
+    let black = Rgba([0, 0, 0, 255]);
+    let white = Rgba([255, 255, 255, 255]);
+
+    let render_stroke = |name: &str, f: &dyn Fn(f32, f32) -> f32, stroke_width_4x: f32| {
+        let canvas_size = 1024;
+        let mut canvas = RgbaImage::new(canvas_size, canvas_size);
+        let half_w = stroke_width_4x / 2.0;
+        for y in 0..canvas_size {
+            for x in 0..canvas_size {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                if f(px, py) <= half_w {
+                    canvas.put_pixel(x, y, black);
+                } else {
+                    canvas.put_pixel(x, y, white);
+                }
+            }
+        }
+        save_png(downscale_4x(&canvas), "stroke", name);
+    };
+
+    // 1. cross_256 -- two crossing lines. The centre is a degree-4 junction, giving 4
+    //    odd-degree endpoints, which forces traverse_graph's greedy multi-path fallback.
+    render_stroke(
+        "cross_256",
+        &|x, y| {
+            dist_to_segment(x, y, 160.0, 160.0, 864.0, 864.0)
+                .min(dist_to_segment(x, y, 160.0, 864.0, 864.0, 160.0))
+        },
+        10.0,
+    );
+
+    // 2. tee_256 -- a single degree-3 junction (3 odd nodes + the junction).
+    render_stroke(
+        "tee_256",
+        &|x, y| {
+            dist_to_segment(x, y, 160.0, 300.0, 864.0, 300.0)
+                .min(dist_to_segment(x, y, 512.0, 300.0, 512.0, 880.0))
+        },
+        10.0,
+    );
+
+    // 3. loop_256 -- a genuine closed loop with no endpoints at all. Exercises the
+    //    "promote a pixel to a node" path in build_stroke_graphs and the fact that
+    //    smooth_chain never emits ClosePath.
+    render_stroke(
+        "loop_256",
+        &|x, y| ((x - 512.0).hypot(y - 512.0) - 330.0).abs(),
+        10.0,
+    );
+
+    // 4. multi_256 -- four disjoint components in one image. This is the icon-sheet
+    //    case, and spryteo-stroke has no unit coverage for it at all.
+    render_stroke(
+        "multi_256",
+        &|x, y| {
+            let mut d = f32::MAX;
+            for (cx, cy) in [(280.0, 280.0), (744.0, 280.0), (280.0, 744.0)] {
+                d = d.min(((x - cx).hypot(y - cy) - 130.0).abs());
+            }
+            // a plain segment as the fourth component
+            d.min(dist_to_segment(x, y, 640.0, 640.0, 850.0, 850.0))
+        },
+        10.0,
+    );
+
+    // 5. corner_256 -- an open polyline with sharp corners and two free ends, the
+    //    clean Hierholzer case (exactly 2 odd nodes -> one continuous path).
+    render_stroke(
+        "corner_256",
+        &|x, y| {
+            dist_to_polyline(
+                x,
+                y,
+                &[
+                    (180.0, 840.0),
+                    (180.0, 300.0),
+                    (512.0, 180.0),
+                    (844.0, 300.0),
+                    (844.0, 840.0),
+                ],
+            )
+        },
+        10.0,
+    );
+}
+
 fn generate_photos() {
     let size = 256;
 
@@ -715,6 +810,7 @@ fn main() {
     generate_icons();
     generate_pixel_art();
     generate_line_art();
+    generate_stroke();
     generate_photos();
     println!("Corpus generation finished successfully!");
 }
