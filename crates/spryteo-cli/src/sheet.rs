@@ -72,12 +72,27 @@ pub struct IconReport {
     pub ink_pixels: u32,
     pub path_count: usize,
     pub stroke_width: f64,
+    pub filled_components: usize,
     pub gradient_residual: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regularize: Option<IconRegularizeReport>,
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_rect: Option<(u32, u32, u32, u32)>,
+}
+
+fn extract_endpoints(segments: &[spryteo_core::PathElement]) -> Vec<(f64, f64)> {
+    let mut points = Vec::new();
+    for seg in segments {
+        match seg {
+            spryteo_core::PathElement::MoveTo(x, y) | spryteo_core::PathElement::LineTo(x, y) => {
+                points.push((*x, *y))
+            }
+            spryteo_core::PathElement::CurveTo(_, _, _, _, x3, y3) => points.push((*x3, *y3)),
+            spryteo_core::PathElement::ClosePath => {}
+        }
+    }
+    points
 }
 
 /// Overall report returned by `run_sheet`.
@@ -228,6 +243,16 @@ pub fn run_sheet(
     };
     let cells = spryteo_sheet::extract_cells(&mask, &lattice, &cell_cfg);
 
+    let widths = spryteo_stroke::component_widths(&mask.bits, mask.width, mask.height);
+    let mut max_widths: Vec<f64> = widths.iter().map(|w| w.max_full_width).collect();
+    max_widths.sort_by(|a, b| a.total_cmp(b));
+    let sheet_stroke_w = if max_widths.is_empty() {
+        3.0
+    } else {
+        max_widths[max_widths.len() / 2]
+    };
+    let route_t = 1.3 * sheet_stroke_w * sheet.supersample as f64;
+
     if !sheet.dry_run {
         if let Err(e) = std::fs::create_dir_all(&sheet.out_dir) {
             return Err(SpryteoError::Internal(format!(
@@ -277,8 +302,35 @@ pub fn run_sheet(
                     prune_spurs: false,
                     min_component_pixels: 0,
                     extend_caps: true,
+                    route_fill_above: Some(route_t),
                 };
                 let stroke_ex = spryteo_stroke::trace_stroke_ex(&upscaled_crop, &stroke_opts);
+
+                let fill_curves = if stroke_ex.filled_count > 0 && !stroke_ex.filled_mask.is_empty()
+                {
+                    let mut layer_mask = vec![0u8; stroke_ex.filled_mask.len()];
+                    for i in 0..stroke_ex.filled_mask.len() {
+                        if stroke_ex.filled_mask[i] {
+                            layer_mask[i] = (cov[i] * 255.0).round() as u8;
+                        }
+                    }
+                    let layer_stack = spryteo_core::ir::LayerStack {
+                        layers: vec![spryteo_core::ir::Layer {
+                            mask: layer_mask,
+                            color: spryteo_core::ir::Rgb { r: 0, g: 0, b: 0 },
+                            z_order: 0,
+                        }],
+                    };
+                    let contour_set = spryteo_trace::extract_contours(
+                        &layer_stack,
+                        upscaled_crop.width,
+                        upscaled_crop.height,
+                        2, /* turdsize */
+                    );
+                    spryteo_fit::fit_contours(&contour_set, opts.tolerance, opts.smoothness)
+                } else {
+                    spryteo_core::ir::CurveSet { curves: Vec::new() }
+                };
 
                 // 6e. Apply the transform chain
                 let mut min_x = f64::INFINITY;
@@ -289,6 +341,29 @@ pub fn run_sheet(
 
                 for path in &stroke_ex.paths {
                     for seg in &path.curve.segments {
+                        match seg {
+                            spryteo_core::PathElement::MoveTo(x, y)
+                            | spryteo_core::PathElement::LineTo(x, y) => {
+                                min_x = min_x.min(*x);
+                                max_x = max_x.max(*x);
+                                min_y = min_y.min(*y);
+                                max_y = max_y.max(*y);
+                                point_count += 1;
+                            }
+                            spryteo_core::PathElement::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                                min_x = min_x.min(*x1).min(*x2).min(*x3);
+                                max_x = max_x.max(*x1).max(*x2).max(*x3);
+                                min_y = min_y.min(*y1).min(*y2).min(*y3);
+                                max_y = max_y.max(*y1).max(*y2).max(*y3);
+                                point_count += 3;
+                            }
+                            spryteo_core::PathElement::ClosePath => {}
+                        }
+                    }
+                }
+
+                for curve in &fill_curves.curves {
+                    for seg in &curve.segments {
                         match seg {
                             spryteo_core::PathElement::MoveTo(x, y)
                             | spryteo_core::PathElement::LineTo(x, y) => {
@@ -355,6 +430,37 @@ pub fn run_sheet(
                         primitive: path.curve.primitive.clone(),
                     });
                     transformed_widths.push(transform.apply_length(path.width));
+                }
+
+                let mut transformed_fill_curves = Vec::with_capacity(fill_curves.curves.len());
+                for curve in &fill_curves.curves {
+                    let mut new_segs = Vec::with_capacity(curve.segments.len());
+                    for seg in &curve.segments {
+                        let new_seg = match seg {
+                            spryteo_core::PathElement::MoveTo(x, y) => {
+                                let (nx, ny) = transform.apply_point(*x, *y);
+                                spryteo_core::PathElement::MoveTo(nx, ny)
+                            }
+                            spryteo_core::PathElement::LineTo(x, y) => {
+                                let (nx, ny) = transform.apply_point(*x, *y);
+                                spryteo_core::PathElement::LineTo(nx, ny)
+                            }
+                            spryteo_core::PathElement::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                                let (nx1, ny1) = transform.apply_point(*x1, *y1);
+                                let (nx2, ny2) = transform.apply_point(*x2, *y2);
+                                let (nx3, ny3) = transform.apply_point(*x3, *y3);
+                                spryteo_core::PathElement::CurveTo(nx1, ny1, nx2, ny2, nx3, ny3)
+                            }
+                            spryteo_core::PathElement::ClosePath => {
+                                spryteo_core::PathElement::ClosePath
+                            }
+                        };
+                        new_segs.push(new_seg);
+                    }
+                    transformed_fill_curves.push(spryteo_core::Curve {
+                        segments: new_segs,
+                        primitive: curve.primitive.clone(),
+                    });
                 }
 
                 let mut icon_warnings = Vec::new();
@@ -522,6 +628,81 @@ pub fn run_sheet(
                     }
                 }
 
+                let n_stroke = stroke_ex.paths.len();
+                let n_fill = transformed_fill_curves.len();
+
+                if n_fill > 0 {
+                    let fill_paint = stroke_paint
+                        .clone()
+                        .unwrap_or(spryteo_core::Fill::Solid(stroke_color));
+
+                    let mut all_ids: Vec<String> = Vec::with_capacity(n_stroke + n_fill);
+                    for group in &scene.groups {
+                        if let Some(node) = group.nodes.first() {
+                            all_ids.push(node.id.clone());
+                        } else {
+                            all_ids.push(String::new());
+                        }
+                    }
+
+                    for (j, fill_curve) in transformed_fill_curves.iter().enumerate() {
+                        let idx = n_stroke + j;
+                        let id = match opts.id_style {
+                            spryteo_core::options::IdStyle::Hash => {
+                                let endpoints = extract_endpoints(&fill_curve.segments);
+                                spryteo_geom::stable_id(&endpoints, None, idx)
+                            }
+                            spryteo_core::options::IdStyle::Sequential => {
+                                format!("s-{}", idx)
+                            }
+                            spryteo_core::options::IdStyle::None => "".to_string(),
+                        };
+                        all_ids.push(id);
+                    }
+
+                    if !matches!(opts.id_style, spryteo_core::options::IdStyle::None) {
+                        spryteo_geom::dedupe_ids(&mut all_ids);
+                    }
+
+                    for (i, group) in scene.groups.iter_mut().enumerate() {
+                        let id = all_ids[i].clone();
+                        let group_id = if id.is_empty() {
+                            "".to_string()
+                        } else {
+                            format!("g-{}", id)
+                        };
+                        group.id = group_id;
+                        if let Some(node) = group.nodes.first_mut() {
+                            node.id = id;
+                        }
+                    }
+
+                    for (j, fill_curve) in transformed_fill_curves.iter().enumerate() {
+                        let id = all_ids[n_stroke + j].clone();
+                        let group_id = if id.is_empty() {
+                            "".to_string()
+                        } else {
+                            format!("g-{}", id)
+                        };
+                        let node = spryteo_core::ir::Node {
+                            id: id.clone(),
+                            fill: Some(fill_paint.clone()),
+                            stroke: None,
+                            transform: spryteo_core::ir::Transform {
+                                translate_x: 0.0,
+                                translate_y: 0.0,
+                            },
+                            shape: spryteo_core::ir::Shape::Path(fill_curve.segments.clone()),
+                        };
+                        let group = spryteo_core::ir::Group {
+                            id: group_id,
+                            nodes: vec![node],
+                            groups: vec![],
+                        };
+                        scene.groups.push(group);
+                    }
+                }
+
                 let mut icon_opts = opts.clone();
                 if sheet.flat {
                     icon_opts.current_color = true;
@@ -547,6 +728,8 @@ pub fn run_sheet(
                     transformed_widths.iter().sum::<f64>() / transformed_widths.len() as f64
                 };
 
+                let total_path_count = stroke_ex.paths.len() + transformed_fill_curves.len();
+
                 Ok((
                     IconReport {
                         name: icon_name.clone(),
@@ -559,8 +742,9 @@ pub fn run_sheet(
                             cell.cell_rect.height(),
                         ),
                         ink_pixels: cell.ink_pixels,
-                        path_count: stroke_ex.paths.len(),
+                        path_count: total_path_count,
                         stroke_width: mean_width,
+                        filled_components: stroke_ex.filled_count,
                         gradient_residual,
                         regularize: reg_info,
                         warnings: icon_warnings,
@@ -592,6 +776,7 @@ pub fn run_sheet(
                     ink_pixels: cell.ink_pixels,
                     path_count: 0,
                     stroke_width: 0.0,
+                    filled_components: 0,
                     gradient_residual: None,
                     regularize: None,
                     warnings: vec![msg],
@@ -619,6 +804,7 @@ pub fn run_sheet(
                     ink_pixels: cell.ink_pixels,
                     path_count: 0,
                     stroke_width: 0.0,
+                    filled_components: 0,
                     gradient_residual: None,
                     regularize: None,
                     warnings: vec![format!("Panic while processing icon: {}", msg)],

@@ -587,3 +587,164 @@ fn test_sheet_uniform_noise_rejected() {
 
     let _ = fs::remove_dir_all(&out_dir);
 }
+
+fn generate_synthetic_sheet_with_filled_glyphs_png() -> Vec<u8> {
+    let w = 200u32;
+    let h = 140u32;
+    let mut imgbuf = image::ImageBuffer::<image::Rgba<u8>, _>::from_pixel(
+        w,
+        h,
+        image::Rgba([255, 255, 255, 255]),
+    );
+
+    let draw_rect = |img: &mut image::ImageBuffer<image::Rgba<u8>, Vec<u8>>,
+                     x1: u32,
+                     y1: u32,
+                     x2: u32,
+                     y2: u32,
+                     color: image::Rgba<u8>| {
+        for y in y1..=y2 {
+            for x in x1..=x2 {
+                if x < w && y < h {
+                    img.put_pixel(x, y, color);
+                }
+            }
+        }
+    };
+
+    let blue = image::Rgba([0, 0, 200, 255]);
+    let red = image::Rgba([200, 0, 0, 255]);
+    let green = image::Rgba([0, 200, 0, 255]);
+    let purple = image::Rgba([200, 0, 200, 255]);
+    let orange = image::Rgba([220, 120, 0, 255]);
+    let magenta = image::Rgba([200, 0, 100, 255]);
+
+    // Cell (0,0): L shape (Blue)
+    draw_rect(&mut imgbuf, 24, 24, 25, 48, blue);
+    draw_rect(&mut imgbuf, 24, 47, 48, 48, blue);
+
+    // Cell (1,0): Solid filled 16x16 square (Red)
+    draw_rect(&mut imgbuf, 84, 28, 108, 44, red);
+
+    // Cell (2,0): Vertical bar (Green)
+    draw_rect(&mut imgbuf, 152, 24, 153, 48, green);
+
+    // Cell (0,1): Plus cross (Purple)
+    draw_rect(&mut imgbuf, 24, 95, 48, 96, purple);
+    draw_rect(&mut imgbuf, 35, 84, 36, 108, purple);
+
+    // Cell (1,1): Three 6x6 dots in a column (Orange)
+    draw_rect(&mut imgbuf, 84, 95, 85, 96, orange);
+    draw_rect(&mut imgbuf, 93, 86, 98, 91, orange);
+    draw_rect(&mut imgbuf, 93, 93, 98, 98, orange);
+    draw_rect(&mut imgbuf, 93, 100, 98, 105, orange);
+    draw_rect(&mut imgbuf, 107, 95, 108, 96, orange);
+
+    // Cell (2,1): T shape (Magenta)
+    draw_rect(&mut imgbuf, 144, 84, 168, 85, magenta);
+    draw_rect(&mut imgbuf, 155, 84, 156, 108, magenta);
+
+    let mut bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut bytes);
+    imgbuf
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .unwrap();
+    bytes
+}
+
+#[test]
+fn test_sheet_filled_components_routing() {
+    let png = generate_synthetic_sheet_with_filled_glyphs_png();
+    let out_dir = unique_temp_dir();
+    let opts = ConvertOptions::default();
+    let sheet_opts = SheetOptions {
+        out_dir: out_dir.clone(),
+        ..SheetOptions::default()
+    };
+
+    let report = run_sheet(&png, &opts, &sheet_opts).expect("run_sheet should succeed");
+
+    assert_eq!(report.written, 6);
+
+    let square_icon = report
+        .icons
+        .iter()
+        .find(|i| i.col == 1 && i.row == 0)
+        .expect("square icon at col 1, row 0 should exist");
+    let dots_icon = report
+        .icons
+        .iter()
+        .find(|i| i.col == 1 && i.row == 1)
+        .expect("dots icon at col 1, row 1 should exist");
+
+    assert!(
+        square_icon.filled_components >= 1,
+        "square icon should have filled_components >= 1, got {}",
+        square_icon.filled_components
+    );
+    assert!(
+        dots_icon.filled_components >= 1,
+        "dots icon should have filled_components >= 1, got {}",
+        dots_icon.filled_components
+    );
+
+    let square_svg = fs::read_to_string(out_dir.join(format!("{}.svg", square_icon.name))).unwrap();
+    let dots_svg = fs::read_to_string(out_dir.join(format!("{}.svg", dots_icon.name))).unwrap();
+
+    assert!(
+        square_svg.contains("fill=\"#") || square_svg.contains("fill=\"url("),
+        "square SVG must contain fill color/gradient, got: {}",
+        square_svg
+    );
+    assert!(
+        dots_svg.contains("fill=\"#") || dots_svg.contains("fill=\"url("),
+        "dots SVG must contain fill color/gradient, got: {}",
+        dots_svg
+    );
+
+    let usvg_opts = resvg::usvg::Options::default();
+    for icon in &report.icons {
+        let path = out_dir.join(format!("{}.svg", icon.name));
+        if path.exists() {
+            let svg_str = fs::read_to_string(&path).unwrap();
+            resvg::usvg::Tree::from_str(&svg_str, &usvg_opts)
+                .unwrap_or_else(|e| panic!("SVG parsing failed for {}: {}", path.display(), e));
+        }
+    }
+
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_real_sheet_all_105_extract() {
+    if std::env::var("SPRYTEO_SHEET_FIXTURE").is_err() {
+        return;
+    }
+
+    let bytes = load_real_sheet();
+    let out_dir = unique_temp_dir();
+    let opts = ConvertOptions::default();
+    let sheet_opts = SheetOptions {
+        out_dir: out_dir.clone(),
+        seg: spryteo_cli::sheet::SegChoice::Chroma,
+        ..SheetOptions::default()
+    };
+
+    let report = run_sheet(&bytes, &opts, &sheet_opts).expect("run_sheet should succeed");
+    assert_eq!(
+        report.written, 105,
+        "expected 105 icons written, got {}",
+        report.written
+    );
+    for icon in &report.icons {
+        assert!(
+            icon.path_count >= 1,
+            "icon {} at col {}, row {} has path_count == 0 (expected >= 1)",
+            icon.name,
+            icon.col,
+            icon.row
+        );
+    }
+
+    let _ = fs::remove_dir_all(&out_dir);
+}
