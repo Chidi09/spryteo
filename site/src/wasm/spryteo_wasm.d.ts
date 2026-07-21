@@ -12,6 +12,16 @@ export function convert(bytes: Uint8Array, options_json: string): any;
 export function convert_default(bytes: Uint8Array): any;
 
 /**
+ * The sheet mode exported function, exposed via `#[wasm_bindgen]`
+ */
+export function convert_sheet(bytes: Uint8Array, options_json: string): any;
+
+/**
+ * A convenience export for sheet mode equivalent to calling `convert_sheet(bytes, "{}")`.
+ */
+export function convert_sheet_default(bytes: Uint8Array): any;
+
+/**
  * A wasm-bindgen start function to set up console panic hook.
  */
 export function init(): void;
@@ -22,6 +32,8 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly convert: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly convert_default: (a: number, b: number) => [number, number, number];
+    readonly convert_sheet: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly convert_sheet_default: (a: number, b: number) => [number, number, number];
     readonly init: () => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

@@ -34,6 +34,39 @@ export function convert_default(bytes) {
 }
 
 /**
+ * The sheet mode exported function, exposed via `#[wasm_bindgen]`
+ * @param {Uint8Array} bytes
+ * @param {string} options_json
+ * @returns {any}
+ */
+export function convert_sheet(bytes, options_json) {
+    const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(options_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.convert_sheet(ptr0, len0, ptr1, len1);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * A convenience export for sheet mode equivalent to calling `convert_sheet(bytes, "{}")`.
+ * @param {Uint8Array} bytes
+ * @returns {any}
+ */
+export function convert_sheet_default(bytes) {
+    const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.convert_sheet_default(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * A wasm-bindgen start function to set up console panic hook.
  */
 export function init() {

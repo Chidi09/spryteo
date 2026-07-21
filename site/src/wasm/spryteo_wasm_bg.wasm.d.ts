@@ -3,6 +3,8 @@
 export const memory: WebAssembly.Memory;
 export const convert: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const convert_default: (a: number, b: number) => [number, number, number];
+export const convert_sheet: (a: number, b: number, c: number, d: number) => [number, number, number];
+export const convert_sheet_default: (a: number, b: number) => [number, number, number];
 export const init: () => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
