@@ -49,6 +49,9 @@
     <div id="sheetSuccessHeader" class="sheet-success-header" hidden>
       <div id="sheetStats" class="sheet-stats"></div>
       <div class="sheet-header-actions">
+        <button id="nameIconsBtn" class="demo-btn" type="button" aria-label="Detect icon names from the sheet labels" hidden>
+          <span id="nameIconsLabel">name icons</span>
+        </button>
         <button id="downloadZipBtn" class="sheet-action-btn primary-action" type="button" aria-label="Download all icons as ZIP">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -249,6 +252,8 @@
   const iconGrid = document.getElementById('sheetIconGrid');
   const downloadZipBtn = document.getElementById('downloadZipBtn');
   const resetBtn = document.getElementById('resetBtn');
+  const nameIconsBtn = document.getElementById('nameIconsBtn') as HTMLButtonElement | null;
+  const nameIconsLabel = document.getElementById('nameIconsLabel');
 
   const defaultIdleMarkup = idleContent ? idleContent.innerHTML : '';
   const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
@@ -259,6 +264,8 @@
   // can put several conversions in flight; only the latest one may render, so a
   // slower earlier result can never clobber a newer one.
   let conversionSeq = 0;
+  // Whether OCR naming has already been applied to the on-screen result.
+  let namesApplied = false;
 
   function validateFile(file: File): string | null {
     if (!ACCEPTED_TYPES.includes(file.type)) return 'unsupported file — please drop a PNG, JPEG, or WebP contact sheet';
@@ -370,6 +377,17 @@
       });
     }
 
+    // Offer OCR naming only when the engine actually located label text
+    // (populated in luminance mode) and we haven't already named this result.
+    const hasLabels = (report.icons ?? []).some(
+      (r: any) => Array.isArray(r.label_rect) && r.label_rect.length === 4,
+    );
+    if (nameIconsBtn) {
+      nameIconsBtn.hidden = !hasLabels || namesApplied;
+      nameIconsBtn.disabled = false;
+      if (nameIconsLabel) nameIconsLabel.textContent = 'name icons';
+    }
+
     // Toggle views
     if (dropzone) dropzone.hidden = true;
     if (successHeader) successHeader.hidden = false;
@@ -403,6 +421,7 @@
       return;
     }
 
+    namesApplied = false;
     // Reset to the processing view — covers both a first run and a re-run
     // triggered by changing an option while a result is on screen.
     if (successHeader) successHeader.hidden = true;
@@ -525,6 +544,71 @@
     flatToggle.addEventListener('change', () => {
       options.flat = flatToggle.checked;
       reconvert();
+    });
+  }
+
+  // --- OCR naming ---
+  async function nameIcons(): Promise<void> {
+    if (!currentFile || !currentResult || !nameIconsBtn) return;
+    const file = currentFile;
+    const result = currentResult;
+    const report = result.report ?? {};
+    const reportIcons: Array<any> = report.icons ?? [];
+    const icons = result.icons ?? [];
+
+    // Build OCR jobs from icons that have a detected label rect.
+    const jobs: Array<{ index: number; rect: [number, number, number, number] }> = [];
+    reportIcons.forEach((r, idx) => {
+      if (Array.isArray(r.label_rect) && r.label_rect.length === 4 && idx < icons.length) {
+        jobs.push({ index: idx, rect: r.label_rect as [number, number, number, number] });
+      }
+    });
+    if (jobs.length === 0) return;
+
+    nameIconsBtn.disabled = true;
+    const setLabel = (t: string) => {
+      if (nameIconsLabel) nameIconsLabel.textContent = t;
+    };
+    setLabel('loading OCR…');
+
+    try {
+      const ocr = await import('../../lib/ocr');
+      const source = await ocr.loadSource(file);
+      // Seed dedup with the names of icons we won't OCR, so collisions are avoided.
+      const taken = new Set<string>();
+      icons.forEach((ic, idx) => {
+        if (!jobs.find((j) => j.index === idx)) taken.add(ic.name);
+      });
+
+      const { names, recognized } = await ocr.recognizeLabels(
+        source,
+        report.cols ?? 0,
+        jobs,
+        (done, total) => setLabel(`naming ${done}/${total}…`),
+        taken,
+      );
+      source.close?.();
+
+      // Apply detected names in place, then re-render the grid.
+      names.forEach((name, idx) => {
+        if (icons[idx]) icons[idx].name = name;
+      });
+      namesApplied = true;
+      renderSuccess(file, result);
+      // Free the OCR worker's memory once done.
+      ocr.disposeOcr();
+      void recognized;
+    } catch (err) {
+      setLabel('naming failed');
+      nameIconsBtn.disabled = false;
+      // eslint-disable-next-line no-console
+      console.error('OCR naming failed:', err);
+    }
+  }
+
+  if (nameIconsBtn) {
+    nameIconsBtn.addEventListener('click', () => {
+      void nameIcons();
     });
   }
 })();
