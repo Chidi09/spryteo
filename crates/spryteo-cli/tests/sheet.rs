@@ -81,13 +81,38 @@ fn generate_synthetic_sheet_png() -> Vec<u8> {
 }
 
 fn generate_greyscale_png() -> Vec<u8> {
-    let w = 100u32;
-    let h = 100u32;
-    let imgbuf = image::ImageBuffer::<image::Rgba<u8>, _>::from_pixel(
+    let w = 200u32;
+    let h = 140u32;
+    let mut imgbuf = image::ImageBuffer::<image::Rgba<u8>, _>::from_pixel(
         w,
         h,
-        image::Rgba([128, 128, 128, 255]),
+        image::Rgba([255, 255, 255, 255]),
     );
+
+    let draw_rect = |img: &mut image::ImageBuffer<image::Rgba<u8>, Vec<u8>>,
+                     x1: u32,
+                     y1: u32,
+                     x2: u32,
+                     y2: u32,
+                     color: image::Rgba<u8>| {
+        for y in y1..=y2 {
+            for x in x1..=x2 {
+                if x < w && y < h {
+                    img.put_pixel(x, y, color);
+                }
+            }
+        }
+    };
+
+    let black = image::Rgba([40, 40, 40, 255]);
+    let dark_grey = image::Rgba([80, 80, 80, 255]);
+
+    // Cell (0,0): L shape
+    draw_rect(&mut imgbuf, 24, 24, 31, 48, black);
+    draw_rect(&mut imgbuf, 24, 41, 48, 48, black);
+
+    // Cell (1,0): Horizontal bar
+    draw_rect(&mut imgbuf, 84, 32, 108, 40, dark_grey);
 
     let mut bytes = Vec::new();
     let mut cursor = std::io::Cursor::new(&mut bytes);
@@ -217,7 +242,7 @@ fn test_sheet_dry_run_writes_nothing() {
 }
 
 #[test]
-fn test_sheet_rejects_greyscale_sheet() {
+fn test_sheet_greyscale_sheet_uses_luminance() {
     let grey_png = generate_greyscale_png();
     let out_dir = unique_temp_dir();
     let opts = ConvertOptions::default();
@@ -226,14 +251,9 @@ fn test_sheet_rejects_greyscale_sheet() {
         ..SheetOptions::default()
     };
 
-    let res = run_sheet(&grey_png, &opts, &sheet_opts);
-    assert!(res.is_err(), "All-grey sheet should return Err");
-    let err_msg = res.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("chroma"),
-        "Error message should mention chroma, got: {}",
-        err_msg
-    );
+    let report = run_sheet(&grey_png, &opts, &sheet_opts).expect("Greyscale sheet should succeed");
+    assert_eq!(report.segmentation, "luminance");
+    assert!(report.written >= 1);
 
     let _ = fs::remove_dir_all(&out_dir);
 }

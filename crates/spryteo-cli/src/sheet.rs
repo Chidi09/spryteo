@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 use spryteo_core::{ConvertOptions, SpryteoError};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SegChoice {
+    #[default]
+    Auto,
+    Chroma,
+    Luma,
+}
+
 /// Options configuring icon contact sheet extraction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetOptions {
@@ -16,6 +24,7 @@ pub struct SheetOptions {
     pub dry_run: bool,
     pub regularize: bool, // default false
     pub grid_pitch: f64,  // default 1.0
+    pub seg: SegChoice,
 }
 
 impl Default for SheetOptions {
@@ -32,6 +41,7 @@ impl Default for SheetOptions {
             dry_run: false,
             regularize: false,
             grid_pitch: 1.0,
+            seg: SegChoice::Auto,
         }
     }
 }
@@ -66,6 +76,8 @@ pub struct IconReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regularize: Option<IconRegularizeReport>,
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_rect: Option<(u32, u32, u32, u32)>,
 }
 
 /// Overall report returned by `run_sheet`.
@@ -80,6 +92,17 @@ pub struct SheetReport {
     pub orphans: usize,
     pub empty_cells: usize,
     pub written: usize,
+    pub segmentation: String,
+    pub polarity: Option<String>,
+    pub text_rows_removed: usize,
+}
+
+enum Segmentation {
+    Chroma,
+    Luminance {
+        info: spryteo_sheet::LumaInfo,
+        text_rows_removed: usize,
+    },
 }
 
 /// Maps upscaled-crop pixel space to the canonical icon viewBox.
@@ -109,7 +132,7 @@ pub fn run_sheet(
     // 1. Decode the image ONCE via spryteo_raster::decode. Never decode per icon.
     let image = spryteo_raster::decode(bytes, opts)?;
 
-    // 2. Chroma mask
+    // 2. Segmentation selection
     let sat_thresh = sheet
         .sat_threshold
         .unwrap_or_else(|| spryteo_sheet::auto_sat_threshold(&image));
@@ -117,13 +140,69 @@ pub fn run_sheet(
         sat_min: sat_thresh,
         ..Default::default()
     };
-    let mask = spryteo_sheet::chroma_mask(&image, &chroma_cfg);
-    if let Err(e) = spryteo_sheet::check_chroma_usable(&mask) {
-        return Err(SpryteoError::InvalidInput(format!(
-            "{}: chroma segmentation is not viable for this image",
-            e
-        )));
-    }
+    let luma_cfg = spryteo_sheet::LumaConfig::default();
+
+    let (mask, segmentation, tb_opt) = match sheet.seg {
+        SegChoice::Chroma => {
+            let mask = spryteo_sheet::chroma_mask(&image, &chroma_cfg);
+            if let Err(e) = spryteo_sheet::check_chroma_usable(&mask) {
+                return Err(SpryteoError::InvalidInput(format!(
+                    "{}: chroma segmentation is not viable for this image",
+                    e
+                )));
+            }
+            (mask, Segmentation::Chroma, None)
+        }
+        SegChoice::Luma => {
+            let (raw_mask, info) = spryteo_sheet::luma_mask(&image, &luma_cfg);
+            if spryteo_sheet::check_luma_usable(&raw_mask).is_err() {
+                return Err(SpryteoError::InvalidInput(
+                    "neither chroma nor luminance segmentation is viable for this image"
+                        .to_string(),
+                ));
+            }
+            let tb =
+                spryteo_sheet::classify_rows(&raw_mask, &spryteo_sheet::TextBandConfig::default());
+            let mask = spryteo_sheet::strip_text_rows(&raw_mask, &tb);
+            let text_rows_removed = tb.text.len();
+            (
+                mask,
+                Segmentation::Luminance {
+                    info,
+                    text_rows_removed,
+                },
+                Some(tb),
+            )
+        }
+        SegChoice::Auto => {
+            let c_mask = spryteo_sheet::chroma_mask(&image, &chroma_cfg);
+            if spryteo_sheet::check_chroma_usable(&c_mask).is_ok() {
+                (c_mask, Segmentation::Chroma, None)
+            } else {
+                let (raw_mask, info) = spryteo_sheet::luma_mask(&image, &luma_cfg);
+                if spryteo_sheet::check_luma_usable(&raw_mask).is_err() {
+                    return Err(SpryteoError::InvalidInput(
+                        "neither chroma nor luminance segmentation is viable for this image"
+                            .to_string(),
+                    ));
+                }
+                let tb = spryteo_sheet::classify_rows(
+                    &raw_mask,
+                    &spryteo_sheet::TextBandConfig::default(),
+                );
+                let mask = spryteo_sheet::strip_text_rows(&raw_mask, &tb);
+                let text_rows_removed = tb.text.len();
+                (
+                    mask,
+                    Segmentation::Luminance {
+                        info,
+                        text_rows_removed,
+                    },
+                    Some(tb),
+                )
+            }
+        }
+    };
 
     // 3. Infer lattice
     let lattice_cfg = spryteo_sheet::LatticeConfig::default();
@@ -180,8 +259,15 @@ pub fn run_sheet(
                 let upscaled_crop =
                     spryteo_raster::upscale_bicubic(&original_crop, sheet.supersample);
 
-                // 6c. ink_coverage on upscaled crop with sat_ref = sat_threshold in use; threshold at 0.5 into a Vec<bool> ink mask
-                let cov = spryteo_sheet::ink_coverage(&upscaled_crop, sat_thresh, &chroma_cfg);
+                // 6c. ink_coverage
+                let cov = match &segmentation {
+                    Segmentation::Chroma => {
+                        spryteo_sheet::ink_coverage(&upscaled_crop, sat_thresh, &chroma_cfg)
+                    }
+                    Segmentation::Luminance { info, .. } => {
+                        spryteo_sheet::luma_coverage(&upscaled_crop, info, &luma_cfg)
+                    }
+                };
                 let ink_mask: Vec<bool> = cov.iter().map(|&c| c >= 0.5).collect();
 
                 // 6d. trace_stroke_ex
@@ -321,74 +407,105 @@ pub fn run_sheet(
                 };
 
                 let mut gradient_residual = None;
-
-                let crop_mask = spryteo_sheet::chroma_mask(&original_crop, &chroma_cfg);
-                let crop_rect = spryteo_sheet::Bbox {
-                    x1: 0,
-                    y1: 0,
-                    x2: original_crop.width,
-                    y2: original_crop.height,
-                };
                 let color_cfg = spryteo_sheet::ColorConfig::default();
 
                 let (stroke_color, stroke_paint) =
                     if sheet.flat {
                         (spryteo_core::Rgb { r: 0, g: 0, b: 0 }, None)
                     } else {
-                        match spryteo_sheet::fit_linear_gradient(
-                            &original_crop,
-                            &crop_mask,
-                            &crop_rect,
-                            &color_cfg,
-                        ) {
-                            Some(fit) => {
-                                gradient_residual = Some(fit.residual);
-                                // GRADIENT COORDINATE SPACE: fit_linear_gradient is run on the ORIGINAL (non-upscaled) crop,
-                                // so its coordinates are in ORIGINAL-crop space, while the transform expects UPSCALED-crop space.
-                                // Multiply the fitted gradient endpoints by supersample BEFORE passing them through apply_point.
-                                let s_factor = sheet.supersample as f64;
-                                let (gx1, gy1) =
-                                    transform.apply_point(fit.x1 * s_factor, fit.y1 * s_factor);
-                                let (gx2, gy2) =
-                                    transform.apply_point(fit.x2 * s_factor, fit.y2 * s_factor);
-
-                                let stops = vec![
-                                    spryteo_core::GradientStop {
-                                        offset: 0.0,
-                                        color: fit.start,
-                                    },
-                                    spryteo_core::GradientStop {
-                                        offset: 1.0,
-                                        color: fit.end,
-                                    },
-                                ];
-                                (
-                                    fit.start,
-                                    Some(spryteo_core::Fill::LinearGradient {
-                                        x1: gx1,
-                                        y1: gy1,
-                                        x2: gx2,
-                                        y2: gy2,
-                                        stops,
-                                    }),
-                                )
-                            }
-                            None => {
-                                icon_warnings.push(
-                                    "linear gradient fit failed, fell back to dominant color"
-                                        .to_string(),
-                                );
-                                let dom = spryteo_sheet::dominant_color(
+                        match &segmentation {
+                            Segmentation::Chroma => {
+                                let crop_mask =
+                                    spryteo_sheet::chroma_mask(&original_crop, &chroma_cfg);
+                                let crop_rect = spryteo_sheet::Bbox {
+                                    x1: 0,
+                                    y1: 0,
+                                    x2: original_crop.width,
+                                    y2: original_crop.height,
+                                };
+                                match spryteo_sheet::fit_linear_gradient(
                                     &original_crop,
                                     &crop_mask,
                                     &crop_rect,
-                                    color_cfg.core_sat_min,
+                                    &color_cfg,
+                                ) {
+                                    Some(fit) => {
+                                        gradient_residual = Some(fit.residual);
+                                        // GRADIENT COORDINATE SPACE: fit_linear_gradient is run on the ORIGINAL (non-upscaled) crop,
+                                        // so its coordinates are in ORIGINAL-crop space, while the transform expects UPSCALED-crop space.
+                                        // Multiply the fitted gradient endpoints by supersample BEFORE passing them through apply_point.
+                                        let s_factor = sheet.supersample as f64;
+                                        let (gx1, gy1) = transform
+                                            .apply_point(fit.x1 * s_factor, fit.y1 * s_factor);
+                                        let (gx2, gy2) = transform
+                                            .apply_point(fit.x2 * s_factor, fit.y2 * s_factor);
+
+                                        let stops = vec![
+                                            spryteo_core::GradientStop {
+                                                offset: 0.0,
+                                                color: fit.start,
+                                            },
+                                            spryteo_core::GradientStop {
+                                                offset: 1.0,
+                                                color: fit.end,
+                                            },
+                                        ];
+                                        (
+                                            fit.start,
+                                            Some(spryteo_core::Fill::LinearGradient {
+                                                x1: gx1,
+                                                y1: gy1,
+                                                x2: gx2,
+                                                y2: gy2,
+                                                stops,
+                                            }),
+                                        )
+                                    }
+                                    None => {
+                                        icon_warnings.push(
+                                        "linear gradient fit failed, fell back to dominant color"
+                                            .to_string(),
+                                    );
+                                        let dom = spryteo_sheet::dominant_color(
+                                            &original_crop,
+                                            &crop_mask,
+                                            &crop_rect,
+                                            color_cfg.core_sat_min,
+                                        )
+                                        .unwrap_or(spryteo_core::Rgb { r: 0, g: 0, b: 0 });
+                                        (dom, None)
+                                    }
+                                }
+                            }
+                            Segmentation::Luminance { info, .. } => {
+                                let dom = spryteo_sheet::luma::dominant_ink_color(
+                                    &original_crop,
+                                    info,
+                                    &luma_cfg,
                                 )
                                 .unwrap_or(spryteo_core::Rgb { r: 0, g: 0, b: 0 });
                                 (dom, None)
                             }
                         }
                     };
+
+                let label_rect = match &segmentation {
+                    Segmentation::Chroma => None,
+                    Segmentation::Luminance { .. } => {
+                        let tb = tb_opt.as_ref().unwrap();
+                        let icon_band = tb
+                            .icon
+                            .iter()
+                            .find(|b| cell.cell_rect.y1 >= b.start && cell.cell_rect.y1 < b.end)
+                            .or_else(|| {
+                                let y_mid = (cell.cell_rect.y1 + cell.cell_rect.y2) / 2;
+                                tb.icon.iter().find(|b| y_mid >= b.start && y_mid < b.end)
+                            });
+                        icon_band
+                            .and_then(|ib| spryteo_sheet::label_band_below(tb, ib))
+                            .map(|b| (cell.crop.x1, b.start, cell.crop.x2, b.end))
+                    }
+                };
 
                 let mut scene = spryteo_svg::build_stroke_scene_graph(
                     &curve_set,
@@ -447,6 +564,7 @@ pub fn run_sheet(
                         gradient_residual,
                         regularize: reg_info,
                         warnings: icon_warnings,
+                        label_rect,
                     },
                     is_written,
                 ))
@@ -477,6 +595,7 @@ pub fn run_sheet(
                     gradient_residual: None,
                     regularize: None,
                     warnings: vec![msg],
+                    label_rect: None,
                 });
             }
             Err(payload) => {
@@ -503,10 +622,27 @@ pub fn run_sheet(
                     gradient_residual: None,
                     regularize: None,
                     warnings: vec![format!("Panic while processing icon: {}", msg)],
+                    label_rect: None,
                 });
             }
         }
     }
+
+    let (segmentation_str, polarity, text_rows_removed) = match segmentation {
+        Segmentation::Chroma => ("chroma".to_string(), None, 0),
+        Segmentation::Luminance {
+            info,
+            text_rows_removed,
+        } => (
+            "luminance".to_string(),
+            Some(if info.dark_on_light {
+                "dark_on_light".to_string()
+            } else {
+                "light_on_dark".to_string()
+            }),
+            text_rows_removed,
+        ),
+    };
 
     let report = SheetReport {
         icons: icon_reports,
@@ -518,6 +654,9 @@ pub fn run_sheet(
         orphans: rec.orphans.len(),
         empty_cells: rec.empty_cells.len(),
         written: written_count,
+        segmentation: segmentation_str,
+        polarity,
+        text_rows_removed,
     };
 
     // 7. Write the manifest as pretty JSON if sheet.manifest is set and !sheet.dry_run

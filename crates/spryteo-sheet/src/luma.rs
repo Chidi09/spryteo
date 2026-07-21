@@ -1,5 +1,5 @@
 use crate::chroma::{Mask, SheetError};
-use spryteo_core::ir::RasterImage;
+use spryteo_core::ir::{RasterImage, Rgb};
 
 /// Configuration parameters for luminance-based segmentation.
 #[derive(Debug, Clone)]
@@ -149,6 +149,41 @@ pub fn check_luma_usable(mask: &Mask) -> Result<f32, SheetError> {
     } else {
         Ok(frac)
     }
+}
+
+/// Computes the dominant ink color by taking the per-channel median of RGB values
+/// over pixels with luminance coverage >= 0.5. Returns None if no such pixels exist.
+pub fn dominant_ink_color(image: &RasterImage, info: &LumaInfo, cfg: &LumaConfig) -> Option<Rgb> {
+    let cov = luma_coverage(image, info, cfg);
+    let mut r_vals = Vec::new();
+    let mut g_vals = Vec::new();
+    let mut b_vals = Vec::new();
+
+    for (i, &c) in cov.iter().enumerate() {
+        if c >= 0.5 {
+            let idx = i * 4;
+            if idx + 2 < image.pixels.len() {
+                r_vals.push(image.pixels[idx]);
+                g_vals.push(image.pixels[idx + 1]);
+                b_vals.push(image.pixels[idx + 2]);
+            }
+        }
+    }
+
+    if r_vals.is_empty() {
+        return None;
+    }
+
+    r_vals.sort_unstable();
+    g_vals.sort_unstable();
+    b_vals.sort_unstable();
+
+    let mid = (r_vals.len() - 1) / 2;
+    Some(Rgb {
+        r: r_vals[mid],
+        g: g_vals[mid],
+        b: b_vals[mid],
+    })
 }
 
 #[cfg(test)]
@@ -395,5 +430,26 @@ mod tests {
         assert!((info.background - 255.0).abs() < 0.1);
         assert!(info.dark_on_light);
         assert!((info.ink_ref - 0.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_dominant_ink_color() {
+        let white = pixel(255, 255, 255, 255);
+        let ink1 = pixel(50, 60, 70, 255);
+        let ink2 = pixel(40, 50, 60, 255);
+        let ink3 = pixel(60, 70, 80, 255);
+        let pixels = [white, ink1, ink2, ink3].concat();
+        let img = make_image(4, 1, pixels);
+        let cfg = LumaConfig::default();
+        let info = analyze_luma(&img, &cfg);
+        let dom = dominant_ink_color(&img, &info, &cfg);
+        assert_eq!(
+            dom,
+            Some(Rgb {
+                r: 50,
+                g: 60,
+                b: 70
+            })
+        );
     }
 }

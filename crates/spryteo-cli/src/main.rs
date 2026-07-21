@@ -98,6 +98,18 @@ fn parse_transform_origin(s: &str) -> Result<TOrigin, String> {
     }
 }
 
+fn parse_seg(s: &str) -> Result<spryteo_cli::sheet::SegChoice, String> {
+    match s.to_lowercase().as_str() {
+        "auto" => Ok(spryteo_cli::sheet::SegChoice::Auto),
+        "chroma" => Ok(spryteo_cli::sheet::SegChoice::Chroma),
+        "luma" => Ok(spryteo_cli::sheet::SegChoice::Luma),
+        _ => Err(format!(
+            "Invalid seg choice '{}'. Expected one of: auto, chroma, luma",
+            s
+        )),
+    }
+}
+
 fn parse_hex_rgb(s: &str) -> Result<Rgb, String> {
     let hex = s.strip_prefix('#').unwrap_or(s);
     if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -331,6 +343,10 @@ struct SheetArgs {
     /// Grid pitch in canonical units for regularization
     #[arg(long, default_value = "1.0")]
     grid_pitch: f64,
+
+    /// Segmentation method: auto, chroma, or luma
+    #[arg(long, default_value = "auto", value_parser = parse_seg)]
+    seg: spryteo_cli::sheet::SegChoice,
 }
 
 fn main() {
@@ -598,6 +614,7 @@ fn main() {
                 dry_run: args.dry_run,
                 regularize: args.regularize,
                 grid_pitch: args.grid_pitch,
+                seg: args.seg,
             };
 
             let report = match spryteo_cli::run_sheet(&bytes, &opts, &sheet_opts) {
@@ -608,14 +625,25 @@ fn main() {
                 }
             };
 
-            println!(
-                "Sheet grid: {}x{} (confidence: {:.2}), written: {}/{} icons",
-                report.cols,
-                report.rows,
-                report.confidence,
-                report.written,
-                report.icons.len()
-            );
+            if report.segmentation == "luminance" {
+                println!(
+                    "Sheet grid: {}x{} (confidence: {:.2}), written: {}/{} icons (luminance)",
+                    report.cols,
+                    report.rows,
+                    report.confidence,
+                    report.written,
+                    report.icons.len()
+                );
+            } else {
+                println!(
+                    "Sheet grid: {}x{} (confidence: {:.2}), written: {}/{} icons",
+                    report.cols,
+                    report.rows,
+                    report.confidence,
+                    report.written,
+                    report.icons.len()
+                );
+            }
             if report.straddling > 0 || report.orphans > 0 || report.empty_cells > 0 {
                 println!(
                     "Warnings: {} straddling, {} orphans, {} empty cells",
