@@ -4,6 +4,7 @@ pub mod cluster;
 pub mod color;
 pub mod lattice;
 pub mod luma;
+pub mod pipeline;
 pub mod reconcile;
 pub mod textband;
 
@@ -20,6 +21,10 @@ pub use lattice::{
 pub use luma::{
     analyze_luma, background_luminance, check_luma_usable, luma_coverage, luma_mask, luminance,
     LumaConfig, LumaInfo,
+};
+pub use pipeline::{
+    run_sheet_pipeline, IconRegularizeReport, IconReport, IconSvg, PipelineOptions, SegChoice,
+    SheetOutcome, SheetReport,
 };
 pub use reconcile::{reconcile, Reconciliation};
 pub use textband::{classify_rows, label_band_below, strip_text_rows, TextBandConfig, TextBands};

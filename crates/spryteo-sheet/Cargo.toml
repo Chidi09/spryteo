@@ -8,4 +8,13 @@ description = "Icon contact sheet segmentation via colour-saturation chroma mask
 
 [dependencies]
 spryteo-core = { path = "../spryteo-core" }
+spryteo-geom = { path = "../spryteo-geom" }
+spryteo-raster = { path = "../spryteo-raster" }
+spryteo-stroke = { path = "../spryteo-stroke" }
+spryteo-svg = { path = "../spryteo-svg" }
+spryteo-fit = { path = "../spryteo-fit" }
+spryteo-trace = { path = "../spryteo-trace" }
 serde.workspace = true
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }

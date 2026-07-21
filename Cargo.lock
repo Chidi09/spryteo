@@ -1903,8 +1903,15 @@ dependencies = [
 name = "spryteo-sheet"
 version = "0.0.1"
 dependencies = [
+ "image",
  "serde",
  "spryteo-core",
+ "spryteo-fit",
+ "spryteo-geom",
+ "spryteo-raster",
+ "spryteo-stroke",
+ "spryteo-svg",
+ "spryteo-trace",
 ]
 
 [[package]]
