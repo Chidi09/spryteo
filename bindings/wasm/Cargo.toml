@@ -17,6 +17,7 @@ spryteo-trace = { path = "../../crates/spryteo-trace" }
 spryteo-fit = { path = "../../crates/spryteo-fit" }
 spryteo-stroke = { path = "../../crates/spryteo-stroke" }
 spryteo-svg = { path = "../../crates/spryteo-svg" }
+spryteo-sheet = { path = "../../crates/spryteo-sheet" }
 
 serde.workspace = true
 serde_json.workspace = true

@@ -98,14 +98,14 @@ impl Default for PipelineOptions {
 }
 
 /// Output SVG structure for a single icon.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IconSvg {
     pub name: String,
     pub svg: String,
 }
 
 /// Outcome of running the sheet pipeline in memory.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetOutcome {
     pub report: SheetReport,
     pub icons: Vec<IconSvg>,

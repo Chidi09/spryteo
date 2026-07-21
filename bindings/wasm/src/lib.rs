@@ -4,6 +4,7 @@ use spryteo_core::{
     ClassifiedInput, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode,
     RasterImage, SpryteoError, Tri,
 };
+use spryteo_sheet::{PipelineOptions, SheetOutcome};
 use wasm_bindgen::prelude::*;
 
 /// A wasm-bindgen start function to set up console panic hook.
@@ -191,6 +192,78 @@ pub fn convert_default(bytes: &[u8]) -> Result<JsValue, JsValue> {
     convert(bytes, "{}")
 }
 
+/// Core sheet conversion logic returning standard Rust types for testability on native.
+pub fn convert_sheet_impl(bytes: &[u8], options_json: &str) -> Result<SheetOutcome, String> {
+    let options_json_trimmed = options_json.trim();
+    let cfg = if options_json_trimmed.is_empty() || options_json_trimmed == "{}" {
+        PipelineOptions::default()
+    } else {
+        // Parse the user options into a serde_json::Value
+        let user_val: serde_json::Value = serde_json::from_str(options_json)
+            .map_err(|e| format!("Failed to parse options JSON: {}", e))?;
+
+        // If it's not an object, it's invalid
+        if !user_val.is_object() {
+            return Err("Failed to parse options JSON: expected a JSON object".to_string());
+        }
+
+        // Serialize default options to a Value
+        let mut default_val = serde_json::to_value(PipelineOptions::default())
+            .map_err(|e| format!("Failed to serialize default options: {}", e))?;
+
+        // Merge user_val into default_val
+        if let (Some(default_obj), Some(user_obj)) =
+            (default_val.as_object_mut(), user_val.as_object())
+        {
+            for (k, v) in user_obj {
+                default_obj.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Deserialize back to PipelineOptions
+        serde_json::from_value::<PipelineOptions>(default_val)
+            .map_err(|e| format!("Failed to parse options JSON: {}", e))?
+    };
+
+    let convert_opts = ConvertOptions::default();
+
+    let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        spryteo_sheet::run_sheet_pipeline(bytes, &convert_opts, &cfg)
+    }));
+
+    match run_result {
+        Ok(Ok(res)) => Ok(res),
+        Ok(Err(err)) => Err(err.to_string()),
+        Err(panic_payload) => {
+            let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic".to_string()
+            };
+            Err(format!("Pipeline panicked: {}", msg))
+        }
+    }
+}
+
+/// The sheet mode exported function, exposed via `#[wasm_bindgen]`
+#[wasm_bindgen]
+pub fn convert_sheet(bytes: &[u8], options_json: &str) -> Result<JsValue, JsValue> {
+    match convert_sheet_impl(bytes, options_json) {
+        Ok(res) => {
+            serde_wasm_bindgen::to_value(&res).map_err(|e| JsValue::from_str(&e.to_string()))
+        }
+        Err(err_msg) => Err(JsValue::from_str(&err_msg)),
+    }
+}
+
+/// A convenience export for sheet mode equivalent to calling `convert_sheet(bytes, "{}")`.
+#[wasm_bindgen]
+pub fn convert_sheet_default(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    convert_sheet(bytes, "{}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +370,104 @@ mod tests {
         let bytes_fill = get_synthetic_png_bytes(false);
         let res_fill = convert_impl(&bytes_fill, r#"{"stroke": false}"#).unwrap();
         assert!(!res_fill.svg.contains("pathLength="));
+    }
+
+    fn get_synthetic_sheet_png_bytes() -> Vec<u8> {
+        let w = 160u32;
+        let h = 80u32;
+        let mut img = RgbaImage::new(w, h);
+        for pixel in img.pixels_mut() {
+            *pixel = Rgba([255, 255, 255, 255]);
+        }
+
+        let black = Rgba([0, 0, 0, 255]);
+
+        // Icon 1: Square outline (~24px) centered at x: 20..44, y: 28..52
+        for x in 20..=44 {
+            for y in 28..=52 {
+                if x <= 22 || x >= 42 || y <= 30 || y >= 50 {
+                    img.put_pixel(x, y, black);
+                }
+            }
+        }
+
+        // Icon 2: X shape (~24px) centered at x: 110..134, y: 28..52
+        for i in 0..=24 {
+            for t in 0..=2 {
+                let x1 = 110 + i;
+                let y1 = 28 + i + t;
+                if x1 < w && y1 < h {
+                    img.put_pixel(x1, y1, black);
+                }
+                let x2 = 110 + i;
+                let y2 = if 52 >= i + t { 52 - i - t } else { 0 };
+                if x2 < w && y2 < h {
+                    img.put_pixel(x2, y2, black);
+                }
+            }
+        }
+
+        let mut png_bytes = Vec::new();
+        DynamicImage::ImageRgba8(img)
+            .write_to(&mut Cursor::new(&mut png_bytes), ImageFormat::Png)
+            .unwrap();
+        png_bytes
+    }
+
+    #[test]
+    #[allow(clippy::len_zero)]
+    fn test_sheet_conversion() {
+        let bytes = get_synthetic_sheet_png_bytes();
+        let outcome = convert_sheet_impl(&bytes, "{}").expect("convert_sheet_impl failed");
+        assert!(
+            outcome.icons.len() >= 1,
+            "expected outcome.icons.len() >= 1, got 0"
+        );
+        for icon in &outcome.icons {
+            assert!(
+                icon.svg.starts_with("<svg"),
+                "expected SVG to start with <svg, got {}",
+                &icon.svg[..icon.svg.len().min(20)]
+            );
+        }
+        assert_eq!(outcome.report.written, outcome.icons.len());
+    }
+
+    #[test]
+    fn test_sheet_malformed_options_json() {
+        let bytes = get_synthetic_sheet_png_bytes();
+
+        let res_malformed = convert_sheet_impl(&bytes, "{not json");
+        assert!(res_malformed.is_err());
+        assert!(res_malformed
+            .err()
+            .unwrap()
+            .contains("Failed to parse options JSON"));
+
+        let res_array = convert_sheet_impl(&bytes, "[1,2]");
+        assert!(res_array.is_err());
+        assert!(res_array.err().unwrap().contains("expected a JSON object"));
+    }
+
+    #[test]
+    fn test_sheet_garbage_bytes() {
+        let garbage = b"Not a real image file content at all";
+        let res = convert_sheet_impl(garbage, "{}");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_sheet_options_plumbing() {
+        let bytes = get_synthetic_sheet_png_bytes();
+        let outcome = convert_sheet_impl(&bytes, r#"{"name_prefix": "glyph"}"#)
+            .expect("convert_sheet_impl failed");
+        assert!(!outcome.icons.is_empty());
+        for icon in &outcome.icons {
+            assert!(
+                icon.name.starts_with("glyph-"),
+                "expected icon name to start with 'glyph-', got {}",
+                icon.name
+            );
+        }
     }
 }

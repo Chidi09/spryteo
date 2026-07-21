@@ -1958,6 +1958,7 @@ dependencies = [
  "spryteo-fit",
  "spryteo-quant",
  "spryteo-raster",
+ "spryteo-sheet",
  "spryteo-stroke",
  "spryteo-svg",
  "spryteo-trace",
