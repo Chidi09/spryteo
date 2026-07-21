@@ -1898,6 +1898,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "spryteo-sheet"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "spryteo-core",
+]
+
+[[package]]
 name = "spryteo-stroke"
 version = "0.0.1"
 dependencies = [
