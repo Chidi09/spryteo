@@ -362,3 +362,228 @@ fn test_sheet_regularize_produces_valid_svg() {
 
     let _ = fs::remove_dir_all(&out_dir);
 }
+
+const REAL_SHEET: &str = "../../testdata/corpus/sheets/gradient_lattice_1536.png";
+
+fn load_real_sheet() -> Vec<u8> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    let path = std::path::Path::new(&manifest_dir).join(REAL_SHEET);
+    fs::read(&path)
+        .or_else(|_| fs::read(REAL_SHEET))
+        .expect("Failed to read REAL_SHEET fixture")
+}
+
+fn derive_grayscale(png: &[u8]) -> Vec<u8> {
+    let img = image::load_from_memory(png).expect("load image from memory");
+    let luma = img.to_luma8();
+    let (w, h) = luma.dimensions();
+    let mut rgb_img = image::RgbImage::new(w, h);
+    for (x, y, pixel) in luma.enumerate_pixels() {
+        let v = pixel[0];
+        rgb_img.put_pixel(x, y, image::Rgb([v, v, v]));
+    }
+    let mut bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut bytes);
+    rgb_img
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .expect("encode PNG");
+    bytes
+}
+
+fn derive_inverted_grayscale(png: &[u8]) -> Vec<u8> {
+    let img = image::load_from_memory(png).expect("load image from memory");
+    let luma = img.to_luma8();
+    let (w, h) = luma.dimensions();
+    let mut rgb_img = image::RgbImage::new(w, h);
+    for (x, y, pixel) in luma.enumerate_pixels() {
+        let inv = 255 - pixel[0];
+        rgb_img.put_pixel(x, y, image::Rgb([inv, inv, inv]));
+    }
+    let mut bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut bytes);
+    rgb_img
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .expect("encode PNG");
+    bytes
+}
+
+fn derive_jpeg_q80(png: &[u8]) -> Vec<u8> {
+    let img = image::load_from_memory(png).expect("load image from memory");
+    let rgb = img.to_rgb8();
+    let mut bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut bytes);
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 80);
+    rgb.write_with_encoder(encoder).expect("encode JPEG");
+    bytes
+}
+
+#[test]
+fn test_real_sheet_grayscale_luminance_path() {
+    // expensive full-sheet run; enable with SPRYTEO_SHEET_FIXTURE=1
+    if std::env::var("SPRYTEO_SHEET_FIXTURE").is_err() {
+        return;
+    }
+
+    let bytes = derive_grayscale(&load_real_sheet());
+    let out_dir = unique_temp_dir();
+    let opts = ConvertOptions::default();
+    let sheet_opts = SheetOptions {
+        out_dir: out_dir.clone(),
+        ..SheetOptions::default()
+    };
+
+    let report = run_sheet(&bytes, &opts, &sheet_opts).expect("run_sheet should succeed");
+    assert_eq!(report.cols, 15);
+    assert_eq!(report.rows, 7);
+    assert_eq!(report.segmentation, "luminance");
+    assert_eq!(report.polarity.as_deref(), Some("dark_on_light"));
+    assert_eq!(report.text_rows_removed, 10);
+    assert!(report.written >= 103);
+
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_real_sheet_inverted_dark_mode() {
+    // expensive full-sheet run; enable with SPRYTEO_SHEET_FIXTURE=1
+    if std::env::var("SPRYTEO_SHEET_FIXTURE").is_err() {
+        return;
+    }
+
+    let bytes = derive_inverted_grayscale(&load_real_sheet());
+    let out_dir = unique_temp_dir();
+    let opts = ConvertOptions::default();
+    let sheet_opts = SheetOptions {
+        out_dir: out_dir.clone(),
+        ..SheetOptions::default()
+    };
+
+    let report = run_sheet(&bytes, &opts, &sheet_opts).expect("run_sheet should succeed");
+    assert_eq!(report.cols, 15);
+    assert_eq!(report.rows, 7);
+    assert_eq!(report.segmentation, "luminance");
+    assert_eq!(report.polarity.as_deref(), Some("light_on_dark"));
+    assert_eq!(report.text_rows_removed, 10);
+    assert!(report.written >= 103);
+
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_real_sheet_jpeg_q80_chroma_path() {
+    // expensive full-sheet run; enable with SPRYTEO_SHEET_FIXTURE=1
+    if std::env::var("SPRYTEO_SHEET_FIXTURE").is_err() {
+        return;
+    }
+
+    let bytes = derive_jpeg_q80(&load_real_sheet());
+    let out_dir = unique_temp_dir();
+    let opts = ConvertOptions::default();
+    let sheet_opts = SheetOptions {
+        out_dir: out_dir.clone(),
+        ..SheetOptions::default()
+    };
+
+    let report = run_sheet(&bytes, &opts, &sheet_opts).expect("run_sheet should succeed");
+    assert_eq!(report.cols, 15);
+    // The image-crate JPEG encoder's chroma ringing can make one text/header row
+    // partially chroma-visible, adding a phantom lattice row (measured: 8 rows here
+    // vs 7 from other encoders). Extraction still succeeds; tighten to == 7 when
+    // JPEG threshold adaptation lands (Phase C2).
+    assert!(
+        report.rows == 7 || report.rows == 8,
+        "expected 7 or 8 rows, got {}",
+        report.rows
+    );
+    assert_eq!(report.segmentation, "chroma");
+    assert!(report.written >= 100);
+
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_real_sheet_luminance_determinism() {
+    // expensive full-sheet run; enable with SPRYTEO_SHEET_FIXTURE=1
+    if std::env::var("SPRYTEO_SHEET_FIXTURE").is_err() {
+        return;
+    }
+
+    let bytes = derive_grayscale(&load_real_sheet());
+    let dir1 = unique_temp_dir();
+    let dir2 = unique_temp_dir();
+    let opts = ConvertOptions::default();
+
+    let sheet_opts1 = SheetOptions {
+        out_dir: dir1.clone(),
+        ..SheetOptions::default()
+    };
+    let sheet_opts2 = SheetOptions {
+        out_dir: dir2.clone(),
+        ..SheetOptions::default()
+    };
+
+    let report1 = run_sheet(&bytes, &opts, &sheet_opts1).expect("run_sheet 1 should succeed");
+    let report2 = run_sheet(&bytes, &opts, &sheet_opts2).expect("run_sheet 2 should succeed");
+
+    assert_eq!(report1.written, report2.written);
+
+    let mut files1: Vec<_> = fs::read_dir(&dir1)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    let mut files2: Vec<_> = fs::read_dir(&dir2)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+
+    files1.sort();
+    files2.sort();
+    assert_eq!(files1, files2);
+
+    for fname in &files1 {
+        let content1 = fs::read(dir1.join(fname)).unwrap();
+        let content2 = fs::read(dir2.join(fname)).unwrap();
+        assert_eq!(
+            content1, content2,
+            "Files {:?} must be byte-identical",
+            fname
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir1);
+    let _ = fs::remove_dir_all(&dir2);
+}
+
+#[test]
+fn test_sheet_uniform_noise_rejected() {
+    let w = 64u32;
+    let h = 64u32;
+    let imgbuf =
+        image::ImageBuffer::<image::Rgb<u8>, _>::from_pixel(w, h, image::Rgb([128, 128, 128]));
+    let mut bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut bytes);
+    imgbuf
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .unwrap();
+
+    let out_dir = unique_temp_dir();
+    let opts = ConvertOptions::default();
+    let sheet_opts = SheetOptions {
+        out_dir: out_dir.clone(),
+        seg: spryteo_cli::sheet::SegChoice::Auto,
+        ..SheetOptions::default()
+    };
+
+    let res = run_sheet(&bytes, &opts, &sheet_opts);
+    assert!(res.is_err(), "uniform noise image should fail segmentation");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(
+        err_msg.to_lowercase().contains("segmentation"),
+        "Error message should mention segmentation, got: {}",
+        err_msg
+    );
+
+    let _ = fs::remove_dir_all(&out_dir);
+}
