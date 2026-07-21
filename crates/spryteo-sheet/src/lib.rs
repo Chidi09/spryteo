@@ -3,6 +3,7 @@ pub mod chroma;
 pub mod cluster;
 pub mod color;
 pub mod lattice;
+pub mod luma;
 pub mod reconcile;
 
 pub use cells::{extract_cells, ink_bbox_in, CellConfig, IconCell};
@@ -14,5 +15,9 @@ pub use cluster::{dilate, find_clusters, Bbox, Cluster, ClusterConfig};
 pub use color::{dominant_color, fit_linear_gradient, ColorConfig, GradientFit};
 pub use lattice::{
     find_bands, infer_lattice, project, score_lattice, Axis, Band, Lattice, LatticeConfig,
+};
+pub use luma::{
+    analyze_luma, background_luminance, check_luma_usable, luma_coverage, luma_mask, luminance,
+    LumaConfig, LumaInfo,
 };
 pub use reconcile::{reconcile, Reconciliation};

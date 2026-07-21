@@ -27,6 +27,7 @@ impl Default for ChromaConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SheetError {
     ChromaUnusable { ink_fraction: f32 },
+    LumaUnusable { ink_fraction: f32 },
 }
 
 impl std::fmt::Display for SheetError {
@@ -36,6 +37,13 @@ impl std::fmt::Display for SheetError {
                 write!(
                     f,
                     "chroma segmentation unusable (ink fraction: {})",
+                    ink_fraction
+                )
+            }
+            SheetError::LumaUnusable { ink_fraction } => {
+                write!(
+                    f,
+                    "luma segmentation unusable (ink fraction: {})",
                     ink_fraction
                 )
             }
