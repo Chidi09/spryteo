@@ -9,6 +9,7 @@
 //! which is documented in the final report.
 
 pub mod binarize;
+pub mod caps;
 pub mod graph;
 pub mod prune;
 pub mod skeletonize;
@@ -39,6 +40,8 @@ pub struct StrokeOptions {
     /// Connected components with fewer than this many ink pixels are dropped
     /// before graph building.
     pub min_component_pixels: usize,
+    /// Extend open stroke endpoints outward along local tangent by distance transform radius.
+    pub extend_caps: bool,
 }
 
 impl Default for StrokeOptions {
@@ -48,6 +51,7 @@ impl Default for StrokeOptions {
             ink: InkSource::Luminance,
             prune_spurs: true,
             min_component_pixels: 0,
+            extend_caps: false,
         }
     }
 }
@@ -327,19 +331,26 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
             }
             let stroke_width = 2.0 * median(sample_dists.clone());
 
-            let chain_float: Vec<(f64, f64)> = chain_pixels
+            let mut chain_float: Vec<(f64, f64)> = chain_pixels
                 .iter()
                 .map(|&(px, py)| (px as f64, py as f64))
                 .collect();
 
+            if opts.extend_caps {
+                caps::extend_endpoints(
+                    &mut chain_float,
+                    &dist,
+                    &ink_mask,
+                    image.width,
+                    image.height,
+                );
+            }
+
             let curve = smooth::smooth_chain(&chain_float, opts.tolerance);
             let closed = chain_pixels.first() == chain_pixels.last();
-            let p_first = chain_pixels.first().unwrap();
-            let p_last = chain_pixels.last().unwrap();
-            let endpoints = [
-                (p_first.0 as f64, p_first.1 as f64),
-                (p_last.0 as f64, p_last.1 as f64),
-            ];
+            let p_first = chain_float.first().unwrap();
+            let p_last = chain_float.last().unwrap();
+            let endpoints = [*p_first, *p_last];
 
             paths.push(StrokePath {
                 curve,
@@ -754,5 +765,53 @@ mod tests {
         let res = trace_stroke_ex(&img, &StrokeOptions::default());
         assert_eq!(res.paths.len(), 0);
         assert_eq!(res.component_count, 0);
+    }
+
+    #[test]
+    fn test_extend_caps_lengthens_open_stroke() {
+        let mut img = make_empty_image(32, 32);
+        draw_line(&mut img, 5, 16, 25, 16, 1);
+
+        let opts_off = StrokeOptions {
+            extend_caps: false,
+            ..StrokeOptions::default()
+        };
+        let res_off = trace_stroke_ex(&img, &opts_off);
+
+        let opts_on = StrokeOptions {
+            extend_caps: true,
+            ..StrokeOptions::default()
+        };
+        let res_on = trace_stroke_ex(&img, &opts_on);
+
+        assert_eq!(res_off.paths.len(), res_on.paths.len());
+        assert!(!res_off.paths.is_empty());
+
+        let ep_off = res_off.paths[0].endpoints;
+        let ep_on = res_on.paths[0].endpoints;
+
+        let dist_off = (ep_off[0].0 - ep_off[1].0).hypot(ep_off[0].1 - ep_off[1].1);
+        let dist_on = (ep_on[0].0 - ep_on[1].0).hypot(ep_on[0].1 - ep_on[1].1);
+
+        assert!(
+            dist_on > dist_off,
+            "Endpoints with extend_caps=true ({}) should be further apart than extend_caps=false ({})",
+            dist_on,
+            dist_off
+        );
+
+        let mut img_loop = make_empty_image(32, 32);
+        draw_line(&mut img_loop, 10, 10, 20, 10, 0);
+        draw_line(&mut img_loop, 20, 10, 20, 20, 0);
+        draw_line(&mut img_loop, 20, 20, 10, 20, 0);
+        draw_line(&mut img_loop, 10, 20, 10, 10, 0);
+
+        let res_loop_off = trace_stroke_ex(&img_loop, &opts_off);
+        let res_loop_on = trace_stroke_ex(&img_loop, &opts_on);
+
+        assert_eq!(res_loop_off.paths.len(), res_loop_on.paths.len());
+        for (p_off, p_on) in res_loop_off.paths.iter().zip(res_loop_on.paths.iter()) {
+            assert_eq!(p_off.closed, p_on.closed);
+        }
     }
 }
