@@ -344,12 +344,23 @@ fn escape_html(s: &str) -> String {
     escaped
 }
 
-fn collect_gradients<'a>(group: &'a Group, grads: &mut Vec<(String, &'a Fill)>) {
+/// Collects gradient fills along with the translate baked into the owning node.
+///
+/// Gradient coordinates are produced in image space, but a node may be emitted in a
+/// centroid-relative local space with a compensating `transform="translate(..)"`. Since
+/// `gradientUnits="userSpaceOnUse"` resolves against the element's *pre-transform* space,
+/// the translate must be subtracted from the gradient geometry or the ramp lands off the
+/// shape and every pixel clamps to a single stop.
+fn collect_gradients<'a>(group: &'a Group, grads: &mut Vec<(String, &'a Fill, (f64, f64))>) {
     for node in &group.nodes {
         if let Some(ref fill) = node.fill {
             match fill {
                 Fill::LinearGradient { .. } | Fill::RadialGradient { .. } => {
-                    grads.push((node.id.clone(), fill));
+                    grads.push((
+                        node.id.clone(),
+                        fill,
+                        (node.transform.translate_x, node.transform.translate_y),
+                    ));
                 }
                 _ => {}
             }
@@ -360,7 +371,7 @@ fn collect_gradients<'a>(group: &'a Group, grads: &mut Vec<(String, &'a Fill)>) 
     }
 }
 
-fn serialize_defs(grads: &[(String, &Fill)], opts: &ConvertOptions) -> String {
+fn serialize_defs(grads: &[(String, &Fill, (f64, f64))], opts: &ConvertOptions) -> String {
     if grads.is_empty() {
         return String::new();
     }
@@ -376,7 +387,7 @@ fn serialize_defs(grads: &[(String, &Fill)], opts: &ConvertOptions) -> String {
     let newline = if pretty { "\n" } else { "" };
 
     write!(out, "{}<defs>{}", indent_defs, newline).unwrap();
-    for (node_id, fill) in grads {
+    for (node_id, fill, (tx, ty)) in grads {
         let grad_id = format!("grad-{}", node_id);
         match fill {
             Fill::LinearGradient {
@@ -388,13 +399,13 @@ fn serialize_defs(grads: &[(String, &Fill)], opts: &ConvertOptions) -> String {
             } => {
                 write!(
                     out,
-                    "{}<linearGradient id=\"{}\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">{}",
+                    "{}<linearGradient id=\"{}\" gradientUnits=\"userSpaceOnUse\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">{}",
                     indent_grad,
                     escape_html(&grad_id),
-                    format_coord(*x1, precision),
-                    format_coord(*y1, precision),
-                    format_coord(*x2, precision),
-                    format_coord(*y2, precision),
+                    format_coord(*x1 - tx, precision),
+                    format_coord(*y1 - ty, precision),
+                    format_coord(*x2 - tx, precision),
+                    format_coord(*y2 - ty, precision),
                     newline
                 )
                 .unwrap();
@@ -418,11 +429,11 @@ fn serialize_defs(grads: &[(String, &Fill)], opts: &ConvertOptions) -> String {
             Fill::RadialGradient { cx, cy, r, stops } => {
                 write!(
                     out,
-                    "{}<radialGradient id=\"{}\" cx=\"{}\" cy=\"{}\" r=\"{}\">{}",
+                    "{}<radialGradient id=\"{}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\">{}",
                     indent_grad,
                     escape_html(&grad_id),
-                    format_coord(*cx, precision),
-                    format_coord(*cy, precision),
+                    format_coord(*cx - tx, precision),
+                    format_coord(*cy - ty, precision),
                     format_coord(*r, precision),
                     newline
                 )
@@ -2570,7 +2581,7 @@ mod tests {
             res_linear.svg.contains("<defs>"),
             "linear: should contain defs block"
         );
-        assert!(res_linear.svg.contains("<linearGradient id=\"grad-s-0\" x1=\"0.00\" y1=\"0.00\" x2=\"10.00\" y2=\"10.00\">"), "linear: should contain linearGradient with correct coordinates");
+        assert!(res_linear.svg.contains("<linearGradient id=\"grad-s-0\" gradientUnits=\"userSpaceOnUse\" x1=\"0.00\" y1=\"0.00\" x2=\"10.00\" y2=\"10.00\">"), "linear: should contain linearGradient with correct coordinates");
         assert!(
             res_linear
                 .svg
@@ -2640,7 +2651,7 @@ mod tests {
         assert!(
             res_radial
                 .svg
-                .contains("<radialGradient id=\"grad-s-0\" cx=\"50.00\" cy=\"50.00\" r=\"30.00\">"),
+                .contains("<radialGradient id=\"grad-s-0\" gradientUnits=\"userSpaceOnUse\" cx=\"50.00\" cy=\"50.00\" r=\"30.00\">"),
             "radial: should contain radialGradient with correct coordinates"
         );
         assert!(
@@ -2768,6 +2779,70 @@ mod tests {
         assert_eq!(
             res_two.svg, res_two_second.svg,
             "SVG outputs must be byte-identical"
+        );
+    }
+
+    /// Gradient coordinates are produced in image space, but under `TOrigin::Centroid` a
+    /// node is emitted in centroid-relative space with a compensating `translate(..)`.
+    /// Because `userSpaceOnUse` resolves against the element's pre-transform space, the
+    /// translate must be subtracted from the gradient geometry. Without that, the ramp
+    /// lands entirely off the shape and every pixel clamps to a single stop -- the shape
+    /// renders flat. Regression guard for that.
+    #[test]
+    fn test_gradient_coords_compensate_centroid_translate() {
+        // A 100x100 square centred at (50,50): under Centroid origin this is emitted at
+        // local (-50,-50)..(50,50) with transform="translate(50.00, 50.00)".
+        let curves = CurveSet {
+            curves: vec![Curve {
+                segments: vec![
+                    PathElement::MoveTo(0.0, 0.0),
+                    PathElement::LineTo(100.0, 0.0),
+                    PathElement::LineTo(100.0, 100.0),
+                    PathElement::LineTo(0.0, 100.0),
+                    PathElement::ClosePath,
+                ],
+                primitive: None,
+            }],
+        };
+        let fills = vec![Fill::LinearGradient {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 100.0,
+            y2: 0.0,
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: Rgb { r: 255, g: 0, b: 0 },
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: Rgb { r: 0, g: 0, b: 255 },
+                },
+            ],
+        }];
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Centroid,
+            &fills,
+            false,
+        );
+        let opts = make_test_options();
+        let svg = emit_svg(&scene, 100, 100, &opts, None).svg;
+
+        assert!(
+            svg.contains("transform=\"translate(50.00, 50.00)\""),
+            "precondition: node should carry a centroid translate, got: {svg}"
+        );
+        // Image-space 0..100 minus the (50,50) translate => local-space -50..50, which is
+        // exactly the shape's own extent. Un-compensated output would read x1="0.00"
+        // x2="100.00" and cover only the right half of the shape.
+        assert!(
+            svg.contains(
+                "<linearGradient id=\"grad-s-0\" gradientUnits=\"userSpaceOnUse\" \
+                 x1=\"-50.00\" y1=\"-50.00\" x2=\"50.00\" y2=\"-50.00\">"
+            ),
+            "gradient coords must be shifted into the node's local space, got: {svg}"
         );
     }
 

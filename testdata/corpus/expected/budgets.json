@@ -60,23 +60,23 @@
     "nodes": 2
   },
   "photos/gradient_d_256": {
-    "bytes": 4045,
+    "bytes": 4296,
     "nodes": 8
   },
   "photos/gradient_h_256": {
-    "bytes": 1853,
+    "bytes": 2001,
     "nodes": 5
   },
   "photos/gradient_noise_256": {
-    "bytes": 2207,
+    "bytes": 2383,
     "nodes": 6
   },
   "photos/gradient_r_256": {
-    "bytes": 2472,
+    "bytes": 2675,
     "nodes": 8
   },
   "photos/gradient_v_256": {
-    "bytes": 1852,
+    "bytes": 2001,
     "nodes": 5
   },
   "photos/landscape_256": {
