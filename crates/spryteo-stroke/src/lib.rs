@@ -105,92 +105,17 @@ fn median(mut values: Vec<f64>) -> f64 {
 
 /// The main entry point of the spryteo-stroke centerline tracing pipeline.
 pub fn trace_stroke(image: &RasterImage, tolerance: f32) -> StrokeResult {
-    let mut curves = Vec::new();
-    let mut widths = Vec::new();
-
-    if image.width == 0 || image.height == 0 {
-        return StrokeResult {
-            curves: CurveSet { curves },
-            widths,
-            path_count: 0,
-        };
+    let opts = StrokeOptions {
+        tolerance,
+        ..StrokeOptions::default()
+    };
+    let ex = trace_stroke_ex(image, &opts);
+    let mut curves = Vec::with_capacity(ex.paths.len());
+    let mut widths = Vec::with_capacity(ex.paths.len());
+    for p in ex.paths {
+        curves.push(p.curve);
+        widths.push(p.width);
     }
-
-    // 1. Binarize: Sauvola adaptive thresholding
-    let ink_mask = binarize::binarize(image);
-
-    // 2. Skeletonize & Distance Transform
-    let dist = skeletonize::compute_distance_transform(&ink_mask, image.width, image.height);
-    let mut skeleton = skeletonize::zhang_suen_thinning(&ink_mask, image.width, image.height);
-
-    // 3. Prune spurs
-    prune::prune_spurs(&mut skeleton, &dist, image.width, image.height);
-
-    // 4. Build stroke graphs for each connected component
-    let mut graphs = graph::build_stroke_graphs(&skeleton, image.width, image.height);
-
-    // Sort graphs by their first node's coordinate for absolute scan-order determinism
-    graphs.sort_by(|g1, g2| {
-        if g1.nodes.is_empty() && g2.nodes.is_empty() {
-            std::cmp::Ordering::Equal
-        } else if g1.nodes.is_empty() {
-            std::cmp::Ordering::Less
-        } else if g2.nodes.is_empty() {
-            std::cmp::Ordering::Greater
-        } else {
-            let n1 = &g1.nodes[0];
-            let n2 = &g2.nodes[0];
-            if n1.y != n2.y {
-                n1.y.cmp(&n2.y)
-            } else {
-                n1.x.cmp(&n2.x)
-            }
-        }
-    });
-
-    // 5. Traverse and smooth each component
-    for g in &graphs {
-        let traversal_paths = traverse::traverse_graph(g);
-        for path in traversal_paths {
-            let mut chain_pixels = Vec::new();
-            for &(_, _, edge_idx, is_reverse) in &path {
-                let mut edge_p = g.edges[edge_idx].pixels.clone();
-                if is_reverse {
-                    edge_p.reverse();
-                }
-                for p in edge_p {
-                    if chain_pixels.is_empty() || chain_pixels.last() != Some(&p) {
-                        chain_pixels.push(p);
-                    }
-                }
-            }
-
-            if chain_pixels.len() < 2 {
-                continue;
-            }
-
-            // 6. Compute stroke width (diameter): double the median half-width sampled along the path
-            let mut sample_dists = Vec::new();
-            for &(px, py) in &chain_pixels {
-                let idx = (py * image.width as i32 + px) as usize;
-                if idx < dist.len() {
-                    sample_dists.push(dist[idx]);
-                }
-            }
-            let stroke_width = 2.0 * median(sample_dists);
-
-            // 7. Curve smoothing
-            let chain_float: Vec<(f64, f64)> = chain_pixels
-                .iter()
-                .map(|&(px, py)| (px as f64, py as f64))
-                .collect();
-
-            let curve = smooth::smooth_chain(&chain_float, tolerance);
-            curves.push(curve);
-            widths.push(stroke_width);
-        }
-    }
-
     let path_count = curves.len();
     StrokeResult {
         curves: CurveSet { curves },
@@ -812,6 +737,50 @@ mod tests {
         assert_eq!(res_loop_off.paths.len(), res_loop_on.paths.len());
         for (p_off, p_on) in res_loop_off.paths.iter().zip(res_loop_on.paths.iter()) {
             assert_eq!(p_off.closed, p_on.closed);
+        }
+    }
+
+    #[test]
+    fn test_trace_stroke_delegation_is_output_identical() {
+        let tolerance = 0.5;
+
+        // 1. Open line
+        let mut img_line = make_empty_image(32, 32);
+        draw_line(&mut img_line, 5, 10, 25, 10, 0);
+
+        // 2. Closed loop
+        let mut img_loop = make_empty_image(32, 32);
+        draw_line(&mut img_loop, 10, 10, 20, 10, 0);
+        draw_line(&mut img_loop, 20, 10, 20, 20, 0);
+        draw_line(&mut img_loop, 20, 20, 10, 20, 0);
+        draw_line(&mut img_loop, 10, 20, 10, 10, 0);
+
+        // 3. Two disjoint strokes
+        let mut img_disjoint = make_empty_image(64, 64);
+        draw_line(&mut img_disjoint, 5, 5, 15, 5, 0);
+        draw_line(&mut img_disjoint, 5, 25, 15, 25, 0);
+
+        let images = vec![img_line, img_loop, img_disjoint];
+
+        for img in images {
+            let res = trace_stroke(&img, tolerance);
+            let opts = StrokeOptions {
+                tolerance,
+                ..StrokeOptions::default()
+            };
+            let res_ex = trace_stroke_ex(&img, &opts);
+
+            assert_eq!(res.path_count, res_ex.paths.len());
+            assert_eq!(res.curves.curves.len(), res_ex.paths.len());
+            assert_eq!(res.widths.len(), res_ex.paths.len());
+
+            for (i, p) in res_ex.paths.iter().enumerate() {
+                assert_eq!(res.widths[i], p.width);
+                assert_eq!(res.curves.curves[i].segments.len(), p.curve.segments.len());
+                let curve_json = serde_json::to_vec(&res.curves.curves[i]).unwrap();
+                let ex_curve_json = serde_json::to_vec(&p.curve).unwrap();
+                assert_eq!(curve_json, ex_curve_json);
+            }
         }
     }
 }
