@@ -1,9 +1,12 @@
 use crate::chroma::{Mask, SheetError};
 use spryteo_core::ir::RasterImage;
 
+/// Configuration parameters for luminance-based segmentation.
 #[derive(Debug, Clone)]
 pub struct LumaConfig {
+    /// Minimum luminance difference from background to consider as ink candidate.
     pub d_min: f32,
+    /// Minimum alpha value for a pixel to be evaluated.
     pub alpha_min: u8,
 }
 
@@ -16,17 +19,23 @@ impl Default for LumaConfig {
     }
 }
 
+/// Analysis results of image luminance distribution and polarity.
 #[derive(Debug, Clone)]
 pub struct LumaInfo {
+    /// Estimated background luminance level.
     pub background: f32,
+    /// True if the image has dark ink on a light background.
     pub dark_on_light: bool,
+    /// 10th-percentile luminance distance among ink candidates, used as reference contrast.
     pub ink_ref: f32,
 }
 
+/// Computes Rec. 709 relative luminance for an RGB pixel in 0.0..=255.0.
 pub fn luminance(r: u8, g: u8, b: u8) -> f32 {
     0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32)
 }
 
+/// Estimates background luminance by taking the median luminance of border pixels.
 pub fn background_luminance(image: &RasterImage, cfg: &LumaConfig) -> f32 {
     let w = image.width;
     let h = image.height;
@@ -61,6 +70,7 @@ pub fn background_luminance(image: &RasterImage, cfg: &LumaConfig) -> f32 {
     vals[(vals.len() - 1) / 2]
 }
 
+/// Analyzes an image to compute background luminance, dark/light polarity, and reference ink contrast.
 pub fn analyze_luma(image: &RasterImage, cfg: &LumaConfig) -> LumaInfo {
     let background = background_luminance(image, cfg);
     let dark_on_light = background >= 128.0;
@@ -96,6 +106,7 @@ pub fn analyze_luma(image: &RasterImage, cfg: &LumaConfig) -> LumaInfo {
     }
 }
 
+/// Computes a continuous coverage map (0.0..=1.0 per pixel) based on luminance distance to background.
 pub fn luma_coverage(image: &RasterImage, info: &LumaInfo, cfg: &LumaConfig) -> Vec<f32> {
     let total = (image.width as usize) * (image.height as usize);
     let mut coverage = Vec::with_capacity(total);
@@ -117,6 +128,7 @@ pub fn luma_coverage(image: &RasterImage, info: &LumaInfo, cfg: &LumaConfig) -> 
     coverage
 }
 
+/// Generates a binary mask and luminance info for an image using luminance analysis.
 pub fn luma_mask(image: &RasterImage, cfg: &LumaConfig) -> (Mask, LumaInfo) {
     let info = analyze_luma(image, cfg);
     let cov = luma_coverage(image, &info, cfg);
@@ -129,6 +141,7 @@ pub fn luma_mask(image: &RasterImage, cfg: &LumaConfig) -> (Mask, LumaInfo) {
     (mask, info)
 }
 
+/// Checks whether a luminance mask is usable based on its ink fraction (must be in 0.1%..=30%).
 pub fn check_luma_usable(mask: &Mask) -> Result<f32, SheetError> {
     let frac = mask.fraction();
     if !(0.001..=0.30).contains(&frac) {

@@ -5,6 +5,7 @@ pub mod color;
 pub mod lattice;
 pub mod luma;
 pub mod reconcile;
+pub mod textband;
 
 pub use cells::{extract_cells, ink_bbox_in, CellConfig, IconCell};
 pub use chroma::{
@@ -21,3 +22,4 @@ pub use luma::{
     LumaConfig, LumaInfo,
 };
 pub use reconcile::{reconcile, Reconciliation};
+pub use textband::{classify_rows, label_band_below, strip_text_rows, TextBandConfig, TextBands};
