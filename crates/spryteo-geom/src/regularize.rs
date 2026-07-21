@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use spryteo_core::ir::{Curve, PathElement, Primitive};
 
 /// Total-least-squares line fit. Returns the two endpoints of the fitted
@@ -599,6 +600,423 @@ pub fn unify_widths(widths: &mut [f64], rel_tol: f64, quantum: f64) -> bool {
     changed
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegularizeConfig {
+    /// Grid pitch in the curves' coordinate space. Caller-supplied, NEVER
+    /// inferred -- at 45px source resolution a 24-unit grid is
+    /// indistinguishable from a 25-unit one (4%, below the anti-aliasing
+    /// noise floor), so guessing it would be false precision.
+    pub grid_pitch: f64,
+    pub max_grid_dev: f64,      // default 1.5
+    pub max_angle_dev_deg: f64, // default 6.0
+    pub weld_eps: f64,          // default 1.0
+    pub close_eps: f64,         // default 1.2
+    pub fit_tol: f64,           // default 0.8
+    pub width_rel_tol: f64,     // default 0.15
+    pub width_quantum: f64,     // default 0.25
+    pub snaps_deg: Vec<f64>,
+    /// Minimum segment length eligible for angle snapping. Shorter segments
+    /// are curve samples, not design lines -- see the angle pass.
+    pub min_snap_segment: f64, // default [0, 45, 90, 135]
+}
+
+impl Default for RegularizeConfig {
+    fn default() -> Self {
+        Self {
+            grid_pitch: 1.0,
+            max_grid_dev: 1.5,
+            max_angle_dev_deg: 6.0,
+            weld_eps: 1.0,
+            close_eps: 1.2,
+            fit_tol: 0.8,
+            width_rel_tol: 0.15,
+            width_quantum: 0.25,
+            snaps_deg: vec![0.0, 45.0, 90.0, 135.0],
+            // 3.0 in a 24-unit canvas: an eighth of the icon. Traced curve
+            // segments are well under this; real strokes are well over.
+            min_snap_segment: 3.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RegularizeReport {
+    pub welded: usize,
+    pub loops_closed: usize,
+    pub lines_fitted: usize,
+    pub arcs_fitted: usize,
+    pub angles_snapped: usize,
+    pub points_gridded: usize,
+    pub widths_unified: bool,
+    pub mirror_axis: Option<f64>,
+    /// Largest distance any single point moved.
+    pub max_displacement: f64,
+    /// 1.0 - max_displacement/max_grid_dev, clamped to 0..=1.
+    pub confidence: f32,
+}
+
+fn extract_curve_points(curve: &Curve) -> Vec<(f64, f64)> {
+    let mut pts = Vec::new();
+    for seg in &curve.segments {
+        match seg {
+            PathElement::MoveTo(x, y) | PathElement::LineTo(x, y) => pts.push((*x, *y)),
+            PathElement::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                pts.push((*x1, *y1));
+                pts.push((*x2, *y2));
+                pts.push((*x3, *y3));
+            }
+            PathElement::ClosePath => {}
+        }
+    }
+    pts
+}
+
+/// Regularizes in place. Returns the report.
+pub fn regularize(
+    curves: &mut [Curve],
+    widths: &mut [f64],
+    cfg: &RegularizeConfig,
+) -> RegularizeReport {
+    let mut max_displacement = 0.0_f64;
+    let initial_pts: Vec<Vec<(f64, f64)>> = curves.iter().map(extract_curve_points).collect();
+
+    // Pass 1: Weld endpoints FIRST so that greedy path traversal junctions sharing near-identical coordinates are merged before any geometry modification or snapping.
+    let welded = weld_endpoints(curves, cfg.weld_eps);
+
+    // Pass 2: Close loops on open curves whose end points are within close_eps of start points, securing closed topology before primitive recognition.
+    let mut loops_closed = 0;
+    for curve in curves.iter_mut() {
+        if close_loops(curve, cfg.close_eps) {
+            loops_closed += 1;
+        }
+    }
+
+    // Pass 3: Fit primitives BEFORE snapping so that whole shape parameters (e.g. circle center and radius) are recognized from clean unsnapped points, avoiding deforming primitives into lumpy polygons.
+    let mut lines_fitted = 0;
+    let mut arcs_fitted = 0;
+    for curve in curves.iter_mut() {
+        if curve.primitive.is_none() {
+            let pts = extract_curve_points(curve);
+            if pts.len() >= 2 {
+                if let Some((p1, p2)) = fit_line(&pts, cfg.fit_tol) {
+                    let vx = p2.0 - p1.0;
+                    let vy = p2.1 - p1.1;
+                    let len_sq = vx * vx + vy * vy;
+                    if len_sq > 1e-12 {
+                        for &(px, py) in &pts {
+                            let t =
+                                (((px - p1.0) * vx + (py - p1.1) * vy) / len_sq).clamp(0.0, 1.0);
+                            let proj = (p1.0 + t * vx, p1.1 + t * vy);
+                            let dist = (px - proj.0).hypot(py - proj.1);
+                            if dist > max_displacement {
+                                max_displacement = dist;
+                            }
+                        }
+                    }
+                    let is_closed = matches!(curve.segments.last(), Some(PathElement::ClosePath));
+                    curve.segments = vec![
+                        PathElement::MoveTo(p1.0, p1.1),
+                        PathElement::LineTo(p2.0, p2.1),
+                    ];
+                    if is_closed {
+                        curve.segments.push(PathElement::ClosePath);
+                    }
+                    lines_fitted += 1;
+                } else if let Some(prim) = fit_arc(&pts, cfg.fit_tol) {
+                    if let Primitive::Arc { cx, cy, rx, .. } = prim {
+                        for &(px, py) in &pts {
+                            let dist = (((px - cx).powi(2) + (py - cy).powi(2)).sqrt() - rx).abs();
+                            if dist > max_displacement {
+                                max_displacement = dist;
+                            }
+                        }
+                    }
+                    curve.primitive = Some(prim);
+                    arcs_fitted += 1;
+                } else if let Some((cx, cy, r)) = fit_circle(&pts, cfg.fit_tol) {
+                    for &(px, py) in &pts {
+                        let dist = (((px - cx).powi(2) + (py - cy).powi(2)).sqrt() - r).abs();
+                        if dist > max_displacement {
+                            max_displacement = dist;
+                        }
+                    }
+                    curve.primitive = Some(Primitive::Circle { cx, cy, r });
+                    arcs_fitted += 1;
+                }
+            }
+        }
+    }
+
+    // Pass 4: Snap segment angles to target angles pivoting about segment midpoints.
+    let mut angles_snapped = 0;
+    for curve in curves.iter_mut() {
+        let n_segs = curve.segments.len();
+        if n_segs < 2 {
+            continue;
+        }
+
+        // Never angle-snap a CLOSED curve. A closed loop is a shape -- a
+        // circle, a rounded rect -- and its edges are not independent design
+        // lines; they are a boundary being sampled. Rotating each edge onto
+        // the nearest of 0/45/90/135 squares the shape off. Measured on the
+        // real sheet, this is what turned the small circular heads in the group
+        // icons octagonal while leaving the large open body curves untouched:
+        // a small loop's few edges are each long enough to clear any absolute
+        // length gate, so only the closed/open distinction separates them.
+        // Shapes get regularised through primitive recognition instead.
+        let is_closed = curve
+            .segments
+            .iter()
+            .any(|e| matches!(e, PathElement::ClosePath))
+            || match (curve.segments.first(), curve.segments.last()) {
+                (
+                    Some(PathElement::MoveTo(x0, y0)),
+                    Some(PathElement::LineTo(x1, y1) | PathElement::CurveTo(_, _, _, _, x1, y1)),
+                ) => (x1 - x0).hypot(y1 - y0) < 1e-6,
+                _ => false,
+            };
+        if is_closed {
+            continue;
+        }
+
+        for i in 1..n_segs {
+            let (p_start, p_end) = match (&curve.segments[i - 1], &curve.segments[i]) {
+                (
+                    PathElement::MoveTo(x0, y0)
+                    | PathElement::LineTo(x0, y0)
+                    | PathElement::CurveTo(_, _, _, _, x0, y0),
+                    PathElement::LineTo(x1, y1),
+                ) => ((*x0, *y0), (*x1, *y1)),
+                _ => continue,
+            };
+
+            // Only segments long enough to be deliberate lines may be rotated
+            // onto a snap angle. A traced curve is a chain of SHORT segments
+            // whose directions sample a smooth turn; forcing each of those onto
+            // the nearest of 0/45/90/135 quantises the turn into facets.
+            // Measured on the real sheet, this is what turned the small
+            // circular heads in the group icons into visible hexagons -- the
+            // grid pass was innocent, this was the culprit. A real design line
+            // spans a meaningful fraction of the icon, so require that.
+            if (p_end.0 - p_start.0).hypot(p_end.1 - p_start.1) < cfg.min_snap_segment {
+                continue;
+            }
+
+            let (na, nb) = snap_angle(p_start, p_end, &cfg.snaps_deg, cfg.max_angle_dev_deg);
+            if (na.0 - p_start.0).hypot(na.1 - p_start.1) > 1e-9
+                || (nb.0 - p_end.0).hypot(nb.1 - p_end.1) > 1e-9
+            {
+                angles_snapped += 1;
+                let d_a = (na.0 - p_start.0).hypot(na.1 - p_start.1);
+                let d_b = (nb.0 - p_end.0).hypot(nb.1 - p_end.1);
+                if d_a > max_displacement {
+                    max_displacement = d_a;
+                }
+                if d_b > max_displacement {
+                    max_displacement = d_b;
+                }
+
+                match &mut curve.segments[i - 1] {
+                    PathElement::MoveTo(x, y)
+                    | PathElement::LineTo(x, y)
+                    | PathElement::CurveTo(_, _, _, _, x, y) => {
+                        *x = na.0;
+                        *y = na.1;
+                    }
+                    PathElement::ClosePath => {}
+                }
+                if let PathElement::LineTo(x, y) = &mut curve.segments[i] {
+                    *x = nb.0;
+                    *y = nb.1;
+                }
+            }
+        }
+    }
+
+    // Pass 5: Snap points and recognized primitives to grid pitch.
+    let mut points_gridded = 0;
+    if cfg.grid_pitch > 0.0 {
+        for curve in curves.iter_mut() {
+            if let Some(ref mut prim) = curve.primitive {
+                match prim {
+                    Primitive::Circle {
+                        ref mut cx,
+                        ref mut cy,
+                        ref mut r,
+                    } => {
+                        let (nx, ny) = snap_to_grid((*cx, *cy), cfg.grid_pitch, cfg.max_grid_dev);
+                        if (nx - *cx).hypot(ny - *cy) > 1e-9 {
+                            let d = (nx - *cx).hypot(ny - *cy);
+                            if d > max_displacement {
+                                max_displacement = d;
+                            }
+                            *cx = nx;
+                            *cy = ny;
+                            points_gridded += 1;
+                        }
+                        let nr = (*r / cfg.grid_pitch).round() * cfg.grid_pitch;
+                        if (nr - *r).abs() <= cfg.max_grid_dev && (nr - *r).abs() > 1e-9 {
+                            let d = (nr - *r).abs();
+                            if d > max_displacement {
+                                max_displacement = d;
+                            }
+                            *r = nr;
+                        }
+                    }
+                    Primitive::Ellipse {
+                        ref mut cx,
+                        ref mut cy,
+                        ref mut rx,
+                        ref mut ry,
+                        ..
+                    } => {
+                        let (nx, ny) = snap_to_grid((*cx, *cy), cfg.grid_pitch, cfg.max_grid_dev);
+                        if (nx - *cx).hypot(ny - *cy) > 1e-9 {
+                            let d = (nx - *cx).hypot(ny - *cy);
+                            if d > max_displacement {
+                                max_displacement = d;
+                            }
+                            *cx = nx;
+                            *cy = ny;
+                            points_gridded += 1;
+                        }
+                        let nrx = (*rx / cfg.grid_pitch).round() * cfg.grid_pitch;
+                        if (nrx - *rx).abs() <= cfg.max_grid_dev && (nrx - *rx).abs() > 1e-9 {
+                            *rx = nrx;
+                        }
+                        let nry = (*ry / cfg.grid_pitch).round() * cfg.grid_pitch;
+                        if (nry - *ry).abs() <= cfg.max_grid_dev && (nry - *ry).abs() > 1e-9 {
+                            *ry = nry;
+                        }
+                    }
+                    Primitive::Rect {
+                        ref mut x,
+                        ref mut y,
+                        ref mut width,
+                        ref mut height,
+                        ..
+                    } => {
+                        let (nx, ny) = snap_to_grid((*x, *y), cfg.grid_pitch, cfg.max_grid_dev);
+                        if (nx - *x).hypot(ny - *y) > 1e-9 {
+                            let d = (nx - *x).hypot(ny - *y);
+                            if d > max_displacement {
+                                max_displacement = d;
+                            }
+                            *x = nx;
+                            *y = ny;
+                            points_gridded += 1;
+                        }
+                        let nx2 = ((*x + *width) / cfg.grid_pitch).round() * cfg.grid_pitch;
+                        if (nx2 - (*x + *width)).abs() <= cfg.max_grid_dev
+                            && (nx2 - (*x + *width)).abs() > 1e-9
+                        {
+                            *width = nx2 - *x;
+                            points_gridded += 1;
+                        }
+                        let ny2 = ((*y + *height) / cfg.grid_pitch).round() * cfg.grid_pitch;
+                        if (ny2 - (*y + *height)).abs() <= cfg.max_grid_dev
+                            && (ny2 - (*y + *height)).abs() > 1e-9
+                        {
+                            *height = ny2 - *y;
+                            points_gridded += 1;
+                        }
+                    }
+                    Primitive::Arc {
+                        ref mut cx,
+                        ref mut cy,
+                        ref mut rx,
+                        ref mut ry,
+                        ..
+                    } => {
+                        let (nx, ny) = snap_to_grid((*cx, *cy), cfg.grid_pitch, cfg.max_grid_dev);
+                        if (nx - *cx).hypot(ny - *cy) > 1e-9 {
+                            let d = (nx - *cx).hypot(ny - *cy);
+                            if d > max_displacement {
+                                max_displacement = d;
+                            }
+                            *cx = nx;
+                            *cy = ny;
+                            points_gridded += 1;
+                        }
+                        let nrx = (*rx / cfg.grid_pitch).round() * cfg.grid_pitch;
+                        if (nrx - *rx).abs() <= cfg.max_grid_dev && (nrx - *rx).abs() > 1e-9 {
+                            *rx = nrx;
+                        }
+                        let nry = (*ry / cfg.grid_pitch).round() * cfg.grid_pitch;
+                        if (nry - *ry).abs() <= cfg.max_grid_dev && (nry - *ry).abs() > 1e-9 {
+                            *ry = nry;
+                        }
+                    }
+                }
+            }
+
+            // Only geometry whose points ARE design-grid positions may be
+            // snapped. A recognised primitive qualifies (its centre/corners
+            // were placed on the grid by whoever drew it) and so does a pure
+            // polyline (its vertices are real corners). A free-form traced
+            // curve does NOT: its Bezier control points encode CURVATURE, not
+            // position, and rounding them to the grid pulls smooth arcs into
+            // visible lumps. Measured on the real sheet, gridding control
+            // points turned every circular icon -- the magnifier, the bell,
+            // the speech bubble -- visibly scalloped, which is strictly worse
+            // than leaving them alone.
+            // Raw path segments are NEVER gridded -- not their anchors, not
+            // their Bezier control points. Both are SAMPLES OF A CURVE rather
+            // than positions anyone placed on a design grid, so rounding them
+            // quantises the path's shape into facets.
+            //
+            // Recognised primitives are still gridded, but through their
+            // PARAMETERS above (a circle's centre and radius, a rect's
+            // corners) -- which is the whole reason primitive recognition runs
+            // before this pass. Note that recognition SETS curve.primitive, so
+            // gating this loop on `primitive.is_none()` does not work: the
+            // curves most likely to be deformed are exactly the ones that just
+            // acquired a primitive. Measured on the real sheet at pitch 1.0,
+            // gridding segments scalloped every circular icon and squared off
+            // the small heads in the group icons, while leaving the large open
+            // body curves untouched.
+        }
+    }
+
+    // Measure overall point displacement from initial positions
+    for (i, curve) in curves.iter().enumerate() {
+        if i < initial_pts.len() {
+            let final_pts = extract_curve_points(curve);
+            for (p_init, p_final) in initial_pts[i].iter().zip(final_pts.iter()) {
+                let d = (p_final.0 - p_init.0).hypot(p_final.1 - p_init.1);
+                if d > max_displacement {
+                    max_displacement = d;
+                }
+            }
+        }
+    }
+
+    // Pass 6: Detect vertical mirror axis (record only, do not mutate geometry).
+    let mirror_axis = detect_mirror_axis(curves, cfg.fit_tol);
+
+    // Pass 7: Unify stroke widths across curves that cluster within relative tolerance.
+    let widths_unified = unify_widths(widths, cfg.width_rel_tol, cfg.width_quantum);
+
+    let confidence = if cfg.max_grid_dev <= 0.0 {
+        0.0
+    } else {
+        (1.0 - max_displacement / cfg.max_grid_dev).clamp(0.0, 1.0) as f32
+    };
+
+    RegularizeReport {
+        welded,
+        loops_closed,
+        lines_fitted,
+        arcs_fitted,
+        angles_snapped,
+        points_gridded,
+        widths_unified,
+        mirror_axis,
+        max_displacement,
+        confidence,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1007,5 +1425,202 @@ mod tests {
             }
             other => panic!("expected Circle, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_regularize_empty_input_does_not_panic() {
+        let mut curves = vec![];
+        let mut widths = vec![];
+        let cfg = RegularizeConfig::default();
+        let rep = regularize(&mut curves, &mut widths, &cfg);
+        assert_eq!(rep.welded, 0);
+        assert_eq!(rep.points_gridded, 0);
+        assert_eq!(rep.confidence, 1.0);
+    }
+
+    #[test]
+    fn test_regularize_mismatched_lengths_does_not_panic() {
+        let mut curves = vec![
+            Curve {
+                segments: vec![
+                    PathElement::MoveTo(0.0, 0.0),
+                    PathElement::LineTo(10.0, 0.0),
+                ],
+                primitive: None,
+            },
+            Curve {
+                segments: vec![
+                    PathElement::MoveTo(0.0, 5.0),
+                    PathElement::LineTo(10.0, 5.0),
+                ],
+                primitive: None,
+            },
+            Curve {
+                segments: vec![
+                    PathElement::MoveTo(0.0, 10.0),
+                    PathElement::LineTo(10.0, 10.0),
+                ],
+                primitive: None,
+            },
+        ];
+        let mut widths = vec![1.0];
+        let cfg = RegularizeConfig::default();
+        let rep = regularize(&mut curves, &mut widths, &cfg);
+        assert!(rep.confidence >= 0.0);
+    }
+
+    #[test]
+    fn test_regularize_zero_pitch_skips_gridding() {
+        let mut curves = vec![Curve {
+            segments: vec![PathElement::MoveTo(0.1, 0.1), PathElement::LineTo(9.9, 0.1)],
+            primitive: None,
+        }];
+        let mut widths = vec![1.0];
+        let cfg = RegularizeConfig {
+            grid_pitch: 0.0,
+            ..Default::default()
+        };
+        let rep = regularize(&mut curves, &mut widths, &cfg);
+        assert_eq!(rep.points_gridded, 0);
+    }
+
+    #[test]
+    fn test_regularize_welds_before_snapping() {
+        let mut curves = vec![
+            Curve {
+                segments: vec![PathElement::MoveTo(0.0, 0.0), PathElement::LineTo(9.8, 0.0)],
+                primitive: None,
+            },
+            Curve {
+                segments: vec![
+                    PathElement::MoveTo(10.3, 0.0),
+                    PathElement::LineTo(20.0, 0.0),
+                ],
+                primitive: None,
+            },
+        ];
+        let mut widths = vec![1.0, 1.0];
+        let cfg = RegularizeConfig {
+            grid_pitch: 10.0,
+            max_grid_dev: 1.5,
+            weld_eps: 1.0,
+            ..Default::default()
+        };
+        let _rep = regularize(&mut curves, &mut widths, &cfg);
+        let c1_end = match &curves[0].segments[1] {
+            PathElement::LineTo(x, y) => (*x, *y),
+            _ => panic!(),
+        };
+        let c2_start = match &curves[1].segments[0] {
+            PathElement::MoveTo(x, y) => (*x, *y),
+            _ => panic!(),
+        };
+        // Welding runs first, so the two ends that should be one junction end
+        // up at one exact coordinate.
+        assert_eq!(c1_end, c2_start);
+        // And they land on the welded centroid, NOT on the grid line at 10.0:
+        // these curves carry no recognised primitive, so their points are
+        // traced samples and gridding must leave them alone. Asserting the
+        // unsnapped value is what pins that rule -- an implementation that
+        // gridded raw points would put this at exactly (10.0, 0.0).
+        assert!(
+            (c1_end.0 - 10.05).abs() < 1e-9,
+            "expected the welded centroid 10.05, got {:?} -- raw traced points \
+             must not be snapped to the grid",
+            c1_end
+        );
+    }
+
+    #[test]
+    fn test_regularize_confidence_drops_with_displacement() {
+        let mut curves1 = vec![Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.1),
+            ],
+            primitive: None,
+        }];
+        let mut widths1 = vec![1.0];
+        let cfg1 = RegularizeConfig {
+            grid_pitch: 10.0,
+            max_grid_dev: 2.0,
+            max_angle_dev_deg: 10.0,
+            ..Default::default()
+        };
+        let rep1 = regularize(&mut curves1, &mut widths1, &cfg1);
+
+        let mut curves2 = vec![Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 1.2),
+            ],
+            primitive: None,
+        }];
+        let mut widths2 = vec![1.0];
+        let cfg2 = RegularizeConfig {
+            grid_pitch: 10.0,
+            max_grid_dev: 2.0,
+            max_angle_dev_deg: 10.0,
+            ..Default::default()
+        };
+        let rep2 = regularize(&mut curves2, &mut widths2, &cfg2);
+
+        assert!(
+            rep1.confidence > rep2.confidence,
+            "rep1.confidence ({}) should be > rep2.confidence ({})",
+            rep1.confidence,
+            rep2.confidence
+        );
+    }
+
+    #[test]
+    fn test_regularize_clean_geometry_is_near_untouched() {
+        let mut curves = vec![Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(10.0, 0.0),
+            ],
+            primitive: None,
+        }];
+        let mut widths = vec![1.0];
+        let cfg = RegularizeConfig::default();
+        let rep = regularize(&mut curves, &mut widths, &cfg);
+        assert!(rep.max_displacement < 1e-6);
+        assert!((rep.confidence - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_regularize_is_deterministic() {
+        let make_input = || {
+            (
+                vec![
+                    Curve {
+                        segments: vec![
+                            PathElement::MoveTo(0.05, 0.02),
+                            PathElement::LineTo(9.95, 0.01),
+                        ],
+                        primitive: None,
+                    },
+                    Curve {
+                        segments: vec![
+                            PathElement::MoveTo(10.02, 0.03),
+                            PathElement::LineTo(20.01, 0.02),
+                        ],
+                        primitive: None,
+                    },
+                ],
+                vec![1.02, 0.98],
+            )
+        };
+        let (mut c1, mut w1) = make_input();
+        let (mut c2, mut w2) = make_input();
+        let cfg = RegularizeConfig::default();
+
+        let rep1 = regularize(&mut c1, &mut w1, &cfg);
+        let rep2 = regularize(&mut c2, &mut w2, &cfg);
+
+        assert_eq!(rep1, rep2);
+        assert_eq!(format!("{c1:?}"), format!("{c2:?}"));
+        assert_eq!(w1, w2);
     }
 }

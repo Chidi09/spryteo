@@ -14,6 +14,8 @@ pub struct SheetOptions {
     pub name_prefix: String, // default "icon"
     pub manifest: Option<PathBuf>,
     pub dry_run: bool,
+    pub regularize: bool, // default false
+    pub grid_pitch: f64,  // default 1.0
 }
 
 impl Default for SheetOptions {
@@ -28,8 +30,26 @@ impl Default for SheetOptions {
             name_prefix: "icon".to_string(),
             manifest: None,
             dry_run: false,
+            regularize: false,
+            grid_pitch: 1.0,
         }
     }
+}
+
+/// Regularization report details for a single icon.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IconRegularizeReport {
+    pub confidence: f32,
+    pub max_displacement: f64,
+    pub reverted: bool,
+    pub welded: usize,
+    pub loops_closed: usize,
+    pub lines_fitted: usize,
+    pub arcs_fitted: usize,
+    pub angles_snapped: usize,
+    pub points_gridded: usize,
+    pub widths_unified: bool,
+    pub mirror_axis: Option<f64>,
 }
 
 /// Individual report for a single icon extracted from the contact sheet.
@@ -43,6 +63,8 @@ pub struct IconReport {
     pub path_count: usize,
     pub stroke_width: f64,
     pub gradient_residual: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regularize: Option<IconRegularizeReport>,
     pub warnings: Vec<String>,
 }
 
@@ -249,11 +271,55 @@ pub fn run_sheet(
                     transformed_widths.push(transform.apply_length(path.width));
                 }
 
+                let mut icon_warnings = Vec::new();
+                let mut reg_info = None;
+
+                if sheet.regularize {
+                    let unreg_curves = transformed_curves.clone();
+                    let unreg_widths = transformed_widths.clone();
+
+                    let cfg = spryteo_geom::regularize::RegularizeConfig {
+                        grid_pitch: sheet.grid_pitch,
+                        ..Default::default()
+                    };
+
+                    let report = spryteo_geom::regularize::regularize(
+                        &mut transformed_curves,
+                        &mut transformed_widths,
+                        &cfg,
+                    );
+
+                    let reverted = if report.confidence < 0.5 {
+                        transformed_curves = unreg_curves;
+                        transformed_widths = unreg_widths;
+                        icon_warnings.push(format!(
+                            "regularization reverted due to low confidence ({:.2})",
+                            report.confidence
+                        ));
+                        true
+                    } else {
+                        false
+                    };
+
+                    reg_info = Some(IconRegularizeReport {
+                        confidence: report.confidence,
+                        max_displacement: report.max_displacement,
+                        reverted,
+                        welded: report.welded,
+                        loops_closed: report.loops_closed,
+                        lines_fitted: report.lines_fitted,
+                        arcs_fitted: report.arcs_fitted,
+                        angles_snapped: report.angles_snapped,
+                        points_gridded: report.points_gridded,
+                        widths_unified: report.widths_unified,
+                        mirror_axis: report.mirror_axis,
+                    });
+                }
+
                 let curve_set = spryteo_core::CurveSet {
                     curves: transformed_curves,
                 };
 
-                let mut icon_warnings = Vec::new();
                 let mut gradient_residual = None;
 
                 let crop_mask = spryteo_sheet::chroma_mask(&original_crop, &chroma_cfg);
@@ -379,6 +445,7 @@ pub fn run_sheet(
                         path_count: stroke_ex.paths.len(),
                         stroke_width: mean_width,
                         gradient_residual,
+                        regularize: reg_info,
                         warnings: icon_warnings,
                     },
                     is_written,
@@ -408,6 +475,7 @@ pub fn run_sheet(
                     path_count: 0,
                     stroke_width: 0.0,
                     gradient_residual: None,
+                    regularize: None,
                     warnings: vec![msg],
                 });
             }
@@ -433,6 +501,7 @@ pub fn run_sheet(
                     path_count: 0,
                     stroke_width: 0.0,
                     gradient_residual: None,
+                    regularize: None,
                     warnings: vec![format!("Panic while processing icon: {}", msg)],
                 });
             }

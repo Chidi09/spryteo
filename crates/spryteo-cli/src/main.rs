@@ -323,6 +323,14 @@ struct SheetArgs {
     /// Number of decimal places in SVG path coordinates
     #[arg(long)]
     precision: Option<u8>,
+
+    /// Regularize geometry (trades raster fidelity for cleaner, more consistent geometry)
+    #[arg(long)]
+    regularize: bool,
+
+    /// Grid pitch in canonical units for regularization
+    #[arg(long, default_value = "1.0")]
+    grid_pitch: f64,
 }
 
 fn main() {
@@ -588,6 +596,8 @@ fn main() {
                 name_prefix: args.name_prefix,
                 manifest: args.manifest,
                 dry_run: args.dry_run,
+                regularize: args.regularize,
+                grid_pitch: args.grid_pitch,
             };
 
             let report = match spryteo_cli::run_sheet(&bytes, &opts, &sheet_opts) {

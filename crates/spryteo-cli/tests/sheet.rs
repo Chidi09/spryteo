@@ -263,3 +263,82 @@ fn test_sheet_flat_mode_emits_no_gradient() {
 
     let _ = fs::remove_dir_all(&out_dir);
 }
+
+#[test]
+fn test_sheet_regularize_off_by_default_is_unchanged() {
+    let png = generate_synthetic_sheet_png();
+    let dir_default = unique_temp_dir();
+    let dir_explicit_false = unique_temp_dir();
+    let opts = ConvertOptions::default();
+
+    let sheet_opts_default = SheetOptions {
+        out_dir: dir_default.clone(),
+        ..SheetOptions::default()
+    };
+    let sheet_opts_explicit_false = SheetOptions {
+        out_dir: dir_explicit_false.clone(),
+        regularize: false,
+        ..SheetOptions::default()
+    };
+
+    let rep_def = run_sheet(&png, &opts, &sheet_opts_default).expect("run_sheet default");
+    let rep_false =
+        run_sheet(&png, &opts, &sheet_opts_explicit_false).expect("run_sheet explicit false");
+
+    assert_eq!(rep_def.written, rep_false.written);
+
+    for icon in &rep_def.icons {
+        let filename = format!("{}.svg", icon.name);
+        let bytes_def = fs::read(dir_default.join(&filename)).unwrap();
+        assert!(
+            icon.regularize.is_none(),
+            "regularize report should be None when off by default"
+        );
+        let bytes_false = fs::read(dir_explicit_false.join(&filename)).unwrap();
+        assert_eq!(
+            bytes_def, bytes_false,
+            "Emitted files for {} must be byte-identical",
+            filename
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir_default);
+    let _ = fs::remove_dir_all(&dir_explicit_false);
+}
+
+#[test]
+fn test_sheet_regularize_produces_valid_svg() {
+    let png = generate_synthetic_sheet_png();
+    let out_dir = unique_temp_dir();
+    let opts = ConvertOptions::default();
+    let sheet_opts = SheetOptions {
+        out_dir: out_dir.clone(),
+        regularize: true,
+        grid_pitch: 1.0,
+        ..SheetOptions::default()
+    };
+
+    let report =
+        run_sheet(&png, &opts, &sheet_opts).expect("run_sheet with regularize should succeed");
+    assert_eq!(report.written, 6);
+
+    let usvg_opts = resvg::usvg::Options::default();
+    for icon in &report.icons {
+        assert!(
+            icon.regularize.is_some(),
+            "regularize report should be present when regularize is true"
+        );
+        let filename = format!("{}.svg", icon.name);
+        let path = out_dir.join(&filename);
+        let svg_str = fs::read_to_string(&path).unwrap();
+        resvg::usvg::Tree::from_str(&svg_str, &usvg_opts).unwrap_or_else(|e| {
+            panic!(
+                "SVG parsing failed for regularized {}: {}",
+                path.display(),
+                e
+            )
+        });
+    }
+
+    let _ = fs::remove_dir_all(&out_dir);
+}
