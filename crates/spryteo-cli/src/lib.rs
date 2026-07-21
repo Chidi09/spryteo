@@ -3,6 +3,9 @@ use spryteo_core::{
     Preset, RasterImage, SpryteoError, Stats, Tri,
 };
 
+pub mod sheet;
+pub use sheet::{run_sheet, IconReport, SheetOptions, SheetReport};
+
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
     #[error(transparent)]

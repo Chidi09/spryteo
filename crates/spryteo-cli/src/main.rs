@@ -137,6 +137,8 @@ enum Cli {
     Convert(ConvertArgs),
     /// Print metadata for an SVG produced by `spryteo convert`
     Inspect(InspectArgs),
+    /// Extract every icon from a contact sheet into separate SVG files
+    Sheet(SheetArgs),
 }
 
 #[derive(Args, Clone, Debug)]
@@ -271,6 +273,56 @@ struct InspectArgs {
     /// markup (element counts, IDs, viewBox -- no centroid/area/group tree).
     #[arg(long)]
     meta: Option<std::path::PathBuf>,
+}
+
+#[derive(Args, Clone, Debug)]
+struct SheetArgs {
+    /// Input raster icon contact sheet image
+    input: std::path::PathBuf,
+
+    /// Output directory for extracted SVGs
+    #[arg(short, long)]
+    out_dir: std::path::PathBuf,
+
+    /// Upscaling factor for stroke tracing
+    #[arg(long, default_value = "4")]
+    supersample: u32,
+
+    /// Canonical viewBox size in pixels
+    #[arg(long, default_value = "24.0")]
+    canonical_size: f64,
+
+    /// Pixels of padding added around each icon crop
+    #[arg(long, default_value = "2")]
+    pad: u32,
+
+    /// Emit currentColor instead of a linear gradient
+    #[arg(long)]
+    flat: bool,
+
+    /// Saturation threshold for chroma segmentation (0-255)
+    #[arg(long)]
+    sat_threshold: Option<u8>,
+
+    /// Prefix for output SVG filenames
+    #[arg(long, default_value = "icon")]
+    name_prefix: String,
+
+    /// Optional path to write JSON manifest report
+    #[arg(long)]
+    manifest: Option<std::path::PathBuf>,
+
+    /// Perform analysis and return report without writing files to disk
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Global curve-fit error budget in pixels
+    #[arg(long)]
+    tolerance: Option<f32>,
+
+    /// Number of decimal places in SVG path coordinates
+    #[arg(long)]
+    precision: Option<u8>,
 }
 
 fn main() {
@@ -504,6 +556,63 @@ fn main() {
                     std::process::exit(0);
                 }
             }
+        }
+        Cli::Sheet(args) => {
+            let bytes = match std::fs::read(&args.input) {
+                Ok(b) => b,
+                Err(source) => {
+                    eprintln!(
+                        "Error: failed to read '{}': {}",
+                        args.input.display(),
+                        source
+                    );
+                    std::process::exit(1);
+                }
+            };
+
+            let mut opts = spryteo_core::ConvertOptions::default();
+            if let Some(t) = args.tolerance {
+                opts.tolerance = t;
+            }
+            if let Some(p) = args.precision {
+                opts.precision = p;
+            }
+
+            let sheet_opts = spryteo_cli::SheetOptions {
+                out_dir: args.out_dir,
+                supersample: args.supersample,
+                canonical_size: args.canonical_size,
+                pad: args.pad,
+                flat: args.flat,
+                sat_threshold: args.sat_threshold,
+                name_prefix: args.name_prefix,
+                manifest: args.manifest,
+                dry_run: args.dry_run,
+            };
+
+            let report = match spryteo_cli::run_sheet(&bytes, &opts, &sheet_opts) {
+                Ok(r) => r,
+                Err(err) => {
+                    eprintln!("Error: {}", err);
+                    std::process::exit(spryteo_cli::CliError::Spryteo(err).exit_code());
+                }
+            };
+
+            println!(
+                "Sheet grid: {}x{} (confidence: {:.2}), written: {}/{} icons",
+                report.cols,
+                report.rows,
+                report.confidence,
+                report.written,
+                report.icons.len()
+            );
+            if report.straddling > 0 || report.orphans > 0 || report.empty_cells > 0 {
+                println!(
+                    "Warnings: {} straddling, {} orphans, {} empty cells",
+                    report.straddling, report.orphans, report.empty_cells
+                );
+            }
+            std::process::exit(0);
         }
     }
 }
