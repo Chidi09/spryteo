@@ -8,6 +8,22 @@
       <span>contact sheet &#8594; split &#8594; trace</span>
     </div>
 
+    <!-- Options Bar -->
+    <div class="sheet-options" role="group" aria-label="Extraction options">
+      <div class="opt-group" role="radiogroup" aria-label="Segmentation">
+        <span class="opt-label">segmentation</span>
+        <div class="seg-control">
+          <button class="seg-btn is-active" type="button" data-seg="Auto" role="radio" aria-checked="true">auto</button>
+          <button class="seg-btn" type="button" data-seg="Chroma" role="radio" aria-checked="false">chroma</button>
+          <button class="seg-btn" type="button" data-seg="Luma" role="radio" aria-checked="false">luminance</button>
+        </div>
+      </div>
+      <label class="opt-toggle">
+        <input id="optFlat" type="checkbox" />
+        <span>flat <span class="opt-hint">(currentColor)</span></span>
+      </label>
+    </div>
+
     <!-- Dropzone Area -->
     <div id="sheetDropzone" class="demo-area" role="button" tabindex="0" aria-label="Drop an icon contact sheet to convert, or click to browse">
       <input id="sheetFileInput" class="demo-file-input" type="file" accept="image/png,image/jpeg,image/webp" hidden />
@@ -200,13 +216,25 @@
     return convertWorker;
   }
 
+  // Current extraction options, mapped to PipelineOptions fields.
+  const options = { seg: 'Auto', flat: false };
+
+  function buildOptionsJson(): string {
+    // Only send non-default keys; convert_sheet merges over PipelineOptions defaults.
+    const payload: Record<string, unknown> = {};
+    if (options.seg !== 'Auto') payload.seg = options.seg;
+    if (options.flat) payload.flat = true;
+    return JSON.stringify(payload);
+  }
+
   async function convertSheet(file: File): Promise<any> {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const worker = getWorker();
     const id = nextRequestId++;
+    const optionsJson = buildOptionsJson();
     return new Promise((resolve, reject) => {
       pendingConversions.set(id, { resolve, reject });
-      worker.postMessage({ id, bytes, kind: 'sheet' }, [bytes.buffer]);
+      worker.postMessage({ id, bytes, kind: 'sheet', options: optionsJson }, [bytes.buffer]);
     });
   }
 
@@ -227,6 +255,10 @@
 
   let currentFile: File | null = null;
   let currentResult: { report: any; icons: Array<{ name: string; svg: string }> } | null = null;
+  // Monotonic id of the most recently issued conversion. Rapid option changes
+  // can put several conversions in flight; only the latest one may render, so a
+  // slower earlier result can never clobber a newer one.
+  let conversionSeq = 0;
 
   function validateFile(file: File): string | null {
     if (!ACCEPTED_TYPES.includes(file.type)) return 'unsupported file — please drop a PNG, JPEG, or WebP contact sheet';
@@ -371,19 +403,37 @@
       return;
     }
 
+    // Reset to the processing view — covers both a first run and a re-run
+    // triggered by changing an option while a result is on screen.
+    if (successHeader) successHeader.hidden = true;
+    if (iconGrid) {
+      iconGrid.hidden = true;
+      iconGrid.innerHTML = '';
+    }
+    if (dropzone) {
+      dropzone.hidden = false;
+      dropzone.classList.remove('demo-error');
+    }
     if (idleContent) idleContent.hidden = true;
     if (processingContent) {
       processingContent.hidden = false;
       if (processingText) processingText.textContent = `${file.name} → extracting icons…`;
     }
 
+    const seq = ++conversionSeq;
     convertSheet(file)
       .then((result) => {
+        if (seq !== conversionSeq) return; // a newer conversion superseded this one
         renderSuccess(file, result);
       })
       .catch((err) => {
+        if (seq !== conversionSeq) return;
         showError(err.message || 'conversion failed');
       });
+  }
+
+  function reconvert(): void {
+    if (currentFile) handleFile(currentFile);
   }
 
   // --- Event Listeners ---
@@ -453,6 +503,30 @@
       resetState();
     });
   }
+
+  // --- Options controls ---
+  const segButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.seg-btn'));
+  segButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const seg = btn.dataset.seg ?? 'Auto';
+      if (seg === options.seg) return;
+      options.seg = seg;
+      segButtons.forEach((b) => {
+        const active = b === btn;
+        b.classList.toggle('is-active', active);
+        b.setAttribute('aria-checked', active ? 'true' : 'false');
+      });
+      reconvert();
+    });
+  });
+
+  const flatToggle = document.getElementById('optFlat') as HTMLInputElement | null;
+  if (flatToggle) {
+    flatToggle.addEventListener('change', () => {
+      options.flat = flatToggle.checked;
+      reconvert();
+    });
+  }
 })();
 </script>
 
@@ -468,6 +542,69 @@
   .sheet-demo-wrapper {
     max-width: 1000px;
     margin: 0 auto;
+  }
+
+  /* Options bar */
+  .sheet-options {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .opt-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .opt-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .seg-control {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .seg-btn {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    background: transparent;
+    border: 0;
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: color var(--transition-fast), background var(--transition-fast);
+  }
+  .seg-btn + .seg-btn {
+    border-left: 1px solid var(--border);
+  }
+  .seg-btn:hover {
+    color: var(--text);
+  }
+  .seg-btn.is-active {
+    color: var(--accent-ink);
+    background: var(--accent);
+  }
+  .opt-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .opt-toggle input {
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .opt-hint {
+    color: var(--muted);
   }
   .demo-frame {
     position: relative;

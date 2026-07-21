@@ -18,10 +18,16 @@ function ensureInit(): Promise<unknown> {
 }
 
 self.onmessage = async (e: MessageEvent) => {
-  const { id, bytes, kind } = e.data as { id: number; bytes: Uint8Array; kind?: 'convert' | 'sheet' };
+  const { id, bytes, kind, options } = e.data as {
+    id: number;
+    bytes: Uint8Array;
+    kind?: 'convert' | 'sheet';
+    options?: string;
+  };
   try {
     await ensureInit();
-    const result = kind === 'sheet' ? convert_sheet(bytes, '{}') : convert_default(bytes);
+    const result =
+      kind === 'sheet' ? convert_sheet(bytes, options ?? '{}') : convert_default(bytes);
     self.postMessage({ id, ok: true, result });
   } catch (err) {
     self.postMessage({ id, ok: false, error: String(err) });
