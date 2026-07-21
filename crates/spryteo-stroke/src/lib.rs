@@ -15,7 +15,65 @@ pub mod skeletonize;
 pub mod smooth;
 pub mod traverse;
 
-use spryteo_core::ir::{CurveSet, RasterImage};
+use spryteo_core::ir::{Curve, CurveSet, RasterImage};
+
+/// Where the ink mask comes from.
+#[derive(Debug, Clone)]
+pub enum InkSource {
+    /// Sauvola adaptive thresholding on luminance -- what `trace_stroke` uses.
+    Luminance,
+    /// A caller-supplied mask, one bool per pixel, row-major, length
+    /// width*height. Used when the caller has better information than
+    /// luminance can provide (e.g. a chroma-derived mask for coloured line art
+    /// on a light background).
+    Mask(Vec<bool>),
+}
+
+#[derive(Debug, Clone)]
+pub struct StrokeOptions {
+    pub tolerance: f32,
+    pub ink: InkSource,
+    /// Skip spur pruning. Pruning removes skeleton hair on large shapes but
+    /// also deletes small genuine features, so the caller chooses.
+    pub prune_spurs: bool,
+    /// Connected components with fewer than this many ink pixels are dropped
+    /// before graph building.
+    pub min_component_pixels: usize,
+}
+
+impl Default for StrokeOptions {
+    fn default() -> Self {
+        Self {
+            tolerance: 1.0,
+            ink: InkSource::Luminance,
+            prune_spurs: true,
+            min_component_pixels: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StrokePath {
+    pub curve: Curve,
+    /// Diameter: 2.0 * median(half-widths), same as trace_stroke computes.
+    pub width: f64,
+    /// Per-chain-pixel HALF-widths straight from the distance transform, in
+    /// traversal order, not collapsed. Empty only for an empty chain.
+    pub width_profile: Vec<f64>,
+    /// Index into the sorted component list this path came from.
+    pub component: usize,
+    /// True when the chain's first and last pixel coincide.
+    pub closed: bool,
+    /// First and last point of the chain, in pixel coordinates.
+    pub endpoints: [(f64, f64); 2],
+}
+
+#[derive(Debug, Clone)]
+pub struct StrokeResultEx {
+    pub paths: Vec<StrokePath>,
+    /// Number of components that survived `min_component_pixels`.
+    pub component_count: usize,
+}
 
 #[derive(Debug, Clone)]
 pub struct StrokeResult {
@@ -134,6 +192,169 @@ pub fn trace_stroke(image: &RasterImage, tolerance: f32) -> StrokeResult {
         curves: CurveSet { curves },
         widths,
         path_count,
+    }
+}
+
+pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResultEx {
+    let mut paths = Vec::new();
+
+    if image.width == 0 || image.height == 0 {
+        return StrokeResultEx {
+            paths,
+            component_count: 0,
+        };
+    }
+
+    // 1. Ink mask
+    let ink_mask = match &opts.ink {
+        InkSource::Luminance => binarize::binarize(image),
+        InkSource::Mask(m) => {
+            if m.len() != (image.width as usize * image.height as usize) {
+                return StrokeResultEx {
+                    paths,
+                    component_count: 0,
+                };
+            }
+            m.clone()
+        }
+    };
+
+    // 2. Skeletonize & Distance Transform
+    let dist = skeletonize::compute_distance_transform(&ink_mask, image.width, image.height);
+    let mut skeleton = skeletonize::zhang_suen_thinning(&ink_mask, image.width, image.height);
+
+    // 3. Prune spurs
+    if opts.prune_spurs {
+        prune::prune_spurs(&mut skeleton, &dist, image.width, image.height);
+    }
+
+    // 4. min_component_pixels filtering on INK mask
+    if opts.min_component_pixels > 0 {
+        let w = image.width as i32;
+        let h = image.height as i32;
+        let mut visited = vec![false; (image.width * image.height) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) as usize;
+                if ink_mask[idx] && !visited[idx] {
+                    visited[idx] = true;
+                    let mut comp_pixels = Vec::new();
+                    let mut queue = std::collections::VecDeque::new();
+                    queue.push_back((x, y));
+                    comp_pixels.push(idx);
+
+                    while let Some((cx, cy)) = queue.pop_front() {
+                        for dy in -1..=1 {
+                            for dx in -1..=1 {
+                                if dx == 0 && dy == 0 {
+                                    continue;
+                                }
+                                let nx = cx + dx;
+                                let ny = cy + dy;
+                                if nx >= 0 && nx < w && ny >= 0 && ny < h {
+                                    let n_idx = (ny * w + nx) as usize;
+                                    if ink_mask[n_idx] && !visited[n_idx] {
+                                        visited[n_idx] = true;
+                                        queue.push_back((nx, ny));
+                                        comp_pixels.push(n_idx);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if comp_pixels.len() < opts.min_component_pixels {
+                        for &px_idx in &comp_pixels {
+                            skeleton[px_idx] = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Build stroke graphs for each connected component
+    let mut graphs = graph::build_stroke_graphs(&skeleton, image.width, image.height);
+
+    // Sort graphs by their first node's coordinate for absolute scan-order determinism
+    graphs.sort_by(|g1, g2| {
+        if g1.nodes.is_empty() && g2.nodes.is_empty() {
+            std::cmp::Ordering::Equal
+        } else if g1.nodes.is_empty() {
+            std::cmp::Ordering::Less
+        } else if g2.nodes.is_empty() {
+            std::cmp::Ordering::Greater
+        } else {
+            let n1 = &g1.nodes[0];
+            let n2 = &g2.nodes[0];
+            if n1.y != n2.y {
+                n1.y.cmp(&n2.y)
+            } else {
+                n1.x.cmp(&n2.x)
+            }
+        }
+    });
+
+    let component_count = graphs.len();
+
+    // 6. Traverse and smooth each component
+    for (comp_idx, g) in graphs.iter().enumerate() {
+        let traversal_paths = traverse::traverse_graph(g);
+        for path in traversal_paths {
+            let mut chain_pixels = Vec::new();
+            for &(_, _, edge_idx, is_reverse) in &path {
+                let mut edge_p = g.edges[edge_idx].pixels.clone();
+                if is_reverse {
+                    edge_p.reverse();
+                }
+                for p in edge_p {
+                    if chain_pixels.is_empty() || chain_pixels.last() != Some(&p) {
+                        chain_pixels.push(p);
+                    }
+                }
+            }
+
+            if chain_pixels.len() < 2 {
+                continue;
+            }
+
+            let mut sample_dists = Vec::new();
+            for &(px, py) in &chain_pixels {
+                let idx = (py * image.width as i32 + px) as usize;
+                if idx < dist.len() {
+                    sample_dists.push(dist[idx]);
+                }
+            }
+            let stroke_width = 2.0 * median(sample_dists.clone());
+
+            let chain_float: Vec<(f64, f64)> = chain_pixels
+                .iter()
+                .map(|&(px, py)| (px as f64, py as f64))
+                .collect();
+
+            let curve = smooth::smooth_chain(&chain_float, opts.tolerance);
+            let closed = chain_pixels.first() == chain_pixels.last();
+            let p_first = chain_pixels.first().unwrap();
+            let p_last = chain_pixels.last().unwrap();
+            let endpoints = [
+                (p_first.0 as f64, p_first.1 as f64),
+                (p_last.0 as f64, p_last.1 as f64),
+            ];
+
+            paths.push(StrokePath {
+                curve,
+                width: stroke_width,
+                width_profile: sample_dists,
+                component: comp_idx,
+                closed,
+                endpoints,
+            });
+        }
+    }
+
+    StrokeResultEx {
+        paths,
+        component_count,
     }
 }
 
@@ -335,5 +556,203 @@ mod tests {
         let json2 = serde_json::to_vec(&res2.curves).unwrap();
         assert_eq!(json1, json2);
         assert_eq!(res1.widths, res2.widths);
+    }
+
+    #[test]
+    fn test_trace_stroke_ex_matches_trace_stroke_on_defaults() {
+        let mut img = make_empty_image(32, 32);
+        draw_line(&mut img, 5, 10, 25, 10, 0);
+
+        let res = trace_stroke(&img, 1.0);
+        let res_ex = trace_stroke_ex(&img, &StrokeOptions::default());
+
+        assert_eq!(res.path_count, res_ex.paths.len());
+        for (w1, p2) in res.widths.iter().zip(res_ex.paths.iter()) {
+            assert_eq!(*w1, p2.width);
+        }
+    }
+
+    #[test]
+    fn test_ink_source_mask_is_used_instead_of_luminance() {
+        let w = 32;
+        let h = 32;
+        let pixels = vec![240; (w * h * 4) as usize];
+        let img = RasterImage {
+            width: w,
+            height: h,
+            pixels,
+        };
+
+        let res_lum = trace_stroke_ex(&img, &StrokeOptions::default());
+        assert_eq!(res_lum.paths.len(), 0);
+
+        let mut mask = vec![false; (w * h) as usize];
+        for x in 5..=25 {
+            mask[(10 * w + x) as usize] = true;
+        }
+
+        let opts = StrokeOptions {
+            ink: InkSource::Mask(mask),
+            ..StrokeOptions::default()
+        };
+        let res_mask = trace_stroke_ex(&img, &opts);
+        assert!(!res_mask.paths.is_empty());
+    }
+
+    #[test]
+    fn test_ink_source_mask_wrong_length_returns_empty() {
+        let img = make_empty_image(32, 32);
+        let wrong_mask = vec![true; 10];
+        let opts = StrokeOptions {
+            ink: InkSource::Mask(wrong_mask),
+            ..StrokeOptions::default()
+        };
+        let res = trace_stroke_ex(&img, &opts);
+        assert_eq!(res.paths.len(), 0);
+        assert_eq!(res.component_count, 0);
+    }
+
+    #[test]
+    fn test_component_indices_are_assigned() {
+        let mut img = make_empty_image(64, 64);
+        draw_line(&mut img, 5, 5, 15, 5, 0);
+        draw_line(&mut img, 5, 25, 15, 25, 0);
+        draw_line(&mut img, 5, 45, 15, 45, 0);
+
+        let res = trace_stroke_ex(&img, &StrokeOptions::default());
+        assert_eq!(res.component_count, 3);
+        let mut components: Vec<usize> = res.paths.iter().map(|p| p.component).collect();
+        components.sort_unstable();
+        components.dedup();
+        assert_eq!(components, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_min_component_pixels_drops_small_components() {
+        let mut img = make_empty_image(32, 32);
+        draw_line(&mut img, 5, 10, 25, 10, 0);
+        draw_pixel(&mut img, 2, 2);
+        draw_pixel(&mut img, 3, 2);
+
+        let opts_default = StrokeOptions {
+            prune_spurs: false,
+            min_component_pixels: 0,
+            ..StrokeOptions::default()
+        };
+        let res_default = trace_stroke_ex(&img, &opts_default);
+
+        let opts_filtered = StrokeOptions {
+            prune_spurs: false,
+            min_component_pixels: 5,
+            ..StrokeOptions::default()
+        };
+        let res_filtered = trace_stroke_ex(&img, &opts_filtered);
+
+        assert!(
+            res_default.component_count > res_filtered.component_count,
+            "default should have more components ({}) than filtered ({})",
+            res_default.component_count,
+            res_filtered.component_count
+        );
+    }
+
+    #[test]
+    fn test_width_profile_is_not_collapsed() {
+        let mut img = make_empty_image(32, 32);
+        draw_line(&mut img, 5, 15, 12, 15, 0);
+        draw_line(&mut img, 13, 15, 25, 15, 2);
+
+        let res = trace_stroke_ex(&img, &StrokeOptions::default());
+        assert!(!res.paths.is_empty());
+        let path = &res.paths[0];
+        assert!(path.width_profile.len() > 2);
+
+        let min_val = path
+            .width_profile
+            .iter()
+            .cloned()
+            .fold(f64::INFINITY, f64::min);
+        let max_val = path
+            .width_profile
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            max_val > min_val,
+            "width profile should contain distinct values"
+        );
+
+        let expected_median_width = 2.0 * median(path.width_profile.clone());
+        assert!((path.width - expected_median_width).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_closed_flag_for_loop() {
+        let mut img = make_empty_image(32, 32);
+        draw_line(&mut img, 10, 10, 20, 10, 0);
+        draw_line(&mut img, 20, 10, 20, 20, 0);
+        draw_line(&mut img, 20, 20, 10, 20, 0);
+        draw_line(&mut img, 10, 20, 10, 10, 0);
+
+        let res_closed = trace_stroke_ex(&img, &StrokeOptions::default());
+        assert!(
+            res_closed.paths.iter().any(|p| p.closed),
+            "Loop image should yield at least one closed path"
+        );
+
+        let mut img_line = make_empty_image(32, 32);
+        draw_line(&mut img_line, 5, 10, 25, 10, 0);
+        let res_line = trace_stroke_ex(&img_line, &StrokeOptions::default());
+        assert!(
+            res_line.paths.iter().all(|p| !p.closed),
+            "Open line should yield no closed paths"
+        );
+    }
+
+    #[test]
+    fn test_endpoints_match_chain_ends() {
+        let mut img = make_empty_image(32, 32);
+        draw_line(&mut img, 5, 10, 25, 10, 0);
+
+        let res = trace_stroke_ex(&img, &StrokeOptions::default());
+        assert_eq!(res.paths.len(), 1);
+        let path = &res.paths[0];
+
+        let (curve_start, curve_end) = get_endpoints(&path.curve.segments);
+        assert_eq!(path.endpoints[0], curve_start);
+        assert_eq!(path.endpoints[1], curve_end);
+    }
+
+    #[test]
+    fn test_trace_stroke_ex_is_deterministic() {
+        let mut img = make_empty_image(32, 32);
+        draw_line(&mut img, 5, 15, 25, 15, 1);
+        draw_line(&mut img, 15, 5, 15, 25, 1);
+
+        let res1 = trace_stroke_ex(&img, &StrokeOptions::default());
+        let res2 = trace_stroke_ex(&img, &StrokeOptions::default());
+
+        assert_eq!(res1.paths.len(), res2.paths.len());
+        assert_eq!(res1.component_count, res2.component_count);
+
+        for (p1, p2) in res1.paths.iter().zip(res2.paths.iter()) {
+            assert_eq!(p1.width, p2.width);
+            assert_eq!(p1.width_profile, p2.width_profile);
+            assert_eq!(p1.component, p2.component);
+            assert_eq!(p1.closed, p2.closed);
+            assert_eq!(p1.endpoints, p2.endpoints);
+        }
+    }
+
+    #[test]
+    fn test_zero_size_image_does_not_panic() {
+        let img = RasterImage {
+            width: 0,
+            height: 0,
+            pixels: vec![],
+        };
+        let res = trace_stroke_ex(&img, &StrokeOptions::default());
+        assert_eq!(res.paths.len(), 0);
+        assert_eq!(res.component_count, 0);
     }
 }
