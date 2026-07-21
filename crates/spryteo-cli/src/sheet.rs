@@ -25,6 +25,7 @@ pub struct SheetOptions {
     pub regularize: bool, // default false
     pub grid_pitch: f64,  // default 1.0
     pub seg: SegChoice,
+    pub unify_widths: bool, // default true
 }
 
 impl Default for SheetOptions {
@@ -42,6 +43,7 @@ impl Default for SheetOptions {
             regularize: false,
             grid_pitch: 1.0,
             seg: SegChoice::Auto,
+            unify_widths: true,
         }
     }
 }
@@ -79,6 +81,8 @@ pub struct IconReport {
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_rect: Option<(u32, u32, u32, u32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_unified: Option<f64>,
 }
 
 fn extract_endpoints(segments: &[spryteo_core::PathElement]) -> Vec<(f64, f64)> {
@@ -110,6 +114,8 @@ pub struct SheetReport {
     pub segmentation: String,
     pub polarity: Option<String>,
     pub text_rows_removed: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unified_stroke_width: Option<f64>,
 }
 
 enum Segmentation {
@@ -253,6 +259,13 @@ pub fn run_sheet(
     };
     let route_t = 1.3 * sheet_stroke_w * sheet.supersample as f64;
 
+    let is_jpeg_input = spryteo_raster::is_jpeg(bytes);
+    let min_comp_pixels = if is_jpeg_input {
+        6 * (sheet.supersample as usize).pow(2)
+    } else {
+        0
+    };
+
     if !sheet.dry_run {
         if let Err(e) = std::fs::create_dir_all(&sheet.out_dir) {
             return Err(SpryteoError::Internal(format!(
@@ -263,14 +276,18 @@ pub fn run_sheet(
         }
     }
 
-    let mut icon_reports = Vec::with_capacity(cells.len());
-    let mut written_count = 0usize;
+    struct PendingIcon {
+        scene_and_opts: Option<(spryteo_core::ir::SceneGraph, ConvertOptions)>,
+        report: IconReport,
+    }
+
+    let mut pending_icons = Vec::with_capacity(cells.len());
 
     // 6. Iterate cells in deterministic order
     for cell in &cells {
         let icon_name = format!("{}-{:02}-{:02}", sheet.name_prefix, cell.col, cell.row);
         let cell_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || -> Result<(IconReport, bool), String> {
+            || -> Result<(spryteo_core::ir::SceneGraph, ConvertOptions, IconReport), String> {
                 // 6a. crop the DECODED IMAGE (not the mask) to cell.crop
                 let crop_w = cell.crop.width();
                 let crop_h = cell.crop.height();
@@ -300,7 +317,7 @@ pub fn run_sheet(
                     tolerance: opts.tolerance,
                     ink: spryteo_stroke::InkSource::Mask(ink_mask),
                     prune_spurs: false,
-                    min_component_pixels: 0,
+                    min_component_pixels: min_comp_pixels,
                     extend_caps: true,
                     route_fill_above: Some(route_t),
                 };
@@ -708,20 +725,6 @@ pub fn run_sheet(
                     icon_opts.current_color = true;
                 }
 
-                let canonical_dim = sheet.canonical_size as u32;
-                let convert_res =
-                    spryteo_svg::emit_stroke_svg(&scene, canonical_dim, canonical_dim, &icon_opts);
-
-                let out_filename = format!("{}.svg", icon_name);
-                let out_path = sheet.out_dir.join(&out_filename);
-
-                let mut is_written = false;
-                if !sheet.dry_run {
-                    std::fs::write(&out_path, &convert_res.svg)
-                        .map_err(|e| format!("Failed to write SVG: {}", e))?;
-                    is_written = true;
-                }
-
                 let mean_width = if transformed_widths.is_empty() {
                     0.0
                 } else {
@@ -731,6 +734,8 @@ pub fn run_sheet(
                 let total_path_count = stroke_ex.paths.len() + transformed_fill_curves.len();
 
                 Ok((
+                    scene,
+                    icon_opts,
                     IconReport {
                         name: icon_name.clone(),
                         col: cell.col,
@@ -749,38 +754,42 @@ pub fn run_sheet(
                         regularize: reg_info,
                         warnings: icon_warnings,
                         label_rect,
+                        width_unified: None,
                     },
-                    is_written,
                 ))
             },
         ));
 
         match cell_res {
-            Ok(Ok((report, was_written))) => {
-                if was_written {
-                    written_count += 1;
-                }
-                icon_reports.push(report);
+            Ok(Ok((scene, icon_opts, report))) => {
+                pending_icons.push(PendingIcon {
+                    scene_and_opts: Some((scene, icon_opts)),
+                    report,
+                });
             }
             Ok(Err(msg)) => {
-                icon_reports.push(IconReport {
-                    name: icon_name,
-                    col: cell.col,
-                    row: cell.row,
-                    source_rect: (
-                        cell.cell_rect.x1,
-                        cell.cell_rect.y1,
-                        cell.cell_rect.width(),
-                        cell.cell_rect.height(),
-                    ),
-                    ink_pixels: cell.ink_pixels,
-                    path_count: 0,
-                    stroke_width: 0.0,
-                    filled_components: 0,
-                    gradient_residual: None,
-                    regularize: None,
-                    warnings: vec![msg],
-                    label_rect: None,
+                pending_icons.push(PendingIcon {
+                    scene_and_opts: None,
+                    report: IconReport {
+                        name: icon_name,
+                        col: cell.col,
+                        row: cell.row,
+                        source_rect: (
+                            cell.cell_rect.x1,
+                            cell.cell_rect.y1,
+                            cell.cell_rect.width(),
+                            cell.cell_rect.height(),
+                        ),
+                        ink_pixels: cell.ink_pixels,
+                        path_count: 0,
+                        stroke_width: 0.0,
+                        filled_components: 0,
+                        gradient_residual: None,
+                        regularize: None,
+                        warnings: vec![msg],
+                        label_rect: None,
+                        width_unified: None,
+                    },
                 });
             }
             Err(payload) => {
@@ -791,27 +800,91 @@ pub fn run_sheet(
                 } else {
                     "Unknown panic".to_string()
                 };
-                icon_reports.push(IconReport {
-                    name: icon_name,
-                    col: cell.col,
-                    row: cell.row,
-                    source_rect: (
-                        cell.cell_rect.x1,
-                        cell.cell_rect.y1,
-                        cell.cell_rect.width(),
-                        cell.cell_rect.height(),
-                    ),
-                    ink_pixels: cell.ink_pixels,
-                    path_count: 0,
-                    stroke_width: 0.0,
-                    filled_components: 0,
-                    gradient_residual: None,
-                    regularize: None,
-                    warnings: vec![format!("Panic while processing icon: {}", msg)],
-                    label_rect: None,
+                pending_icons.push(PendingIcon {
+                    scene_and_opts: None,
+                    report: IconReport {
+                        name: icon_name,
+                        col: cell.col,
+                        row: cell.row,
+                        source_rect: (
+                            cell.cell_rect.x1,
+                            cell.cell_rect.y1,
+                            cell.cell_rect.width(),
+                            cell.cell_rect.height(),
+                        ),
+                        ink_pixels: cell.ink_pixels,
+                        path_count: 0,
+                        stroke_width: 0.0,
+                        filled_components: 0,
+                        gradient_residual: None,
+                        regularize: None,
+                        warnings: vec![format!("Panic while processing icon: {}", msg)],
+                        label_rect: None,
+                        width_unified: None,
+                    },
                 });
             }
         }
+    }
+
+    let mut unified_stroke_width = None;
+    if sheet.unify_widths {
+        let mut valid_widths: Vec<f64> = pending_icons
+            .iter()
+            .filter(|p| p.report.path_count > 0 && p.report.stroke_width > 0.0)
+            .map(|p| p.report.stroke_width)
+            .collect();
+
+        if !valid_widths.is_empty() {
+            valid_widths.sort_by(|a, b| a.total_cmp(b));
+            let median = valid_widths[valid_widths.len() / 2];
+            unified_stroke_width = Some(median);
+
+            let lower = median * 0.8;
+            let upper = median * 1.2;
+
+            for item in &mut pending_icons {
+                let w = item.report.stroke_width;
+                if item.report.path_count > 0 && w > 0.0 && w >= lower && w <= upper && w != median
+                {
+                    item.report.width_unified = Some(median);
+                    if let Some((ref mut scene, _)) = item.scene_and_opts {
+                        for group in &mut scene.groups {
+                            for node in &mut group.nodes {
+                                if let Some(ref mut stroke) = node.stroke {
+                                    stroke.width = median;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut icon_reports = Vec::with_capacity(pending_icons.len());
+    let mut written_count = 0usize;
+
+    for item in pending_icons {
+        if let Some((scene, icon_opts)) = item.scene_and_opts {
+            let canonical_dim = sheet.canonical_size as u32;
+            let convert_res =
+                spryteo_svg::emit_stroke_svg(&scene, canonical_dim, canonical_dim, &icon_opts);
+
+            let out_filename = format!("{}.svg", item.report.name);
+            let out_path = sheet.out_dir.join(&out_filename);
+
+            if !sheet.dry_run {
+                if let Err(e) = std::fs::write(&out_path, &convert_res.svg) {
+                    let mut rep = item.report;
+                    rep.warnings.push(format!("Failed to write SVG: {}", e));
+                    icon_reports.push(rep);
+                    continue;
+                }
+                written_count += 1;
+            }
+        }
+        icon_reports.push(item.report);
     }
 
     let (segmentation_str, polarity, text_rows_removed) = match segmentation {
@@ -843,6 +916,7 @@ pub fn run_sheet(
         segmentation: segmentation_str,
         polarity,
         text_rows_removed,
+        unified_stroke_width,
     };
 
     // 7. Write the manifest as pretty JSON if sheet.manifest is set and !sheet.dry_run

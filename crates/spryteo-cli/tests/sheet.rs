@@ -157,6 +157,86 @@ fn test_sheet_synthetic_grid() {
     let _ = fs::remove_dir_all(&out_dir);
 }
 
+fn extract_stroke_widths(svg_str: &str) -> Vec<f64> {
+    let mut widths = Vec::new();
+    let pat = "stroke-width=\"";
+    let mut rest = svg_str;
+    while let Some(pos) = rest.find(pat) {
+        rest = &rest[pos + pat.len()..];
+        if let Some(end) = rest.find('"') {
+            if let Ok(val) = rest[..end].parse::<f64>() {
+                widths.push(val);
+            }
+            rest = &rest[end + 1..];
+        }
+    }
+    widths
+}
+
+#[test]
+fn test_sheet_unify_widths_default() {
+    let png = generate_synthetic_sheet_png();
+    let out_dir = unique_temp_dir();
+    let opts = ConvertOptions::default();
+    let sheet_opts = SheetOptions {
+        out_dir: out_dir.clone(),
+        ..SheetOptions::default()
+    };
+
+    let report = run_sheet(&png, &opts, &sheet_opts).expect("run_sheet should succeed");
+    assert!(
+        report.unified_stroke_width.is_some(),
+        "report.unified_stroke_width should be Some(_)"
+    );
+
+    let mut all_widths = Vec::new();
+    for entry in fs::read_dir(&out_dir).unwrap().filter_map(|e| e.ok()) {
+        let svg_str = fs::read_to_string(entry.path()).unwrap();
+        all_widths.extend(extract_stroke_widths(&svg_str));
+    }
+
+    assert!(
+        !all_widths.is_empty(),
+        "emitted SVGs should contain stroke-width attributes"
+    );
+    let first_w = all_widths[0];
+    for w in &all_widths {
+        assert_eq!(
+            *w, first_w,
+            "all stroke-width values in emitted SVGs should be equal"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn test_sheet_unify_widths_disabled() {
+    let png = generate_synthetic_sheet_png();
+    let out_dir = unique_temp_dir();
+    let opts = ConvertOptions::default();
+    let sheet_opts = SheetOptions {
+        out_dir: out_dir.clone(),
+        unify_widths: false,
+        ..SheetOptions::default()
+    };
+
+    let report = run_sheet(&png, &opts, &sheet_opts).expect("run_sheet should succeed");
+    assert!(
+        report.unified_stroke_width.is_none(),
+        "report.unified_stroke_width should be None when unify_widths is false"
+    );
+
+    for icon in &report.icons {
+        assert!(
+            icon.width_unified.is_none(),
+            "icon.width_unified should be None when unify_widths is false"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
 #[test]
 fn test_sheet_output_is_24x24() {
     let png = generate_synthetic_sheet_png();
@@ -496,7 +576,27 @@ fn test_real_sheet_jpeg_q80_chroma_path() {
         report.rows
     );
     assert_eq!(report.segmentation, "chroma");
-    assert!(report.written >= 100);
+    assert!(
+        report.written >= 104,
+        "expected written >= 104, got {}",
+        report.written
+    );
+
+    let mut written_icons_count = 0;
+    for icon in &report.icons {
+        let path = out_dir.join(format!("{}.svg", icon.name));
+        if path.exists() {
+            written_icons_count += 1;
+            assert!(
+                icon.path_count >= 1,
+                "written icon {} at col {}, row {} has path_count == 0",
+                icon.name,
+                icon.col,
+                icon.row
+            );
+        }
+    }
+    assert_eq!(written_icons_count, report.written);
 
     let _ = fs::remove_dir_all(&out_dir);
 }

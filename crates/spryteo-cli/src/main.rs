@@ -347,6 +347,10 @@ struct SheetArgs {
     /// Segmentation method: auto, chroma, or luma
     #[arg(long, default_value = "auto", value_parser = parse_seg)]
     seg: spryteo_cli::sheet::SegChoice,
+
+    /// Do not unify stroke widths across the sheet
+    #[arg(long)]
+    no_unify_width: bool,
 }
 
 fn main() {
@@ -615,6 +619,7 @@ fn main() {
                 regularize: args.regularize,
                 grid_pitch: args.grid_pitch,
                 seg: args.seg,
+                unify_widths: !args.no_unify_width,
             };
 
             let report = match spryteo_cli::run_sheet(&bytes, &opts, &sheet_opts) {
