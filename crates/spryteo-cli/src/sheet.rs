@@ -320,6 +320,7 @@ pub fn run_sheet(
                     min_component_pixels: min_comp_pixels,
                     extend_caps: true,
                     route_fill_above: Some(route_t),
+                    repair_junctions: true,
                 };
                 let stroke_ex = spryteo_stroke::trace_stroke_ex(&upscaled_crop, &stroke_opts);
 

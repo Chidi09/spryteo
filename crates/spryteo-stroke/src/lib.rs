@@ -121,6 +121,9 @@ pub struct StrokeOptions {
     /// `ROUTE_FILL_COMPACTNESS_MAX`) are routed to `filled_mask` instead of being
     /// skeleton-traced. None disables routing.
     pub route_fill_above: Option<f64>,
+    /// Merge junction nodes sitting closer together than the local stroke width into their centroid
+    /// before chain building.
+    pub repair_junctions: bool,
 }
 
 impl Default for StrokeOptions {
@@ -132,6 +135,7 @@ impl Default for StrokeOptions {
             min_component_pixels: 0,
             extend_caps: false,
             route_fill_above: None,
+            repair_junctions: false,
         }
     }
 }
@@ -369,6 +373,13 @@ pub fn trace_stroke_ex(image: &RasterImage, opts: &StrokeOptions) -> StrokeResul
 
     // 5. Build stroke graphs for each connected component
     let mut graphs = graph::build_stroke_graphs(&skeleton, image.width, image.height);
+
+    if opts.repair_junctions {
+        graphs = graphs
+            .into_iter()
+            .map(|g| graph::merge_close_junctions(g, &dist, image.width))
+            .collect();
+    }
 
     // Sort graphs by their first node's coordinate for absolute scan-order determinism
     graphs.sort_by(|g1, g2| {
@@ -1141,5 +1152,23 @@ mod tests {
         assert_eq!(res.filled_count, 0, "long fat bar must not route to fill");
         assert!(res.filled_mask.is_empty());
         assert!(!res.paths.is_empty(), "bar must still be stroke-traced");
+    }
+
+    #[test]
+    fn test_repair_junctions_option_false_by_default() {
+        let mut img = make_empty_image(32, 32);
+        draw_line(&mut img, 5, 10, 25, 10, 0);
+
+        let res_default = trace_stroke_ex(&img, &StrokeOptions::default());
+        let res_false = trace_stroke_ex(
+            &img,
+            &StrokeOptions {
+                repair_junctions: false,
+                ..StrokeOptions::default()
+            },
+        );
+
+        assert_eq!(res_default.paths.len(), res_false.paths.len());
+        assert_eq!(res_default.component_count, res_false.component_count);
     }
 }
