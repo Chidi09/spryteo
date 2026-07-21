@@ -107,7 +107,10 @@ pub fn upscale_bicubic(image: &RasterImage, factor: u32) -> RasterImage {
             let mut sum_weights = 0.0f64;
 
             for j in 0i32..4 {
-                let py = (iy - 1 + j).clamp(0, src_h - 1) as usize * image.width as usize;
+                // Row offset is in BYTES, so it carries the 4-byte pixel stride
+                // just as the column offset below does. Without the * 4 every
+                // vertical tap reads a quarter of the way into the wrong row.
+                let py = (iy - 1 + j).clamp(0, src_h - 1) as usize * image.width as usize * 4;
                 for i in 0i32..4 {
                     let px = ((ix - 1 + i).clamp(0, src_w - 1) as usize) * 4;
                     let weight = wy[j as usize] * wx[i as usize];
@@ -339,6 +342,73 @@ mod tests {
             lum[0] < lum[1] && lum[1] < lum[2] && lum[2] < lum[3],
             "edge should ramp monotonically dark->light: {:?}",
             lum
+        );
+    }
+
+    /// The vertical twin of the test above, and the one that was missing when
+    /// a row-stride bug shipped: that test used a 2x1 image, so with height 1
+    /// the row offset was always 0 and an incorrect row stride was invisible.
+    /// Any test on a single-row image is blind to this whole class of bug.
+    #[test]
+    fn test_upscale_sample_positions_are_pixel_centred_vertically() {
+        let img = RasterImage {
+            width: 1,
+            height: 2,
+            pixels: vec![0, 0, 0, 255, 255, 255, 255, 255],
+        };
+        let out = upscale_bicubic(&img, 2);
+        assert_eq!((out.width, out.height), (2, 4));
+        // Column 0 of each of the 4 output rows.
+        let lum: Vec<i32> = (0..4).map(|r| out.pixels[r * 2 * 4] as i32).collect();
+        assert_eq!(lum[0] + lum[3], 255, "outer pair not mirrored: {:?}", lum);
+        assert_eq!(lum[1] + lum[2], 255, "inner pair not mirrored: {:?}", lum);
+        assert!(
+            lum[0] < lum[1] && lum[1] < lum[2] && lum[2] < lum[3],
+            "edge should ramp monotonically dark->light: {:?}",
+            lum
+        );
+    }
+
+    /// A row-stride error scrambles rows into each other, so a source whose
+    /// rows are strongly distinct must upscale to something that still varies
+    /// down the column in the same direction. Catches stride bugs that a
+    /// symmetric fixture can mask.
+    #[test]
+    fn test_upscale_preserves_row_ordering() {
+        // 2x3: rows are pure red, pure green, pure blue.
+        let img = RasterImage {
+            width: 2,
+            height: 3,
+            #[rustfmt::skip]
+            pixels: vec![
+                255, 0, 0, 255,  255, 0, 0, 255,
+                0, 255, 0, 255,  0, 255, 0, 255,
+                0, 0, 255, 255,  0, 0, 255, 255,
+            ],
+        };
+        let out = upscale_bicubic(&img, 3);
+        assert_eq!((out.width, out.height), (6, 9));
+        let px = |x: usize, y: usize| {
+            let i = (y * out.width as usize + x) * 4;
+            (out.pixels[i], out.pixels[i + 1], out.pixels[i + 2])
+        };
+        let (r_top, g_top, b_top) = px(2, 1);
+        let (r_mid, g_mid, b_mid) = px(2, 4);
+        let (r_bot, g_bot, b_bot) = px(2, 7);
+        assert!(
+            r_top > g_top && r_top > b_top,
+            "top band should stay red-dominant, got {:?}",
+            (r_top, g_top, b_top)
+        );
+        assert!(
+            g_mid > r_mid && g_mid > b_mid,
+            "middle band should stay green-dominant, got {:?}",
+            (r_mid, g_mid, b_mid)
+        );
+        assert!(
+            b_bot > r_bot && b_bot > g_bot,
+            "bottom band should stay blue-dominant, got {:?}",
+            (r_bot, g_bot, b_bot)
         );
     }
 
