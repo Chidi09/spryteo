@@ -1,6 +1,6 @@
 ---
 name: dispatch
-description: Delegate real code changes to deepseek via the opencode CLI, monitor dispatches live without polling blindly, detect and recover from stalls/timeouts, and review every diff before committing. Use this skill whenever the user wants work "delegated to deepseek", asks to dispatch/run opencode, asks why a dispatch seems stuck, or when operating under a directive to keep deepseek doing the implementation while Claude reviews/validates/commits.
+description: Delegate real code changes to a dispatch model (agy/Gemini Flash, Codex CLI, Claude CLI, or opencode/deepseek), monitor dispatches live without polling blindly, detect and recover from stalls/timeouts, and review every diff before committing. Use this skill whenever the user wants work "delegated" or "dispatched", asks to dispatch/run agy, codex, or opencode, asks why a dispatch seems stuck, or when operating under a directive to keep a dispatch model doing the implementation while Claude reviews/validates/commits.
 ---
 
 # Dispatch Skill (Spryteo)
@@ -11,14 +11,29 @@ Standing rule for building the engine in `crates/`: **deepseek does the implemen
 
 ## Prerequisites
 
-- **Primary dispatch tool for crate-implementation work in this project: `agy`, model `"Gemini 3.5 Flash (Medium)"`** — user directive (2026-07-18), chosen explicitly over `opencode`/deepseek for this workspace's Phase 1+ crate dispatches.
+- **Primary dispatch tool for crate-implementation work in this project: `agy`, model `"Gemini 3.5 Flash (Medium)"`** — user directive (2026-07-18), chosen explicitly over `opencode`/deepseek for this workspace's Phase 1+ crate dispatches. `agy` is only for Gemini Flash models in this workflow; never use it to dispatch Claude or Gemini Pro models.
   ```bash
   agy --dangerously-skip-permissions --add-dir <absolute-repo-path> --print-timeout 60m --model "Gemini 3.5 Flash (Medium)" -p "$(cat instructions.txt)"
   ```
   `--print-timeout 60m` is mandatory for any non-trivial dispatch: agy's default *print* timeout (~5 min, separate from any overall timeout) has killed an hour-scale dispatch mid-flight here, leaving nothing but a truncated log. Set every timeout knob a tool exposes explicitly before the first long dispatch.
   agy quota exhaustion is a real operating mode (individual quota reset measured in days). When every dispatch route is dead, the reviewer implements directly — under the full Step 8 checklist, with instrumented debug dumps to isolate the failing stage rather than blind constant-tuning.
-  `--add-dir` is mandatory even when already `cd`'d into the repo, or `agy` has zero file access. Confirm the exact model string with `agy models 2>&1 | grep -i gemini` before assuming it's still valid — other tiers available if this one proves too weak/slow for a given task: `"Gemini 3.5 Flash (High)"` (more effort, same family — reach for this if Medium stalls or produces a wrong/incomplete result twice on the same scope) or `"Gemini 3.1 Pro (High)"` (larger model, likely slower per-call, worth trying if Flash genuinely can't handle a particularly tricky piece of geometry/algorithm work).
+  `--add-dir` is mandatory even when already `cd`'d into the repo, or `agy` has zero file access. Confirm the exact model string with `agy models 2>&1 | grep -i flash` before assuming it's still valid. If Medium proves too weak or slow for a task, use `"Gemini 3.5 Flash (High)"`; if Flash produces a wrong or incomplete result twice on the same scope, split the task or move to the Claude CLI route below rather than selecting a non-Flash model through `agy`.
   `agy` is synchronous (no separate headless-server step, no `--format json` event stream) — Steps 1, 3, and 4 below (headless server, `opencode run` invocation, JSONL event-based monitoring) are `opencode`-specific and don't apply when dispatching via `agy`. Launch it in the background (`run_in_background: true`) and monitor via `ps` liveness (CPU time climbing = alive) plus periodic `git status --short`/`git diff --stat` polling instead of grepping a JSONL event stream, since `agy` doesn't emit one to a redirected file the same way.
+- **Claude Sonnet 5 is dispatched only via the Claude CLI, never through `agy`.** Use the CLI's `sonnet` alias so it resolves to the latest Sonnet model rather than guessing a provider-specific model ID:
+  ```bash
+  claude --dangerously-skip-permissions --add-dir <absolute-repo-path> --model sonnet --print "$(cat instructions.txt)"
+  ```
+  The installed Claude Code CLI accepts `--model sonnet`, `--print`, `--add-dir`, and `--dangerously-skip-permissions`. Launch long dispatches in the background and capture their output to a scratch log. Since the Claude CLI does not expose an `agy`-style `--print-timeout`, put an explicit outer `timeout` around non-trivial runs and preserve the child exit code using the same trailing exit-marker discipline described in Step 3. Before dispatching, run `claude --version` and inspect `claude --help` if the command surface may have changed.
+- **Codex is dispatched via the Codex CLI (`codex exec`), model `gpt-5.6-luna`** — user directive (2026-07-22). Do not use the Codex default model: `codex exec` defaults to `gpt-5.6-sol`, so `-m gpt-5.6-luna` must be passed explicitly on every run.
+  ```bash
+  timeout 3600 codex exec --dangerously-bypass-approvals-and-sandbox \
+    -m gpt-5.6-luna -C <absolute-repo-path> --add-dir <absolute-repo-path> \
+    --skip-git-repo-check "$(cat instructions.txt)" </dev/null > "$SP/x_output.log" 2>&1
+  echo "X_EXIT:$?" >> "$SP/x_output.log"
+  ```
+  **Always redirect stdin from `/dev/null`.** With a prompt argument and an open stdin, `codex exec` prints `Reading additional input from stdin...` and can block waiting on input that never arrives — indistinguishable from a hung dispatch.
+  Dispatchable model slugs come from `~/.codex/models_cache.json` (authoritative — read it rather than guessing): `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`. Verified working here: `gpt-5.6-luna` (2026-07-22, codex-cli 0.145.0 at `/root/.local/bin/codex`).
+  Codex has no `agy`-style `--print-timeout`, so wrap non-trivial runs in an outer `timeout` and keep the trailing exit-marker discipline from Step 3 (`timeout` firing shows up as exit `124`). Unlike `agy`, `codex exec --json` emits JSONL events, so the Step 4 event-based monitoring *does* apply to this route; `-o/--output-last-message <FILE>` captures just the final message when that is all you need.
 - `opencode` CLI at `/root/.opencode/bin/opencode` remains available as a fallback if `agy`/Gemini stalls or is unavailable — the mechanics below (headless server, deepseek model fallback chain) still apply in that case:
   ```bash
   /root/.opencode/bin/opencode models 2>&1 | grep -i deepseek
