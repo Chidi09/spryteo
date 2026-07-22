@@ -177,7 +177,18 @@ pub fn run_sheet_pipeline(
                     e
                 )));
             }
-            (mask, Segmentation::Chroma, None)
+            let tb_for_labels = {
+                let (luma_raw, _info) = crate::luma_mask(&image, &luma_cfg);
+                if crate::check_luma_usable(&luma_raw).is_ok() {
+                    Some(crate::classify_rows(
+                        &luma_raw,
+                        &crate::TextBandConfig::default(),
+                    ))
+                } else {
+                    None
+                }
+            };
+            (mask, Segmentation::Chroma, tb_for_labels)
         }
         SegChoice::Luma => {
             let (raw_mask, info) = crate::luma_mask(&image, &luma_cfg);
@@ -202,7 +213,18 @@ pub fn run_sheet_pipeline(
         SegChoice::Auto => {
             let c_mask = crate::chroma_mask(&image, &chroma_cfg);
             if crate::check_chroma_usable(&c_mask).is_ok() {
-                (c_mask, Segmentation::Chroma, None)
+                let tb_for_labels = {
+                    let (luma_raw, _info) = crate::luma_mask(&image, &luma_cfg);
+                    if crate::check_luma_usable(&luma_raw).is_ok() {
+                        Some(crate::classify_rows(
+                            &luma_raw,
+                            &crate::TextBandConfig::default(),
+                        ))
+                    } else {
+                        None
+                    }
+                };
+                (c_mask, Segmentation::Chroma, tb_for_labels)
             } else {
                 let (raw_mask, info) = crate::luma_mask(&image, &luma_cfg);
                 if crate::check_luma_usable(&raw_mask).is_err() {
@@ -593,10 +615,9 @@ pub fn run_sheet_pipeline(
                     }
                 };
 
-                let label_rect = match &segmentation {
-                    Segmentation::Chroma => None,
-                    Segmentation::Luminance { .. } => {
-                        let tb = tb_opt.as_ref().unwrap();
+                let label_rect = match tb_opt.as_ref() {
+                    None => None,
+                    Some(tb) => {
                         let icon_band = tb
                             .icon
                             .iter()
@@ -963,5 +984,88 @@ mod tests {
             assert_eq!(i1.name, i2.name);
             assert_eq!(i1.svg, i2.svg);
         }
+    }
+
+    fn generate_synthetic_chroma_sheet_with_labels_png() -> Vec<u8> {
+        let w = 200u32;
+        let h = 150u32;
+        let mut imgbuf = image::ImageBuffer::<image::Rgba<u8>, _>::from_pixel(
+            w,
+            h,
+            image::Rgba([255, 255, 255, 255]),
+        );
+
+        let draw_rect = |img: &mut image::ImageBuffer<image::Rgba<u8>, _>,
+                         x1: u32,
+                         y1: u32,
+                         x2: u32,
+                         y2: u32,
+                         color: image::Rgba<u8>| {
+            for y in y1..=y2 {
+                for x in x1..=x2 {
+                    if x < w && y < h {
+                        img.put_pixel(x, y, color);
+                    }
+                }
+            }
+        };
+
+        let blue = image::Rgba([0, 0, 200, 255]);
+        let red = image::Rgba([200, 0, 0, 255]);
+        let black = image::Rgba([0, 0, 0, 255]);
+
+        // Cell (0,0): L shape (Blue)
+        draw_rect(&mut imgbuf, 24, 24, 31, 48, blue);
+        draw_rect(&mut imgbuf, 24, 41, 48, 48, blue);
+
+        // Cell (1,0): L shape (Red)
+        draw_rect(&mut imgbuf, 84, 24, 91, 48, red);
+        draw_rect(&mut imgbuf, 84, 41, 108, 48, red);
+
+        // Row 1 text label (Black)
+        draw_rect(&mut imgbuf, 15, 58, 55, 68, black);
+        draw_rect(&mut imgbuf, 75, 58, 115, 68, black);
+
+        // Cell (0,1): L shape (Blue)
+        draw_rect(&mut imgbuf, 24, 84, 31, 108, blue);
+        draw_rect(&mut imgbuf, 24, 101, 48, 108, blue);
+
+        // Cell (1,1): L shape (Red)
+        draw_rect(&mut imgbuf, 84, 84, 91, 108, red);
+        draw_rect(&mut imgbuf, 84, 101, 108, 108, red);
+
+        // Row 2 text label (Black)
+        draw_rect(&mut imgbuf, 15, 118, 55, 128, black);
+        draw_rect(&mut imgbuf, 75, 118, 115, 128, black);
+
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut bytes);
+        imgbuf
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn test_chroma_mode_populates_label_rect() {
+        let bytes = generate_synthetic_chroma_sheet_with_labels_png();
+        let opts = ConvertOptions::default();
+        let cfg = PipelineOptions {
+            seg: SegChoice::Chroma,
+            sat_threshold: Some(90),
+            ..Default::default()
+        };
+
+        let outcome = run_sheet_pipeline(&bytes, &opts, &cfg).expect("pipeline run in chroma mode");
+        assert_eq!(outcome.report.segmentation, "chroma");
+        assert_eq!(outcome.report.text_rows_removed, 0);
+        assert!(
+            outcome
+                .report
+                .icons
+                .iter()
+                .any(|icon| icon.label_rect.is_some()),
+            "Expected at least one icon to have label_rect populated in chroma mode"
+        );
     }
 }
