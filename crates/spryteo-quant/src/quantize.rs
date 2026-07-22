@@ -113,6 +113,8 @@ pub fn quantize(
         return LayerStack { layers: vec![] };
     }
 
+    let is_flat = is_flat_art(&pixel_data);
+
     // Check exact-histogram shortcut
     let mut clusters = if let Some(unique) = unique_rgb_up_to(&pixel_data, target) {
         get_exact_clusters(pixels, width, height, &unique)
@@ -122,7 +124,7 @@ pub fn quantize(
         get_kmeans_clusters(width, height, &pixel_data, &assignments, target)
     };
 
-    dissolve_blend_clusters(&mut clusters, &pixel_data, total);
+    dissolve_blend_clusters(&mut clusters, &pixel_data, total, is_flat);
 
     let mut surviving_clusters: Vec<Cluster> = clusters.into_iter().filter(|c| c.active).collect();
 
@@ -453,6 +455,11 @@ const BLEND_LINE_DIST: f64 = 4.0;
 /// (JND) threshold of 2.3 Lab units to deduplicate visually indistinguishable
 /// color layers.
 const DEDUPE_DIST: f64 = 2.3;
+
+/// The elevated CIELAB deduplication distance used for flat-colour artwork.
+/// Near-identical shades of a flat colour (such as anti-aliased edge variants or
+/// slight compression artifacts) collapse into the dominant flat colour layer.
+const FLAT_ART_DEDUPE_DIST: f64 = 10.0;
 
 #[derive(Debug, Clone)]
 struct Cluster {
@@ -812,12 +819,167 @@ fn get_kmeans_clusters(
     clusters
 }
 
+/// Deterministically detects whether the pixel data represents flat-colour artwork
+/// suffering from colour fragmentation (near-identical shades of a flat colour).
+///
+/// # Rationale & Heuristic
+/// Flat-colour artwork consists of a small number of dominant, uniform color regions
+/// (typically 2 to 6 colors), with edge transitions composed of thin anti-aliasing
+/// blend pixels. In CIELAB space:
+/// 1. A small set of dominant centroids covers the great majority of pixels (`COVER >= 0.80`).
+/// 2. The image possesses sufficient resolution/complexity (`MIN_HIST_BINS >= 60`) to exhibit multi-layer color fragmentation.
+/// 3. Colour fragmentation occurs when two or more distinct dominant centroids sit very close
+///    to each other in CIELAB space (between `DEDUPE_DIST` (2.3) and `FLAT_ART_DEDUPE_DIST` (10.0)),
+///    causing a single flat colour region to fragment into multiple near-identical layers.
+///
+/// In contrast:
+/// - Natural photographs and smooth gradients have wide, continuous color variations across
+///   Lab space (`COVER < 0.80`).
+/// - Clean vector icons with well-separated palette colours have no near-identical dominant centroids.
+///
+/// # Constants
+/// - `HIST_BIN_SIZE = 6.0`: Coarse bin width in Lab space to group nearby pixels.
+/// - `TOP_K_DOMINANT = 6`: Number of top dominant color bins considered.
+/// - `NEAR_LAB_DIST = 2.5`: Maximum Lab distance for a pixel to count as covered by a dominant centroid.
+/// - `MIN_COVERAGE_FRACTION = 0.80`: Minimum pixel fraction (80%) required to classify as flat art.
+/// - `MIN_HIST_BINS = 60`: Minimum coarse histogram bins required for flat art classification.
+fn is_flat_art(pixel_data: &[PixelInfo]) -> bool {
+    const HIST_BIN_SIZE: f64 = 6.0;
+    const TOP_K_DOMINANT: usize = 6;
+    const NEAR_LAB_DIST: f64 = 2.5;
+    const NEAR_LAB_DIST_SQ: f64 = NEAR_LAB_DIST * NEAR_LAB_DIST;
+    const MIN_COVERAGE_FRACTION: f64 = 0.80;
+    const MIN_HIST_BINS: usize = 60;
+
+    if pixel_data.is_empty() {
+        return false;
+    }
+
+    struct BinEntry {
+        key: (i32, i32, i32),
+        count: usize,
+        sum_l: f64,
+        sum_a: f64,
+        sum_b: f64,
+    }
+
+    let mut bins: Vec<BinEntry> = Vec::new();
+
+    for p in pixel_data {
+        let bin_key = (
+            (p.lab.l / HIST_BIN_SIZE).floor() as i32,
+            (p.lab.a / HIST_BIN_SIZE).floor() as i32,
+            (p.lab.b / HIST_BIN_SIZE).floor() as i32,
+        );
+
+        match bins.binary_search_by_key(&bin_key, |b| b.key) {
+            Ok(idx) => {
+                bins[idx].count += 1;
+                bins[idx].sum_l += p.lab.l;
+                bins[idx].sum_a += p.lab.a;
+                bins[idx].sum_b += p.lab.b;
+            }
+            Err(idx) => {
+                bins.insert(
+                    idx,
+                    BinEntry {
+                        key: bin_key,
+                        count: 1,
+                        sum_l: p.lab.l,
+                        sum_a: p.lab.a,
+                        sum_b: p.lab.b,
+                    },
+                );
+            }
+        }
+    }
+
+    if bins.len() < MIN_HIST_BINS {
+        return false;
+    }
+
+    // Sort bins deterministically by count descending, breaking ties by bin key
+    bins.sort_by(|b1, b2| b2.count.cmp(&b1.count).then_with(|| b1.key.cmp(&b2.key)));
+
+    let k = TOP_K_DOMINANT.min(bins.len());
+    let raw_centroids: Vec<(Lab, usize)> = bins[..k]
+        .iter()
+        .map(|b| {
+            (
+                Lab {
+                    l: b.sum_l / b.count as f64,
+                    a: b.sum_a / b.count as f64,
+                    b: b.sum_b / b.count as f64,
+                },
+                b.count,
+            )
+        })
+        .collect();
+
+    // Merge coarse bins within DEDUPE_DIST (2.3)
+    let mut merged_centroids: Vec<(Lab, usize)> = Vec::new();
+    for (lab, count) in raw_centroids {
+        if let Some(existing) = merged_centroids
+            .iter_mut()
+            .find(|(m_lab, _)| color::lab_distance_sq(&lab, m_lab).sqrt() <= DEDUPE_DIST)
+        {
+            let total_count = existing.1 + count;
+            existing.0 = Lab {
+                l: (existing.0.l * existing.1 as f64 + lab.l * count as f64) / total_count as f64,
+                a: (existing.0.a * existing.1 as f64 + lab.a * count as f64) / total_count as f64,
+                b: (existing.0.b * existing.1 as f64 + lab.b * count as f64) / total_count as f64,
+            };
+            existing.1 = total_count;
+        } else {
+            merged_centroids.push((lab, count));
+        }
+    }
+
+    let dominant_labs: Vec<Lab> = merged_centroids.into_iter().map(|(lab, _)| lab).collect();
+
+    let near_count = pixel_data
+        .iter()
+        .filter(|p| {
+            dominant_labs
+                .iter()
+                .any(|c| color::lab_distance_sq(&p.lab, c) <= NEAR_LAB_DIST_SQ)
+        })
+        .count();
+
+    let cover = near_count as f64 / pixel_data.len() as f64;
+    if cover < MIN_COVERAGE_FRACTION {
+        return false;
+    }
+
+    for i in 0..dominant_labs.len() {
+        for j in (i + 1)..dominant_labs.len() {
+            let dist = color::lab_distance_sq(&dominant_labs[i], &dominant_labs[j]).sqrt();
+            if dist > DEDUPE_DIST && dist < FLAT_ART_DEDUPE_DIST {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 #[allow(clippy::needless_range_loop)]
-fn dissolve_blend_clusters(clusters: &mut [Cluster], pixel_data: &[PixelInfo], total: usize) {
+fn dissolve_blend_clusters(
+    clusters: &mut [Cluster],
+    pixel_data: &[PixelInfo],
+    total: usize,
+    is_flat: bool,
+) {
     let total_assigned_pixels = pixel_data.len();
     if total_assigned_pixels == 0 {
         return;
     }
+
+    let dedupe_dist = if is_flat {
+        FLAT_ART_DEDUPE_DIST
+    } else {
+        DEDUPE_DIST
+    };
 
     // Lookup table for pixel Lab colors
     let mut pixel_labs = vec![None; total];
@@ -825,7 +987,7 @@ fn dissolve_blend_clusters(clusters: &mut [Cluster], pixel_data: &[PixelInfo], t
         pixel_labs[pi.pixel_index] = Some(pi.lab);
     }
 
-    for _iter in 0..8 {
+    for _iter in 0..32 {
         // 1. Compute populations of active clusters
         let mut active_indices: Vec<usize> = (0..clusters.len())
             .filter(|&idx| clusters[idx].active)
@@ -864,7 +1026,7 @@ fn dissolve_blend_clusters(clusters: &mut [Cluster], pixel_data: &[PixelInfo], t
             let c_pop = populations[c_idx];
             let c_lab = clusters[c_idx].centroid;
 
-            // d. Deduplication: if c's centroid is within DEDUPE_DIST of a LARGER cluster a, merge fully into a
+            // d. Deduplication: if c's centroid is within dedupe_dist of a LARGER cluster a, merge fully into a
             let mut best_merge_idx = None;
             let mut min_merge_dist = f64::MAX;
 
@@ -874,7 +1036,7 @@ fn dissolve_blend_clusters(clusters: &mut [Cluster], pixel_data: &[PixelInfo], t
                 }
                 let a_lab = clusters[a_idx].centroid;
                 let dist = color::lab_distance_sq(&c_lab, &a_lab).sqrt();
-                if dist < DEDUPE_DIST && dist < min_merge_dist {
+                if dist < dedupe_dist && dist < min_merge_dist {
                     min_merge_dist = dist;
                     best_merge_idx = Some(a_idx);
                 }
@@ -1359,5 +1521,164 @@ mod tests {
         let json2 = serde_json::to_vec(&r2).unwrap();
 
         assert_eq!(json1, json2);
+    }
+
+    #[test]
+    fn test_flat_art_quantization_consolidates_palette() {
+        // 3 flat colours: Black (0, 0, 0), White (255, 255, 255), Orange (245, 80, 40)
+        // plus anti-aliased edge pixels (near-identical oranges within 3..8 Lab)
+        let w = 100u32;
+        let h = 100u32;
+        let mut pixels = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let p = if y < 35 {
+                    rgb_pixel(0, 0, 0, 255)
+                } else if y < 70 {
+                    rgb_pixel(255, 255, 255, 255)
+                } else if y < 85 {
+                    let v = ((x * 3 + y * 5) % 4) as u8;
+                    match v {
+                        0 => rgb_pixel(243, 81, 44, 255),
+                        1 => rgb_pixel(252, 98, 41, 255),
+                        2 => rgb_pixel(249, 93, 43, 255),
+                        _ => rgb_pixel(247, 73, 32, 255),
+                    }
+                } else {
+                    rgb_pixel(245, 80, 40, 255)
+                };
+                pixels.extend_from_slice(&p);
+            }
+        }
+        let mut n_idx = 0usize;
+        for dx in 0..5u8 {
+            for dy in 0..5u8 {
+                for dz in 0..3u8 {
+                    let pixel_offset = n_idx * 4;
+                    pixels[pixel_offset] = dx * 20;
+                    pixels[pixel_offset + 1] = dy * 20;
+                    pixels[pixel_offset + 2] = dz * 20;
+                    pixels[pixel_offset + 3] = 255;
+                    n_idx += 1;
+                }
+            }
+        }
+        let img = make_image(w, h, pixels);
+        let input = classified_input(img, Mode::Icon);
+
+        let mut pdata = Vec::new();
+        for i in 0..(w * h) as usize {
+            let idx = i * 4;
+            let rgb = Rgb {
+                r: input.image.pixels[idx],
+                g: input.image.pixels[idx + 1],
+                b: input.image.pixels[idx + 2],
+            };
+            pdata.push(PixelInfo {
+                pixel_index: i,
+                rgb,
+                lab: color::srgb_to_lab(&rgb),
+            });
+        }
+        assert!(
+            is_flat_art(&pdata),
+            "synthetic flat image should be classified as flat art"
+        );
+
+        let result = quantize(&input, &ColorSpec::N(3), &Layering::Cutout, 42);
+
+        assert_eq!(
+            result.layers.len(),
+            3,
+            "expected 3 layers for 3-colour flat art, got {}",
+            result.layers.len()
+        );
+
+        let labs: Vec<Lab> = result
+            .layers
+            .iter()
+            .map(|l| color::srgb_to_lab(&l.color))
+            .collect();
+        for i in 0..labs.len() {
+            for j in (i + 1)..labs.len() {
+                let dist = color::lab_distance_sq(&labs[i], &labs[j]).sqrt();
+                assert!(
+                    dist >= FLAT_ART_DEDUPE_DIST,
+                    "palette colors {:?} and {:?} are within FLAT_ART_DEDUPE_DIST ({:.2} < 10.0)",
+                    result.layers[i].color,
+                    result.layers[j].color,
+                    dist
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_smooth_gradient_is_not_flat_art() {
+        let w = 32u32;
+        let h = 32u32;
+        let mut pixels = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let r = (x * 8) as u8;
+                let g = (y * 8) as u8;
+                let b = ((x + y) * 4) as u8;
+                pixels.extend_from_slice(&rgb_pixel(r, g, b, 255));
+            }
+        }
+        let img = make_image(w, h, pixels);
+        let input = classified_input(img, Mode::Photo);
+
+        let mut pdata = Vec::new();
+        for i in 0..(w * h) as usize {
+            let idx = i * 4;
+            let rgb = Rgb {
+                r: input.image.pixels[idx],
+                g: input.image.pixels[idx + 1],
+                b: input.image.pixels[idx + 2],
+            };
+            pdata.push(PixelInfo {
+                pixel_index: i,
+                rgb,
+                lab: color::srgb_to_lab(&rgb),
+            });
+        }
+        assert!(
+            !is_flat_art(&pdata),
+            "smooth gradient image should NOT be classified as flat art"
+        );
+    }
+
+    #[test]
+    fn test_flat_art_determinism() {
+        let w = 16u32;
+        let h = 16u32;
+        let mut pixels = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let p = if (x + y) % 3 == 0 {
+                    rgb_pixel(10, 10, 10, 255)
+                } else if (x + y) % 3 == 1 {
+                    rgb_pixel(200, 50, 30, 255)
+                } else {
+                    rgb_pixel(250, 250, 250, 255)
+                };
+                pixels.extend_from_slice(&p);
+            }
+        }
+        let img = make_image(w, h, pixels);
+        let input = classified_input(img, Mode::Icon);
+        let seed = 9999u64;
+
+        let r1 = quantize(&input, &ColorSpec::Auto, &Layering::Cutout, seed);
+        let r2 = quantize(&input, &ColorSpec::Auto, &Layering::Cutout, seed);
+
+        let json1 = serde_json::to_vec(&r1).unwrap();
+        let json2 = serde_json::to_vec(&r2).unwrap();
+
+        assert_eq!(
+            json1, json2,
+            "flat art quantization must be byte-identical on repeated runs"
+        );
     }
 }
