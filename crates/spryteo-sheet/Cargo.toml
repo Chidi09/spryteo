@@ -4,16 +4,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 description = "Icon contact sheet segmentation via colour-saturation chroma masking."
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core" }
-spryteo-geom = { path = "../spryteo-geom" }
-spryteo-raster = { path = "../spryteo-raster" }
-spryteo-stroke = { path = "../spryteo-stroke" }
-spryteo-svg = { path = "../spryteo-svg" }
-spryteo-fit = { path = "../spryteo-fit" }
-spryteo-trace = { path = "../spryteo-trace" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
+spryteo-geom = { path = "../spryteo-geom", version = "0.0.1" }
+spryteo-raster = { path = "../spryteo-raster", version = "0.0.1" }
+spryteo-stroke = { path = "../spryteo-stroke", version = "0.0.1" }
+spryteo-svg = { path = "../spryteo-svg", version = "0.0.1" }
+spryteo-fit = { path = "../spryteo-fit", version = "0.0.1" }
+spryteo-trace = { path = "../spryteo-trace", version = "0.0.1" }
 serde.workspace = true
 
 [dev-dependencies]

@@ -1,10 +1,8 @@
 //! wasm-bindgen browser build.
 
-use spryteo_core::{
-    ClassifiedInput, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode,
-    RasterImage, SpryteoError, Tri,
-};
+use spryteo_core::{CancelToken, Clock, ConvertOptions, ConvertResult};
 use spryteo_sheet::{PipelineOptions, SheetOutcome};
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 /// A wasm-bindgen start function to set up console panic hook.
@@ -13,109 +11,46 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
-/// Whether gradient detection should be attempted for the resolved input mode,
-/// per `ConvertOptions.gradients`: `On` always tries, `Off` never does,
-/// `Auto` tries only for `Mode::Photo` (icons keep flat fills).
-fn should_try_gradients(gradients: &Tri, resolved_mode: &Mode) -> bool {
-    match gradients {
-        Tri::On => true,
-        Tri::Off => false,
-        Tri::Auto => matches!(resolved_mode, Mode::Photo),
+/// Millisecond clock for the browser.
+///
+/// `std::time::Instant::now()` panics on `wasm32-unknown-unknown`, so the
+/// engine's default `StdClock` is unavailable here. `Date::now()` is
+/// wall-clock and can in principle step backwards, so readings are clamped
+/// to be monotonic — a deadline must never un-expire.
+struct BrowserClock {
+    origin_ms: f64,
+    last: std::sync::atomic::AtomicU64,
+}
+
+impl BrowserClock {
+    fn new() -> Self {
+        Self {
+            origin_ms: js_sys::Date::now(),
+            last: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+impl Clock for BrowserClock {
+    fn now_ms(&self) -> u64 {
+        let elapsed = (js_sys::Date::now() - self.origin_ms).max(0.0) as u64;
+        let prev = self.last.load(std::sync::atomic::Ordering::Relaxed);
+        if elapsed < prev {
+            return prev;
+        }
+        self.last
+            .store(elapsed, std::sync::atomic::Ordering::Relaxed);
+        elapsed
     }
 }
 
-/// Residual tolerance (Lab distance units) for gradient-vs-flat-fill
-/// detection -- deliberately NOT `ConvertOptions.tolerance` (a geometric
-/// curve-fit budget in pixels); see spryteo-cli's identical constant for
-/// the full rationale (confirmed via a real end-to-end CLI test that 0.5
-/// silently rejects every gradient, including a clean synthetic one).
-const GRADIENT_LAB_TOLERANCE: f64 = 12.0;
-
-fn build_fills(
-    image: &RasterImage,
-    layer_stack: &LayerStack,
-    contour_set: &ContourSet,
-    resolved_mode: &Mode,
-    opts: &ConvertOptions,
-) -> Vec<Fill> {
-    let try_gradients = should_try_gradients(&opts.gradients, resolved_mode);
-    let mut fills = Vec::new();
-    for (layer, contours) in layer_stack.layers.iter().zip(contour_set.layers.iter()) {
-        let fill = if try_gradients {
-            spryteo_quant::detect_gradient(image, layer, GRADIENT_LAB_TOLERANCE)
-                .unwrap_or(Fill::Solid(layer.color))
-        } else {
-            Fill::Solid(layer.color)
-        };
-        let mut count = 0;
-        for contour in contours {
-            count += contour.emitted_curve_count();
-        }
-        for _ in 0..count {
-            fills.push(fill.clone());
-        }
+/// Build the cancellation token for a conversion, honouring `timeout_ms`
+/// on the browser clock.
+fn wasm_cancel_token(opts: &ConvertOptions) -> CancelToken {
+    match opts.timeout_ms {
+        Some(ms) => CancelToken::with_timeout(Arc::new(BrowserClock::new()), ms),
+        None => CancelToken::none(),
     }
-    fills
-}
-
-const FIXED_SEED: u64 = 42;
-
-fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, SpryteoError> {
-    let raster_image = spryteo_raster::decode(bytes, opts)?;
-    let was_jpeg = spryteo_raster::is_jpeg(bytes);
-
-    let classified = spryteo_quant::classify(raster_image, &opts.mode);
-    let downscaled_image =
-        spryteo_raster::downscale_large_photo(classified.image, &classified.mode);
-    let width = downscaled_image.width;
-    let height = downscaled_image.height;
-    let preprocessed_image =
-        spryteo_raster::preprocess(downscaled_image, &classified.mode, was_jpeg);
-    let classified = ClassifiedInput {
-        image: preprocessed_image,
-        mode: classified.mode,
-        background_color: classified.background_color,
-    };
-    let mut layer_stack =
-        spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
-    let rect_color = spryteo_quant::apply_background_policy(
-        &mut layer_stack,
-        classified.background_color,
-        &opts.background,
-    );
-    let contour_set = spryteo_trace::extract_contours(&layer_stack, width, height, opts.turdsize);
-    let curve_set = spryteo_fit::fit_contours(&contour_set, opts.tolerance, opts.smoothness);
-
-    let fills = build_fills(
-        &classified.image,
-        &layer_stack,
-        &contour_set,
-        &classified.mode,
-        opts,
-    );
-    let scene = spryteo_svg::build_scene_graph(
-        &curve_set,
-        &opts.id_style,
-        &opts.transform_origin,
-        &fills,
-        opts.arcs,
-    );
-    let result = spryteo_svg::emit_svg(&scene, width, height, opts, rect_color);
-    Ok(result)
-}
-
-fn run_convert_stroke(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, SpryteoError> {
-    let raster_image = spryteo_raster::decode(bytes, opts)?;
-    let width = raster_image.width;
-    let height = raster_image.height;
-    let stroke_result = spryteo_stroke::trace_stroke(&raster_image, opts.tolerance);
-    let scene = spryteo_svg::build_stroke_scene_graph(
-        &stroke_result.curves,
-        &opts.id_style,
-        &stroke_result.widths,
-    );
-    let result = spryteo_svg::emit_stroke_svg(&scene, width, height, opts);
-    Ok(result)
 }
 
 /// Core conversion logic returning standard Rust types for testability on native.
@@ -151,28 +86,14 @@ pub fn convert_impl(bytes: &[u8], options_json: &str) -> Result<ConvertResult, S
             .map_err(|e| format!("Failed to parse options JSON: {}", e))?
     };
 
-    let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if opts.stroke {
-            run_convert_stroke(bytes, &opts)
-        } else {
-            run_convert(bytes, &opts)
-        }
-    }));
-
-    match run_result {
-        Ok(Ok(res)) => Ok(res),
-        Ok(Err(err)) => Err(err.to_string()),
-        Err(panic_payload) => {
-            let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "Unknown panic".to_string()
-            };
-            Err(format!("Pipeline panicked: {}", msg))
-        }
-    }
+    // The WASM binding is an adapter: bytes and an options string in,
+    // a JsValue out. The pipeline itself lives in the shared engine, with
+    // the browser clock supplied for deadline enforcement (#19, #3).
+    let cancel = wasm_cancel_token(&opts);
+    spryteo_engine::convert_with(
+        spryteo_engine::EngineRequest::new(bytes, &opts).with_cancel(&cancel),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The main exported function, exposed via `#[wasm_bindgen]`

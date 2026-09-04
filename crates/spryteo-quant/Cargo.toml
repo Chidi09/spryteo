@@ -4,10 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 description = "Color quantization, layering, palette handling."
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
 serde.workspace = true
 thiserror.workspace = true
 

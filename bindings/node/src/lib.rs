@@ -1,116 +1,9 @@
 //! napi-rs native Node.js addon. Phase 3 implementation.
 
-use napi::bindgen_prelude::Buffer;
+use napi::bindgen_prelude::{AsyncTask, Buffer};
+use napi::{Env, Task};
 use napi_derive::napi;
-use spryteo_core::{
-    ClassifiedInput, ContourSet, ConvertOptions, ConvertResult, Fill, LayerStack, Mode,
-    RasterImage, SpryteoError, Tri,
-};
-
-/// Whether gradient detection should be attempted for the resolved input mode,
-/// per `ConvertOptions.gradients`: `On` always tries, `Off` never does,
-/// `Auto` tries only for `Mode::Photo` (icons keep flat fills).
-fn should_try_gradients(gradients: &Tri, resolved_mode: &Mode) -> bool {
-    match gradients {
-        Tri::On => true,
-        Tri::Off => false,
-        Tri::Auto => matches!(resolved_mode, Mode::Photo),
-    }
-}
-
-/// Residual tolerance (Lab distance units) for gradient-vs-flat-fill
-/// detection -- deliberately NOT `ConvertOptions.tolerance` (a geometric
-/// curve-fit budget in pixels); see spryteo-cli's identical constant for
-/// the full rationale (confirmed via a real end-to-end CLI test that 0.5
-/// silently rejects every gradient, including a clean synthetic one).
-const GRADIENT_LAB_TOLERANCE: f64 = 12.0;
-
-fn build_fills(
-    image: &RasterImage,
-    layer_stack: &LayerStack,
-    contour_set: &ContourSet,
-    resolved_mode: &Mode,
-    opts: &ConvertOptions,
-) -> Vec<Fill> {
-    let try_gradients = should_try_gradients(&opts.gradients, resolved_mode);
-    let mut fills = Vec::new();
-    for (layer, contours) in layer_stack.layers.iter().zip(contour_set.layers.iter()) {
-        let fill = if try_gradients {
-            spryteo_quant::detect_gradient(image, layer, GRADIENT_LAB_TOLERANCE)
-                .unwrap_or(Fill::Solid(layer.color))
-        } else {
-            Fill::Solid(layer.color)
-        };
-        let mut count = 0;
-        for contour in contours {
-            count += contour.emitted_curve_count();
-        }
-        for _ in 0..count {
-            fills.push(fill.clone());
-        }
-    }
-    fills
-}
-
-const FIXED_SEED: u64 = 42;
-
-fn run_convert(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, SpryteoError> {
-    let raster_image = spryteo_raster::decode(bytes, opts)?;
-    let was_jpeg = spryteo_raster::is_jpeg(bytes);
-
-    let classified = spryteo_quant::classify(raster_image, &opts.mode);
-    let downscaled_image =
-        spryteo_raster::downscale_large_photo(classified.image, &classified.mode);
-    let width = downscaled_image.width;
-    let height = downscaled_image.height;
-    let preprocessed_image =
-        spryteo_raster::preprocess(downscaled_image, &classified.mode, was_jpeg);
-    let classified = ClassifiedInput {
-        image: preprocessed_image,
-        mode: classified.mode,
-        background_color: classified.background_color,
-    };
-    let mut layer_stack =
-        spryteo_quant::quantize(&classified, &opts.colors, &opts.layering, FIXED_SEED);
-    let rect_color = spryteo_quant::apply_background_policy(
-        &mut layer_stack,
-        classified.background_color,
-        &opts.background,
-    );
-    let contour_set = spryteo_trace::extract_contours(&layer_stack, width, height, opts.turdsize);
-    let curve_set = spryteo_fit::fit_contours(&contour_set, opts.tolerance, opts.smoothness);
-
-    let fills = build_fills(
-        &classified.image,
-        &layer_stack,
-        &contour_set,
-        &classified.mode,
-        opts,
-    );
-    let scene = spryteo_svg::build_scene_graph(
-        &curve_set,
-        &opts.id_style,
-        &opts.transform_origin,
-        &fills,
-        opts.arcs,
-    );
-    let result = spryteo_svg::emit_svg(&scene, width, height, opts, rect_color);
-    Ok(result)
-}
-
-fn run_convert_stroke(bytes: &[u8], opts: &ConvertOptions) -> Result<ConvertResult, SpryteoError> {
-    let raster_image = spryteo_raster::decode(bytes, opts)?;
-    let width = raster_image.width;
-    let height = raster_image.height;
-    let stroke_result = spryteo_stroke::trace_stroke(&raster_image, opts.tolerance);
-    let scene = spryteo_svg::build_stroke_scene_graph(
-        &stroke_result.curves,
-        &opts.id_style,
-        &stroke_result.widths,
-    );
-    let result = spryteo_svg::emit_stroke_svg(&scene, width, height, opts);
-    Ok(result)
-}
+use spryteo_core::{ConvertOptions, ConvertResult};
 
 /// Core conversion logic returning standard Rust types for testability on native.
 pub fn convert_impl(bytes: &[u8], options_json: &str) -> Result<ConvertResult, String> {
@@ -145,49 +38,74 @@ pub fn convert_impl(bytes: &[u8], options_json: &str) -> Result<ConvertResult, S
             .map_err(|e| format!("Failed to parse options JSON: {}", e))?
     };
 
-    let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if opts.stroke {
-            run_convert_stroke(bytes, &opts)
-        } else {
-            run_convert(bytes, &opts)
-        }
-    }));
-
-    match run_result {
-        Ok(Ok(res)) => Ok(res),
-        Ok(Err(err)) => Err(err.to_string()),
-        Err(panic_payload) => {
-            let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "Unknown panic".to_string()
-            };
-            Err(format!("Pipeline panicked: {}", msg))
-        }
-    }
+    // The addon is an adapter: Buffer and options string in, JSON out.
+    // The pipeline, its limits, cancellation and panic trapping live in
+    // the shared engine (#19).
+    spryteo_engine::convert_with_timeout(bytes, &opts).map_err(|e| e.to_string())
 }
 
-#[napi]
-pub fn convert_sync(
-    bytes: Buffer,
-    options_json: Option<String>,
-) -> napi::Result<serde_json::Value> {
-    let options_str = options_json.as_deref().unwrap_or("{}");
-    match convert_impl(&bytes, options_str) {
+/// Serialize a conversion result, or map the error for JS.
+fn convert_to_json(bytes: &[u8], options_str: &str) -> napi::Result<serde_json::Value> {
+    match convert_impl(bytes, options_str) {
         Ok(res) => serde_json::to_value(&res)
             .map_err(|e| napi::Error::from_reason(format!("Failed to serialize result: {}", e))),
         Err(err_msg) => Err(napi::Error::from_reason(err_msg)),
     }
 }
 
+/// The explicitly blocking API. Runs the whole conversion on the calling
+/// JavaScript thread; use [`convert`] unless you want that.
 #[napi]
-pub async fn convert(
+pub fn convert_sync(
     bytes: Buffer,
     options_json: Option<String>,
 ) -> napi::Result<serde_json::Value> {
-    convert_sync(bytes, options_json)
+    convert_to_json(&bytes, options_json.as_deref().unwrap_or("{}"))
+}
+
+/// A conversion queued onto libuv's worker pool.
+///
+/// Issue #13: `convert` was declared `async` but immediately called
+/// `convert_sync`, so every multi-second conversion still blocked the Node
+/// event loop despite the Promise-shaped API. `Task::compute` runs on a
+/// worker thread instead, and `resolve` marshals the result back on the
+/// main thread, so the loop stays responsive.
+///
+/// The input Buffer is copied into an owned `Vec` because a `Buffer` is
+/// tied to the JS heap and cannot be read from another thread.
+pub struct ConvertTask {
+    bytes: Vec<u8>,
+    options_json: String,
+}
+
+impl Task for ConvertTask {
+    type Output = serde_json::Value;
+    type JsValue = napi::JsUnknown;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        convert_to_json(&self.bytes, &self.options_json)
+    }
+
+    /// Runs back on the JS thread, where an `Env` exists to build the
+    /// object. `serde_json::Value` itself is not a `TypeName`, so the
+    /// conversion happens here rather than in the `JsValue` associated
+    /// type.
+    fn resolve(&mut self, env: Env, output: Self::Output) -> napi::Result<Self::JsValue> {
+        env.to_js_value(&output)
+    }
+}
+
+/// Convert off the JavaScript event loop, returning a Promise.
+///
+/// Concurrency is bounded by libuv's thread pool (4 threads by default,
+/// set with `UV_THREADPOOL_SIZE`). Conversions beyond that queue rather
+/// than oversubscribing the CPU.
+#[napi]
+pub fn convert(bytes: Buffer, options_json: Option<String>) -> AsyncTask<ConvertTask> {
+    AsyncTask::new(ConvertTask {
+        bytes: bytes.to_vec(),
+        options_json: options_json.unwrap_or_else(|| "{}".to_string()),
+    })
 }
 
 #[cfg(test)]

@@ -413,8 +413,9 @@ fn should_try_gradients(gradients: &Tri, resolved_mode: &Mode) -> bool {
 ///
 /// Every surface needs this — a panic unwinding across the napi, wasm-
 /// bindgen, or MCP boundary is undefined behaviour or a hard process
-/// abort — so it lives here once rather than in four copies.
-fn catch_pipeline_panic<F>(f: F) -> Result<ConvertResult, SpryteoError>
+/// abort — so it lives here once rather than in four copies. Public so
+/// surfaces can also wrap their own pre/post-processing in it.
+pub fn catch_pipeline_panic<F>(f: F) -> Result<ConvertResult, SpryteoError>
 where
     F: FnOnce() -> Result<ConvertResult, SpryteoError>,
 {

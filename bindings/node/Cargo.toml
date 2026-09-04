@@ -11,12 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 spryteo-core = { path = "../../crates/spryteo-core" }
-spryteo-raster = { path = "../../crates/spryteo-raster" }
-spryteo-quant = { path = "../../crates/spryteo-quant" }
-spryteo-trace = { path = "../../crates/spryteo-trace", features = ["parallel"] }
-spryteo-fit = { path = "../../crates/spryteo-fit", features = ["parallel"] }
-spryteo-stroke = { path = "../../crates/spryteo-stroke" }
-spryteo-svg = { path = "../../crates/spryteo-svg" }
+spryteo-engine = { path = "../../crates/spryteo-engine", features = ["parallel"] }
 
 serde.workspace = true
 serde_json.workspace = true

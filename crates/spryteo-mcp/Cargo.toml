@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 description = "MCP server exposing the Spryteo engine as agent-callable tools (convert_image, inspect_svg)."
 
 [[bin]]
@@ -11,13 +14,8 @@ name = "spryteo-mcp"
 path = "src/main.rs"
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core" }
-spryteo-raster = { path = "../spryteo-raster" }
-spryteo-quant = { path = "../spryteo-quant" }
-spryteo-trace = { path = "../spryteo-trace", features = ["parallel"] }
-spryteo-fit = { path = "../spryteo-fit", features = ["parallel"] }
-spryteo-stroke = { path = "../spryteo-stroke" }
-spryteo-svg = { path = "../spryteo-svg" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
+spryteo-engine = { path = "../spryteo-engine", version = "0.0.1", features = ["parallel"] }
 
 serde.workspace = true
 serde_json.workspace = true

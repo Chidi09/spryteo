@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 description = "spryteo HTTP API server (axum)."
 
 [[bin]]
@@ -11,4 +14,4 @@ name = "spryteo-api"
 path = "src/main.rs"
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.1" }

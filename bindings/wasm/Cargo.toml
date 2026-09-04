@@ -11,16 +11,14 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 spryteo-core = { path = "../../crates/spryteo-core" }
-spryteo-raster = { path = "../../crates/spryteo-raster" }
-spryteo-quant = { path = "../../crates/spryteo-quant" }
-spryteo-trace = { path = "../../crates/spryteo-trace" }
-spryteo-fit = { path = "../../crates/spryteo-fit" }
-spryteo-stroke = { path = "../../crates/spryteo-stroke" }
-spryteo-svg = { path = "../../crates/spryteo-svg" }
+# No `parallel`: rayon threads in the browser need cross-origin isolation
+# headers the demo host does not set.
+spryteo-engine = { path = "../../crates/spryteo-engine" }
 spryteo-sheet = { path = "../../crates/spryteo-sheet" }
 
 serde.workspace = true
 serde_json.workspace = true
+js-sys = "0.3"
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
 serde-wasm-bindgen = "0.6"

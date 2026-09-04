@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 description = "spryteo CLI binary (clap)."
 
 [[bin]]
@@ -15,23 +18,24 @@ name = "spryteo_cli"
 path = "src/lib.rs"
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core" }
-spryteo-raster = { path = "../spryteo-raster" }
-spryteo-quant = { path = "../spryteo-quant" }
-spryteo-trace = { path = "../spryteo-trace", features = ["parallel"] }
-spryteo-fit = { path = "../spryteo-fit", features = ["parallel"] }
-spryteo-svg = { path = "../spryteo-svg" }
-spryteo-stroke = { path = "../spryteo-stroke" }
-spryteo-sheet = { path = "../spryteo-sheet" }
-spryteo-geom = { path = "../spryteo-geom" }
-spryteo-semantic = { path = "../spryteo-semantic" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
+spryteo-engine = { path = "../spryteo-engine", version = "0.0.1", features = ["parallel"] }
+spryteo-raster = { path = "../spryteo-raster", version = "0.0.1" }
+spryteo-quant = { path = "../spryteo-quant", version = "0.0.1" }
+spryteo-trace = { path = "../spryteo-trace", version = "0.0.1", features = ["parallel"] }
+spryteo-fit = { path = "../spryteo-fit", version = "0.0.1", features = ["parallel"] }
+spryteo-svg = { path = "../spryteo-svg", version = "0.0.1" }
+spryteo-stroke = { path = "../spryteo-stroke", version = "0.0.1" }
+spryteo-sheet = { path = "../spryteo-sheet", version = "0.0.1" }
+spryteo-geom = { path = "../spryteo-geom", version = "0.0.1" }
+spryteo-semantic = { path = "../spryteo-semantic", version = "0.0.1" }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [features]
-ml = ["spryteo-semantic/ml"]
+ml = ["spryteo-semantic/ml", "spryteo-engine/ml"]
 
 [[bench]]
 name = "pipeline"
