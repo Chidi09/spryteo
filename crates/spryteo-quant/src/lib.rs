@@ -26,4 +26,4 @@ pub use background::apply_background_policy;
 pub use classifier::{classify, detect_background};
 pub use color::Lab;
 pub use gradient::detect_gradient;
-pub use quantize::quantize;
+pub use quantize::{quantize, quantize_cancellable};

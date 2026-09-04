@@ -1805,6 +1805,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "spryteo-engine"
+version = "0.0.1"
+dependencies = [
+ "image",
+ "serde",
+ "serde_json",
+ "spryteo-core",
+ "spryteo-fit",
+ "spryteo-quant",
+ "spryteo-raster",
+ "spryteo-semantic",
+ "spryteo-stroke",
+ "spryteo-svg",
+ "spryteo-trace",
+]
+
+[[package]]
 name = "spryteo-fit"
 version = "0.0.1"
 dependencies = [

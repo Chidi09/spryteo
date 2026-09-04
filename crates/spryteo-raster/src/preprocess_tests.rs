@@ -388,20 +388,20 @@
     #[test]
     fn max_dimension_leaves_small_images_untouched() {
         let src = solid(64, 32);
-        let out = downscale_to_max_dimension(src.clone(), 128);
+        let out = downscale_to_max_dimension(src.clone(), 128, &Mode::Icon);
         assert_eq!((out.width, out.height), (64, 32));
         assert_eq!(out.pixels, src.pixels);
     }
 
     #[test]
     fn max_dimension_is_a_no_op_at_exactly_the_limit() {
-        let out = downscale_to_max_dimension(solid(100, 50), 100);
+        let out = downscale_to_max_dimension(solid(100, 50), 100, &Mode::Icon);
         assert_eq!((out.width, out.height), (100, 50));
     }
 
     #[test]
     fn max_dimension_shrinks_the_long_edge_to_the_limit() {
-        let out = downscale_to_max_dimension(solid(1024, 512), 32);
+        let out = downscale_to_max_dimension(solid(1024, 512), 32, &Mode::Icon);
         assert_eq!(out.width, 32, "long edge is clamped to max_dim");
         assert_eq!(out.height, 16, "aspect ratio preserved");
         assert_eq!(out.pixels.len(), (32 * 16 * 4) as usize);
@@ -409,21 +409,21 @@
 
     #[test]
     fn max_dimension_clamps_the_taller_edge_for_portrait_images() {
-        let out = downscale_to_max_dimension(solid(512, 1024), 32);
+        let out = downscale_to_max_dimension(solid(512, 1024), 32, &Mode::Icon);
         assert_eq!((out.width, out.height), (16, 32));
     }
 
     #[test]
     fn max_dimension_never_collapses_an_extreme_aspect_ratio_to_zero() {
         // 2000x3 at max 32 would round the short edge to 0 without the max(1).
-        let out = downscale_to_max_dimension(solid(2000, 3), 32);
+        let out = downscale_to_max_dimension(solid(2000, 3), 32, &Mode::Icon);
         assert_eq!(out.width, 32);
         assert!(out.height >= 1, "height must stay renderable, got {}", out.height);
     }
 
     #[test]
     fn max_dimension_zero_is_treated_as_no_downscale() {
-        let out = downscale_to_max_dimension(solid(64, 64), 0);
+        let out = downscale_to_max_dimension(solid(64, 64), 0, &Mode::Icon);
         assert_eq!((out.width, out.height), (64, 64));
     }
 
@@ -433,11 +433,125 @@
         // limit tighter than the 1600px photo threshold wins outright: after
         // it runs, the automatic rule sees an image already under threshold
         // and does nothing.
-        let explicit = downscale_to_max_dimension(solid(2048, 2048), 256);
+        let explicit = downscale_to_max_dimension(solid(2048, 2048), 256, &Mode::Icon);
         assert_eq!(explicit.width, 256);
         let after_auto = downscale_large_photo(explicit, &Mode::Photo);
         assert_eq!(
             after_auto.width, 256,
             "automatic rule must not re-expand or re-shrink"
         );
+    }
+
+    /// Two hard-edged colour bands — the shape Lanczos3 rings around.
+    fn two_bands(width: u32, height: u32) -> RasterImage {
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let idx = 4 * (y * width + x) as usize;
+                let v = if x < width / 2 { 0u8 } else { 255u8 };
+                pixels[idx] = v;
+                pixels[idx + 1] = v;
+                pixels[idx + 2] = v;
+                pixels[idx + 3] = 255;
+            }
+        }
+        RasterImage {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    #[test]
+    fn flat_art_downscale_does_not_ring_past_the_source_range() {
+        // Lanczos3's negative lobes overshoot below 0 and above 255 at a
+        // hard edge, manufacturing colours the source never contained. The
+        // triangle filter used for flat modes cannot overshoot, so every
+        // output pixel must stay within the original two-value range.
+        let out = downscale_to_max_dimension(two_bands(256, 256), 64, &Mode::Icon);
+        let overshot = out
+            .pixels
+            .chunks_exact(4)
+            .filter(|px| px[0] != 0 && px[0] != 255)
+            .count();
+        // Some genuine intermediate pixels appear at the edge from area
+        // averaging; what must not happen is a large halo of them.
+        let total = (out.width * out.height) as usize;
+        assert!(
+            overshot * 20 < total,
+            "flat-art downscale produced {overshot} intermediate pixels of {total}; \
+             expected only a thin edge"
+        );
+    }
+
+    #[test]
+    fn pixel_art_downscale_introduces_no_new_colors() {
+        let out = downscale_to_max_dimension(two_bands(64, 64), 16, &Mode::PixelArt);
+        assert!(
+            out.pixels
+                .chunks_exact(4)
+                .all(|px| px[0] == 0 || px[0] == 255),
+            "nearest-neighbour must never blend pixel-art colours"
+        );
+    }
+
+    #[test]
+    fn downscale_does_not_bleed_color_from_transparent_pixels() {
+        // Regression guard: encoders routinely leave arbitrary RGB under
+        // alpha==0. Resampling straight alpha averages that invisible
+        // colour into visible edge pixels, producing a halo that survives
+        // quantization as its own layer. Here the transparent margin holds
+        // saturated green and the visible disc is pure red; no output pixel
+        // with meaningful coverage may pick up green.
+        let size = 64u32;
+        let mut pixels = vec![0u8; (size * size * 4) as usize];
+        let c = size as f32 / 2.0;
+        for y in 0..size {
+            for x in 0..size {
+                let idx = 4 * (y * size + x) as usize;
+                let d = ((x as f32 - c).powi(2) + (y as f32 - c).powi(2)).sqrt();
+                if d < c * 0.6 {
+                    pixels[idx] = 255; // opaque red disc
+                    pixels[idx + 3] = 255;
+                } else {
+                    pixels[idx + 1] = 255; // invisible green margin
+                    pixels[idx + 3] = 0;
+                }
+            }
+        }
+        let src = RasterImage {
+            width: size,
+            height: size,
+            pixels,
+        };
+
+        let out = downscale_to_max_dimension(src, 16, &Mode::Icon);
+        for px in out.pixels.chunks_exact(4) {
+            if px[3] > 32 {
+                assert!(
+                    px[1] < 64,
+                    "visible pixel picked up green from the transparent margin: {px:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn downscale_preserves_color_of_a_fully_opaque_image() {
+        // The premultiply path must be a no-op when nothing is transparent.
+        let src = two_bands(64, 64);
+        let out = downscale_to_max_dimension(src, 16, &Mode::PixelArt);
+        assert!(out
+            .pixels
+            .chunks_exact(4)
+            .all(|px| px[3] == 255 && (px[0] == 0 || px[0] == 255)));
+    }
+
+    #[test]
+    fn downscale_factor_matches_the_applied_resize() {
+        assert_eq!(downscale_factor(1024, 512, 32), 32.0 / 1024.0);
+        assert_eq!(downscale_factor(512, 1024, 32), 32.0 / 1024.0);
+        assert_eq!(downscale_factor(64, 32, 128), 1.0, "no downscale needed");
+        assert_eq!(downscale_factor(100, 50, 100), 1.0, "exactly at the limit");
+        assert_eq!(downscale_factor(64, 64, 0), 1.0, "zero means no downscale");
     }

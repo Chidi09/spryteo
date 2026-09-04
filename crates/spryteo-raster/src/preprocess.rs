@@ -327,7 +327,16 @@ pub fn downscale_large_photo(image: RasterImage, mode: &Mode) -> RasterImage {
 ///
 /// `max_dim == 0` is rejected upstream by option validation, but is treated
 /// as "no downscale" here so this function is total.
-pub fn downscale_to_max_dimension(image: RasterImage, max_dim: u32) -> RasterImage {
+///
+/// `mode` selects the resampling filter, which matters more than it looks.
+/// Lanczos3 has negative lobes: downscaling flat artwork with it rings
+/// around every hard colour edge, manufacturing intermediate colours that
+/// did not exist in the source. Those extra colours survive quantization as
+/// their own layers, which both defeats primitive recognition and inflates
+/// the output — a 256px circle that traces to a single `<circle>` at native
+/// size came back as a pile of paths when Lanczos-reduced to 32px. Flat
+/// modes therefore use a triangle filter, which cannot overshoot.
+pub fn downscale_to_max_dimension(image: RasterImage, max_dim: u32, mode: &Mode) -> RasterImage {
     if max_dim == 0 {
         return image;
     }
@@ -340,12 +349,75 @@ pub fn downscale_to_max_dimension(image: RasterImage, max_dim: u32) -> RasterIma
     let new_width = ((image.width as f64 * scale).round() as u32).max(1);
     let new_height = ((image.height as f64 * scale).round() as u32).max(1);
 
-    resize_rgba(image, new_width, new_height)
+    let filter = match mode {
+        // Photographs have no hard flat regions to ring around, and
+        // Lanczos3 keeps the most detail per pixel.
+        Mode::Photo => image::imageops::FilterType::Lanczos3,
+        // Pixel art must never gain colours it did not have.
+        Mode::PixelArt => image::imageops::FilterType::Nearest,
+        Mode::Icon | Mode::LineArt | Mode::Auto => image::imageops::FilterType::Triangle,
+    };
+
+    resize_rgba_with(image, new_width, new_height, filter)
 }
 
-/// Lanczos3 resize of an RGBA `RasterImage`, shared by the automatic photo
-/// rule and the explicit `max_trace_dimension` path.
+/// The scale factor [`downscale_to_max_dimension`] would apply, or 1.0 if it
+/// would leave the image alone.
+///
+/// The engine uses this to scale geometry-sensitive options (tolerance in
+/// pixels, turdsize in square pixels) into the reduced coordinate system, so
+/// `--max-trace-dimension` changes the working resolution without silently
+/// changing how aggressively the tracer simplifies or despeckles.
+pub fn downscale_factor(width: u32, height: u32, max_dim: u32) -> f64 {
+    if max_dim == 0 {
+        return 1.0;
+    }
+    let long_edge = width.max(height);
+    if long_edge <= max_dim {
+        return 1.0;
+    }
+    max_dim as f64 / long_edge as f64
+}
+
+/// Lanczos3 resize of an RGBA `RasterImage`, used by the automatic photo
+/// rule (which by definition only ever sees photographs).
 fn resize_rgba(image: RasterImage, new_width: u32, new_height: u32) -> RasterImage {
+    resize_rgba_with(
+        image,
+        new_width,
+        new_height,
+        image::imageops::FilterType::Lanczos3,
+    )
+}
+
+/// Resize an RGBA `RasterImage` with an explicit filter, compositing in
+/// premultiplied alpha.
+///
+/// `image::imageops::resize` treats the four channels independently, which
+/// is wrong for straight (un-premultiplied) alpha: the RGB stored under
+/// fully transparent pixels is averaged into neighbouring visible pixels,
+/// so an icon whose transparent margin happens to hold green bytes picks up
+/// a green halo — and, once quantized, a whole green layer that was never
+/// visible in the source. Premultiplying before the resample and dividing
+/// back out afterwards weights every colour by its coverage, so invisible
+/// pixels contribute nothing.
+fn resize_rgba_with(
+    image: RasterImage,
+    new_width: u32,
+    new_height: u32,
+    filter: image::imageops::FilterType,
+) -> RasterImage {
+    let mut image = image;
+    let fully_opaque = image.pixels.chunks_exact(4).all(|px| px[3] == 255);
+    if !fully_opaque {
+        for px in image.pixels.chunks_exact_mut(4) {
+            let a = px[3] as u32;
+            px[0] = ((px[0] as u32 * a + 127) / 255) as u8;
+            px[1] = ((px[1] as u32 * a + 127) / 255) as u8;
+            px[2] = ((px[2] as u32 * a + 127) / 255) as u8;
+        }
+    }
+
     let width = image.width;
     let height = image.height;
     let pixels = image.pixels;
@@ -361,17 +433,30 @@ fn resize_rgba(image: RasterImage, new_width: u32, new_height: u32) -> RasterIma
         }
     };
 
-    let resized = image::imageops::resize(
-        &rgba,
-        new_width,
-        new_height,
-        image::imageops::FilterType::Lanczos3,
-    );
+    let resized = image::imageops::resize(&rgba, new_width, new_height, filter);
+    let mut pixels = resized.into_raw();
+
+    if !fully_opaque {
+        // Undo the premultiply. Zero-coverage pixels have no recoverable
+        // colour, so they stay at 0 rather than inventing one.
+        for px in pixels.chunks_exact_mut(4) {
+            let a = px[3] as u32;
+            if a == 0 {
+                px[0] = 0;
+                px[1] = 0;
+                px[2] = 0;
+            } else {
+                px[0] = (((px[0] as u32 * 255) + a / 2) / a).min(255) as u8;
+                px[1] = (((px[1] as u32 * 255) + a / 2) / a).min(255) as u8;
+                px[2] = (((px[2] as u32 * 255) + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
 
     RasterImage {
         width: new_width,
         height: new_height,
-        pixels: resized.into_raw(),
+        pixels,
     }
 }
 

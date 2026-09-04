@@ -1,0 +1,31 @@
+[package]
+name = "spryteo-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+description = "spryteo conversion orchestration — the single engine behind the CLI, Node, WASM, and MCP surfaces."
+
+[dependencies]
+spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
+spryteo-raster = { path = "../spryteo-raster", version = "0.0.1" }
+spryteo-quant = { path = "../spryteo-quant", version = "0.0.1" }
+spryteo-trace = { path = "../spryteo-trace", version = "0.0.1" }
+spryteo-fit = { path = "../spryteo-fit", version = "0.0.1" }
+spryteo-svg = { path = "../spryteo-svg", version = "0.0.1" }
+spryteo-stroke = { path = "../spryteo-stroke", version = "0.0.1" }
+spryteo-semantic = { path = "../spryteo-semantic", version = "0.0.1" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+# Native surfaces enable rayon inside the trace/fit stages. WASM leaves this
+# off: threads there need cross-origin isolation the demo host does not set.
+parallel = ["spryteo-trace/parallel", "spryteo-fit/parallel"]
+ml = ["spryteo-semantic/ml"]
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
