@@ -1347,8 +1347,9 @@ pub fn build_scene_graph(
         let rep_fill = get_representative_color(&fill);
         let id = match id_style {
             IdStyle::Hash => {
-                let points = extract_endpoints(&curve.segments);
-                stable_id(&points, rep_fill, i)
+                // Full geometry, not just endpoints, and no paint-array
+                // position — see `stable_id`'s contract (#7).
+                stable_id(&curve.segments, curve.primitive.as_ref(), rep_fill)
             }
             IdStyle::Sequential => {
                 format!("s-{}", i)
@@ -1625,8 +1626,9 @@ pub fn build_stroke_scene_graph(
     for (i, curve) in curves.curves.iter().enumerate() {
         let id = match id_style {
             IdStyle::Hash => {
-                let points = extract_endpoints(&curve.segments);
-                stable_id(&points, None, i)
+                // Stroke mode emits the raw path, never a primitive, and
+                // carries no fill (#7).
+                stable_id(&curve.segments, None, None)
             }
             IdStyle::Sequential => {
                 format!("s-{}", i)

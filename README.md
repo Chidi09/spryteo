@@ -114,6 +114,7 @@ spryteo inspect <svg> [--meta <path>]
 | `--mode <auto\|icon\|pixel-art\|line-art\|photo>` | Override input classification. Default: auto. |
 | `--stroke` | Run the centerline tracer instead of fill-mode outlining. |
 | `--css <draw\|fade\|pop>` | Bake one of the built-in CSS animation presets into the SVG. |
+| `--palette <#rrggbb,...>` | Pin the output to an exact palette. Repeatable; overrides `--colors`. |
 | `--colors <n>` | Target palette size for quantization. |
 | `--layering <stacked\|cutout>` | Photo-mode layer composition. |
 | `--gradients <auto\|on\|off>` | Gradient-fill detection. auto only tries it in photo mode. |
@@ -152,6 +153,40 @@ overridable with `--mode`.
 | `pixel-art` | ≤128px, ≤64 unique colours, hard-edged (no anti-aliasing). Traces exact pixel boundaries with corner-preserving fit instead of smoothing them away. |
 | `line-art` | Ink drawings binarize into exactly two layers — paper and ink — using a global Otsu threshold for solid strokes plus a capped Sauvola local threshold that rescues faint thin lines. A duotone validation gate falls back to full colour quantization when the image isn't genuinely two-tone. Pairs with `--stroke` for centerline output. |
 | `photo` | Everything else. K-means colour quantization, optional gradient detection, bilateral filtering + JPEG deblocking, and automatic downscaling above 1600px so a 4K photo doesn't blow the time budget. |
+
+## Shape IDs
+
+With the default `--id-style hash`, each shape's `id` is derived from its
+own content: `blake3` over the canonicalized path (every element tag and
+coordinate, cubic control points included), the recognised primitive and
+its parameters, and the fill colour. Coordinates are rounded to 3 decimal
+places first, and `-0.0` is normalised to `0.0`.
+
+The point of a content-derived ID is that animation code can bind to it
+across re-conversions. So it is worth being precise about what does and
+does not change one.
+
+**An ID survives:**
+
+- adding, removing, reordering or recolouring *other* shapes — position in
+  the paint array is deliberately not part of the identity;
+- coordinate noise below 0.0005 units;
+- re-running the same conversion (output is byte-stable).
+
+**An ID changes when the shape itself changes:**
+
+- any coordinate moves, including a cubic control point on its own — two
+  curves that share endpoints but bow differently are different shapes;
+- its fill changes;
+- it gains or loses a primitive promotion (`<path>` → `<circle>`), or a
+  primitive's parameters change.
+
+**Identical shapes** — same geometry, same fill — hash the same by design.
+They are separated by appending `-2`, `-3`, … in document order, so adding
+a third copy never renames the first two.
+
+This contract is not yet frozen; see [SEMVER.md](SEMVER.md) for what the
+metadata schema guarantees before it reaches v1.
 
 ## Architecture
 

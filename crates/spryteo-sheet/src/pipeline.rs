@@ -111,18 +111,6 @@ pub struct SheetOutcome {
     pub icons: Vec<IconSvg>,
 }
 
-fn extract_endpoints(segments: &[PathElement]) -> Vec<(f64, f64)> {
-    let mut points = Vec::new();
-    for seg in segments {
-        match seg {
-            PathElement::MoveTo(x, y) | PathElement::LineTo(x, y) => points.push((*x, *y)),
-            PathElement::CurveTo(_, _, _, _, x3, y3) => points.push((*x3, *y3)),
-            PathElement::ClosePath => {}
-        }
-    }
-    points
-}
-
 enum Segmentation {
     Chroma,
     Luminance {
@@ -668,8 +656,14 @@ pub fn run_sheet_pipeline(
                         let idx = n_stroke + j;
                         let id = match opts.id_style {
                             spryteo_core::options::IdStyle::Hash => {
-                                let endpoints = extract_endpoints(&fill_curve.segments);
-                                spryteo_geom::stable_id(&endpoints, None, idx)
+                                // Full geometry, no paint-array position;
+                                // identical curves collide and are separated
+                                // by the `dedupe_ids` pass below (#7).
+                                spryteo_geom::stable_id(
+                                    &fill_curve.segments,
+                                    fill_curve.primitive.as_ref(),
+                                    None,
+                                )
                             }
                             spryteo_core::options::IdStyle::Sequential => {
                                 format!("s-{}", idx)

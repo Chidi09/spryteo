@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use spryteo_core::ir::{Primitive, Rgb};
+use spryteo_core::ir::{PathElement, Primitive, Rgb};
 
 pub mod regularize;
 // Named rather than glob-exported: this module and `recognize` below both deal
@@ -355,27 +355,160 @@ fn try_rect(points: &[(f64, f64)], tolerance: f64) -> Option<Primitive> {
 
 // ── Stable-ID hashing (§3.12) ──────────────────────────────────────────────
 
+/// Write one coordinate into the hash buffer in canonical form.
+///
+/// A leading separator keeps the encoding prefix-free: without it the pairs
+/// `(1.0, 23.0)` and `(12.0, 3.0)` would produce the same byte run.
+fn write_coord(buf: &mut String, v: f64) {
+    write!(buf, "{:.3},", round_coord(v)).unwrap();
+}
+
+/// Serialize a path into the canonical byte form used for identity.
+///
+/// Every element is tagged, so a `LineTo` can never collide with the final
+/// on-curve point of a `CurveTo`, and cubic control points are included —
+/// two curves that share endpoints but bow in different directions are
+/// different shapes and must get different IDs (#7).
+fn write_path_identity(buf: &mut String, segments: &[PathElement]) {
+    for seg in segments {
+        match *seg {
+            PathElement::MoveTo(x, y) => {
+                buf.push('M');
+                write_coord(buf, x);
+                write_coord(buf, y);
+            }
+            PathElement::LineTo(x, y) => {
+                buf.push('L');
+                write_coord(buf, x);
+                write_coord(buf, y);
+            }
+            PathElement::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                buf.push('C');
+                for v in [x1, y1, x2, y2, x3, y3] {
+                    write_coord(buf, v);
+                }
+            }
+            PathElement::ClosePath => buf.push('Z'),
+        }
+    }
+}
+
+/// Serialize a recognised primitive into its canonical byte form.
+///
+/// The primitive is part of the identity because it changes what element is
+/// emitted: the same outline promoted from a `<path>` to a `<circle>` is a
+/// different shape to an animator binding to it.
+fn write_primitive_identity(buf: &mut String, primitive: &Primitive) {
+    match *primitive {
+        Primitive::Circle { cx, cy, r } => {
+            buf.push_str("circle");
+            for v in [cx, cy, r] {
+                write_coord(buf, v);
+            }
+        }
+        Primitive::Ellipse {
+            cx,
+            cy,
+            rx,
+            ry,
+            rotation,
+        } => {
+            buf.push_str("ellipse");
+            for v in [cx, cy, rx, ry, rotation] {
+                write_coord(buf, v);
+            }
+        }
+        Primitive::Rect {
+            x,
+            y,
+            width,
+            height,
+            rx,
+            ry,
+        } => {
+            buf.push_str("rect");
+            for v in [x, y, width, height] {
+                write_coord(buf, v);
+            }
+            // `None` and `Some(0.0)` are distinguishable: a square corner is
+            // not the same declaration as an explicit zero radius.
+            for v in [rx, ry] {
+                match v {
+                    Some(v) => write_coord(buf, v),
+                    None => buf.push_str("_,"),
+                }
+            }
+        }
+        Primitive::Arc {
+            cx,
+            cy,
+            rx,
+            ry,
+            start_angle,
+            end_angle,
+            rotation,
+        } => {
+            buf.push_str("arc");
+            for v in [cx, cy, rx, ry, start_angle, end_angle, rotation] {
+                write_coord(buf, v);
+            }
+        }
+    }
+}
+
 /// Generate a stable, deterministic ID for a shape.
 ///
-/// The ID is computed as `blake3(rounded geometry + fill + z-index)`, taking
-/// the first 8 hex characters of the digest, prefixed with `s-`.
+/// The ID is `blake3(canonicalized geometry + primitive + paint)`, taking the
+/// first 8 hex characters of the digest, prefixed with `s-`.
 ///
-/// Every coordinate is rounded to [`HASH_PRECISION`] (currently 3) decimal
-/// places *before* hashing, so two shapes that are geometrically identical up
-/// to floating-point noise still produce the same ID.  Coordinates at
-/// exactly `-0.0` are normalised to `0.0`.
+/// ## What is in the identity
+///
+/// The complete path — every element tag and every coordinate, cubic control
+/// points included — plus the recognised primitive and its parameters, plus
+/// the fill colour. Every coordinate is rounded to [`HASH_PRECISION`]
+/// (currently 3) decimal places before hashing, so shapes that are
+/// geometrically identical up to floating-point noise still agree, and `-0.0`
+/// is normalised to `0.0`.
+///
+/// ## What is deliberately *not* in the identity
+///
+/// Paint-array position (`z_index`). It used to be hashed, which meant
+/// inserting or reordering any earlier shape renamed every later one, even
+/// though none of them had changed — the exact opposite of the stability the
+/// IDs promise. Two shapes that are genuinely identical in geometry and paint
+/// now hash the same and are separated by [`dedupe_ids`] instead, which
+/// suffixes only the colliding shapes and leaves every other ID untouched
+/// (#7).
+///
+/// ## Which edits preserve an ID
+///
+/// Preserved: adding, removing or reordering *other* shapes; any change that
+/// moves a coordinate by less than half of `HASH_PRECISION`'s last place.
+///
+/// Not preserved: moving, scaling or reshaping this shape, including changing
+/// only a cubic control point; changing its fill; gaining or losing a
+/// primitive promotion. Duplicates of an identical shape keep their `-2`,
+/// `-3`, … suffix ordering, so adding a third copy does not rename the first
+/// two.
 ///
 /// ## Deterministic encoding
 ///
-/// Each rounded coordinate is formatted as `"{:.3}"`, fill is formatted as
-/// `"rrggbb"` (or `"none"`), and z-index is formatted as a 16-hex-digit
-/// fixed-width field.  No `HashMap` or locale-dependent formatting is used —
-/// the byte sequence fed to blake3 is fully controlled.
-pub fn stable_id(points: &[(f64, f64)], fill: Option<Rgb>, z_index: usize) -> String {
+/// Coordinates are formatted as `"{:.3},"`, fill as `"rrggbb"` (or `"none"`).
+/// No `HashMap` or locale-dependent formatting is involved — the byte
+/// sequence fed to blake3 is fully controlled.
+pub fn stable_id(
+    segments: &[PathElement],
+    primitive: Option<&Primitive>,
+    fill: Option<Rgb>,
+) -> String {
     let mut buf = String::new();
-    for &(x, y) in points {
-        write!(buf, "{:.3}{:.3}", round_coord(x), round_coord(y)).unwrap();
+    write_path_identity(&mut buf, segments);
+    buf.push('|');
+    match primitive {
+        Some(p) => write_primitive_identity(&mut buf, p),
+        None => buf.push_str("path"),
     }
+    buf.push('|');
     match fill {
         Some(rgb) => {
             write!(buf, "{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b).unwrap();
@@ -384,7 +517,6 @@ pub fn stable_id(points: &[(f64, f64)], fill: Option<Rgb>, z_index: usize) -> St
             buf.push_str("none");
         }
     }
-    write!(buf, "{:016x}", z_index).unwrap();
     let hash = blake3::hash(buf.as_bytes());
     format!("s-{}", &hash.to_hex()[..8])
 }

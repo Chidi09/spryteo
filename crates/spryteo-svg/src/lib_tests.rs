@@ -2289,3 +2289,119 @@
 
         assert_eq!(res1.svg, res2.svg);
     }
+
+    // ── Stable IDs through the scene graph (#7) ────────────────────────
+
+    fn tri(x: f64, y: f64) -> Curve {
+        Curve {
+            segments: vec![
+                PathElement::MoveTo(x, y),
+                PathElement::LineTo(x + 10.0, y),
+                PathElement::CurveTo(x + 10.0, y + 5.0, x + 5.0, y + 10.0, x, y + 10.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        }
+    }
+
+    fn ids_of(scene: &SceneGraph) -> Vec<String> {
+        scene
+            .groups
+            .iter()
+            .flat_map(|g| g.nodes.iter().map(|n| n.id.clone()))
+            .collect()
+    }
+
+    fn hash_scene(curves: Vec<Curve>, fills: Vec<Fill>) -> SceneGraph {
+        build_scene_graph(
+            &CurveSet { curves },
+            &IdStyle::Hash,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        )
+    }
+
+    fn red() -> Fill {
+        Fill::Solid(Rgb { r: 255, g: 0, b: 0 })
+    }
+
+    fn blue() -> Fill {
+        Fill::Solid(Rgb { r: 0, g: 0, b: 255 })
+    }
+
+    /// Inserting a shape in front of another must not rename the one that
+    /// did not change. Before #7 the ID hashed the paint-array index, so
+    /// every shape after the insertion point was renamed.
+    #[test]
+    fn inserting_a_shape_does_not_rename_the_others() {
+        let before = hash_scene(vec![tri(0.0, 0.0), tri(40.0, 40.0)], vec![red(), blue()]);
+        let after = hash_scene(
+            vec![tri(80.0, 80.0), tri(0.0, 0.0), tri(40.0, 40.0)],
+            vec![Fill::Solid(Rgb { r: 0, g: 255, b: 0 }), red(), blue()],
+        );
+
+        let before_ids = ids_of(&before);
+        let after_ids = ids_of(&after);
+
+        for id in &before_ids {
+            assert!(
+                after_ids.contains(id),
+                "ID {id} disappeared after an unrelated shape was inserted \
+                 ahead of it; before={before_ids:?} after={after_ids:?}"
+            );
+        }
+    }
+
+    /// Reordering two shapes must swap their positions, not their names.
+    #[test]
+    fn reordering_shapes_does_not_rename_them() {
+        let forward = ids_of(&hash_scene(
+            vec![tri(0.0, 0.0), tri(40.0, 40.0)],
+            vec![red(), blue()],
+        ));
+        let reversed = ids_of(&hash_scene(
+            vec![tri(40.0, 40.0), tri(0.0, 0.0)],
+            vec![blue(), red()],
+        ));
+
+        let mut a = forward.clone();
+        let mut b = reversed.clone();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "reordering changed the set of IDs");
+    }
+
+    /// Changing only a control point is a real geometry change and must
+    /// produce a new ID — endpoints alone are not the identity.
+    #[test]
+    fn changing_only_a_control_point_changes_the_id() {
+        let base = tri(0.0, 0.0);
+        let mut bent = base.clone();
+        bent.segments[2] = PathElement::CurveTo(20.0, 1.0, 5.0, 10.0, 0.0, 10.0);
+
+        let a = ids_of(&hash_scene(vec![base], vec![red()]));
+        let b = ids_of(&hash_scene(vec![bent], vec![red()]));
+        assert_ne!(a, b, "a moved control point must change the ID");
+    }
+
+    #[test]
+    fn changing_only_the_fill_changes_the_id() {
+        let a = ids_of(&hash_scene(vec![tri(0.0, 0.0)], vec![red()]));
+        let b = ids_of(&hash_scene(vec![tri(0.0, 0.0)], vec![blue()]));
+        assert_ne!(a, b, "a recoloured shape must change the ID");
+    }
+
+    /// Two identical shapes are legitimately the same content; they collide
+    /// and are separated deterministically rather than by position.
+    #[test]
+    fn duplicate_identical_shapes_get_deterministic_suffixes() {
+        let ids = ids_of(&hash_scene(
+            vec![tri(0.0, 0.0), tri(0.0, 0.0), tri(0.0, 0.0)],
+            vec![red(), red(), red()],
+        ));
+
+        assert_eq!(ids.len(), 3);
+        assert_eq!(ids[1], format!("{}-2", ids[0]));
+        assert_eq!(ids[2], format!("{}-3", ids[0]));
+    }
