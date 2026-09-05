@@ -5,7 +5,7 @@ use spryteo_core::ir::{PathElement, Primitive, Rgb};
 pub mod path;
 pub mod regularize;
 
-pub use path::{path_geometry, PathGeometry};
+pub use path::{path_geometry, path_length, PathGeometry};
 // Named rather than glob-exported: this module and `recognize` below both deal
 // in primitives, and a glob would silently make any future name collision
 // ambiguous at the crate root.

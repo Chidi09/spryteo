@@ -4,6 +4,7 @@ pub mod cancel;
 pub mod error;
 pub mod ir;
 pub mod options;
+pub mod schema;
 
 pub use cancel::{CancelToken, Clock, ManualClock, POLL_INTERVAL};
 pub use error::{LimitKind, SpryteoError};

@@ -39,6 +39,7 @@
             group: format!("g-{}", id),
             z_order,
             suggested_draw_order: z_order,
+            ..Default::default()
         }
     }
 
@@ -99,6 +100,7 @@
                 byte_count: 0,
             },
             current_color_applied: false,
+            ..Default::default()
         };
 
         let (nested_scene, updated_meta) = group_by_containment(&scene, &meta);
@@ -172,6 +174,7 @@
                 byte_count: 0,
             },
             current_color_applied: false,
+            ..Default::default()
         };
 
         let (nested_scene, updated_meta) = group_by_containment(&scene, &meta);
@@ -240,6 +243,7 @@
                 byte_count: 0,
             },
             current_color_applied: false,
+            ..Default::default()
         };
 
         let mask_a = Mask {
@@ -318,6 +322,7 @@
                 byte_count: 0,
             },
             current_color_applied: false,
+            ..Default::default()
         };
 
         // Mask only has 25% overlap with the layer
@@ -470,6 +475,7 @@
                 byte_count: 0,
             },
             current_color_applied: false,
+            ..Default::default()
         };
 
         (layer_stack, contour_set, scene, meta)

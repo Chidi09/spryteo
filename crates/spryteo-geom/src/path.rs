@@ -545,3 +545,78 @@ pub fn path_geometry(segments: &[PathElement]) -> PathGeometry {
 #[cfg(test)]
 #[path = "path_tests.rs"]
 mod tests;
+
+/// Arc length of a path, following the outline as drawn.
+///
+/// Unlike [`path_geometry`], this does not treat an open subpath as closed:
+/// a filled shape's area is unaffected by whether the author wrote the
+/// closing segment, but its perimeter plainly is, and a centreline stroke is
+/// open on purpose. The closing segment counts only where the path data
+/// actually asks for it with a `ClosePath`.
+///
+/// Cubics are measured by Gauss–Legendre quadrature of `|B'(t)|` over each
+/// of [`LENGTH_SPANS`] equal spans. The integrand is a square root rather
+/// than a polynomial, so no fixed rule is exact; subdividing first keeps the
+/// error far below the coordinate precision the SVG is written at.
+pub fn path_length(segments: &[PathElement]) -> f64 {
+    let mut total = 0.0;
+    // Tracked here rather than via `split_subpaths`, which discards the
+    // closing segment because area does not need it.
+    let mut start = (0.0, 0.0);
+    let mut cursor = (0.0, 0.0);
+    for el in segments {
+        match *el {
+            PathElement::MoveTo(x, y) => {
+                start = (x, y);
+                cursor = start;
+            }
+            PathElement::LineTo(x, y) => {
+                total += segment_length(&Seg::Line {
+                    from: cursor,
+                    to: (x, y),
+                });
+                cursor = (x, y);
+            }
+            PathElement::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                total += segment_length(&Seg::Cubic {
+                    p0: cursor,
+                    p1: (x1, y1),
+                    p2: (x2, y2),
+                    p3: (x3, y3),
+                });
+                cursor = (x3, y3);
+            }
+            PathElement::ClosePath => {
+                total += segment_length(&Seg::Line {
+                    from: cursor,
+                    to: start,
+                });
+                cursor = start;
+            }
+        }
+    }
+    total
+}
+
+/// How many spans each cubic is split into before quadrature.
+const LENGTH_SPANS: usize = 8;
+
+fn segment_length(seg: &Seg) -> f64 {
+    match *seg {
+        Seg::Line { from, to } => (to.0 - from.0).hypot(to.1 - from.1),
+        Seg::Cubic { p0, p1, p2, p3 } => {
+            let span = 1.0 / LENGTH_SPANS as f64;
+            let mut total = 0.0;
+            for i in 0..LENGTH_SPANS {
+                let t0 = i as f64 * span;
+                for (t, w) in GAUSS {
+                    let t = t0 + t * span;
+                    let dx = cubic_derivative_at(p0.0, p1.0, p2.0, p3.0, t);
+                    let dy = cubic_derivative_at(p0.1, p1.1, p2.1, p3.1, t);
+                    total += w * dx.hypot(dy) * span;
+                }
+            }
+            total
+        }
+    }
+}

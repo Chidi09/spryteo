@@ -119,3 +119,61 @@
         let res = convert_image_inner(&b64, None).unwrap();
         assert_multicolor_object_grouped(&res.svg, &res.meta);
     }
+
+    /// Every surface must publish the same sidecar contract (#22): the
+    /// schema version, the lossless paint, the shape kind and outline
+    /// length, and a payload that survives JSON in both directions. A
+    /// binding that quietly serialized a reduced `Meta` would look fine
+    /// until someone tried to animate from it.
+    fn assert_meta_contract(meta: &spryteo_core::ir::Meta) {
+        use spryteo_core::ir::{PaintMeta, ShapeKind, META_SCHEMA_VERSION};
+
+        assert_eq!(meta.schema_version, META_SCHEMA_VERSION);
+        assert!(!meta.nodes.is_empty());
+
+        for node in &meta.nodes {
+            assert!(!node.id.is_empty(), "every node is addressable");
+            assert_eq!(
+                node.group_path.last(),
+                Some(&node.group),
+                "the ancestor chain must end at the node's own group"
+            );
+            let paint = node.paint.as_ref().expect("a filled node records paint");
+            match paint {
+                PaintMeta::Solid { color } => {
+                    assert_eq!(Some(*color), node.fill, "fill is the representative colour")
+                }
+                other => panic!("this fixture is flat colour, got {other:?}"),
+            }
+            assert!(node.closed, "traced fill outlines close");
+            assert!(
+                node.path_length > 0.0,
+                "{} has no outline length",
+                node.id
+            );
+            assert!(
+                matches!(node.shape, ShapeKind::Path | ShapeKind::Circle | ShapeKind::Rect),
+                "unexpected shape kind {:?}",
+                node.shape
+            );
+        }
+
+        // `suggested_draw_order` is a permutation of the nodes, distinct
+        // from paint order and never a partial or repeated ranking.
+        let mut ranks: Vec<usize> = meta.nodes.iter().map(|n| n.suggested_draw_order).collect();
+        ranks.sort_unstable();
+        assert_eq!(ranks, (0..meta.nodes.len()).collect::<Vec<_>>());
+
+        let json = serde_json::to_string(meta).expect("the sidecar serialises");
+        let back: spryteo_core::ir::Meta =
+            serde_json::from_str(&json).expect("the sidecar deserialises");
+        assert_eq!(meta, &back, "the sidecar must survive a JSON round trip");
+    }
+
+    #[test]
+    fn the_metadata_sidecar_matches_the_published_contract() {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(MULTICOLOR_OBJECT);
+        let res = convert_image_inner(&b64, None).unwrap();
+        assert_meta_contract(&res.meta);
+    }

@@ -66,6 +66,28 @@ discipline as a public API, not just a Rust struct:
   opaque string key into the `SceneGraph`'s `<g id=...>` tree, not parse
   its internal structure.
 
+- **`schema_version`** (`Meta::schema_version`, currently `1`) is how a
+  consumer tells versions apart, and it should be branched on rather than
+  sniffing for fields. A sidecar written before versioning existed has no
+  such key and deserializes as `0`. Every field added since carries a
+  serde default, which is what keeps those old payloads parsing; the
+  fixture `testdata/meta_v0.json` and the test that reads it are there to
+  make a regression on that point fail loudly rather than quietly.
+- **The published schema** is generated from the Rust types, not written
+  alongside them: `schema/meta.schema.json` and `schema/meta.d.ts`, with
+  the TypeScript also shipped inside the Node and WASM packages. A test
+  regenerates and compares them, so a change to a type that is not
+  reflected in the published contract fails the build. Regenerate with
+  `UPDATE_SCHEMA=1 cargo test -p spryteo-core`, and read a diff to those
+  files as the question "is this a minor addition or a version bump?".
+- **`suggested_draw_order`** is defined as a reveal order (nesting depth,
+  then descending area, then paint order as a tiebreak) and is a
+  permutation of the node list, distinct from `z_order`. Its *definition*
+  may be refined in a minor version — it is a suggestion, and no consumer
+  can depend on a particular ranking being stable across releases — but
+  the guarantees that it is a permutation and that `z_order` alone
+  describes rendering are part of the contract.
+
 ## Pre-1.0 exception
 
 Before the `v1.0` tag (ROADMAP.md §9 Phase 6), the workspace version is

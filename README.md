@@ -188,6 +188,57 @@ a third copy never renames the first two.
 This contract is not yet frozen; see [SEMVER.md](SEMVER.md) for what the
 metadata schema guarantees before it reaches v1.
 
+## Metadata sidecar
+
+Every surface returns `{ svg, meta }`. The `meta` half is the machine-facing
+output: enough to drive an animation without parsing the SVG back.
+
+The contract is published, generated from the Rust types, and checked by a
+test so it cannot drift:
+
+- [`schema/meta.schema.json`](schema/meta.schema.json) — JSON Schema
+- [`schema/meta.d.ts`](schema/meta.d.ts) — TypeScript declarations, also
+  shipped inside the Node and WASM packages as `meta.d.ts`
+
+Regenerate both with `UPDATE_SCHEMA=1 cargo test -p spryteo-core`.
+
+### What a node carries
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Content-derived, stable across conversions — see [Shape IDs](#shape-ids) |
+| `bbox`, `centroid`, `area` | Exact geometry, computed from the curves rather than sampled |
+| `fill` | One representative colour, for consumers that just want "roughly what colour" |
+| `paint` | The real paint: solid, `currentColor` with its fallback, or a gradient with its stops and coordinates |
+| `stroke` | Stroke paint and width, in stroke mode |
+| `shape` | The element emitted: `path`, `circle`, `ellipse`, `rect` or `arc` |
+| `closed` | Whether the outline returns to its start |
+| `path_length` | Outline length in user units |
+| `group`, `group_path` | Immediate parent `<g>`, and the full chain of enclosing groups |
+| `z_order` | Paint order: what covers what |
+| `suggested_draw_order` | Reveal order, which is *not* paint order — see below |
+
+`meta.groups` mirrors the `<g>` tree exactly as emitted: same ids, same
+order, so binding to a whole object needs no SVG parsing.
+
+### Draw order is not paint order
+
+`z_order` answers "what covers what" and is the order the SVG is written in.
+`suggested_draw_order` answers a different question — in what order should
+this be revealed — and ranks nodes by nesting depth first, so a container
+appears before the detail sitting on it, then by descending area, so the
+masses that carry the composition arrive before the specks. Ties fall back
+to paint order, which keeps it deterministic. It is a permutation of the
+same nodes and never reorders the markup.
+
+### Versioning
+
+`meta.schema_version` is `1`. Sidecars written before versioning existed
+have no such field and read back as `0`; every field added since is
+optional, so they still deserialize. Adding a field is a minor change,
+while making one required, removing one, or changing its meaning is a
+version bump. See [SEMVER.md](SEMVER.md).
+
 ## Architecture
 
 | Crate | Purpose |

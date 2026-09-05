@@ -380,3 +380,76 @@ fn geometry_is_deterministic() {
         assert_eq!(first, path_geometry(&path));
     }
 }
+
+#[test]
+fn a_square_perimeter_is_four_sides() {
+    let square = vec![
+        PathElement::MoveTo(0.0, 0.0),
+        PathElement::LineTo(10.0, 0.0),
+        PathElement::LineTo(10.0, 10.0),
+        PathElement::LineTo(0.0, 10.0),
+        PathElement::ClosePath,
+    ];
+    assert!((path_length(&square) - 40.0).abs() < 1e-9);
+}
+
+#[test]
+fn an_open_path_is_not_measured_as_closed() {
+    // The same three sides, once left open and once closed. Area treats
+    // both the same; length must not.
+    let open = vec![
+        PathElement::MoveTo(0.0, 0.0),
+        PathElement::LineTo(10.0, 0.0),
+        PathElement::LineTo(10.0, 10.0),
+        PathElement::LineTo(0.0, 10.0),
+    ];
+    let mut closed = open.clone();
+    closed.push(PathElement::ClosePath);
+
+    assert!((path_length(&open) - 30.0).abs() < 1e-9);
+    assert!((path_length(&closed) - 40.0).abs() < 1e-9);
+}
+
+#[test]
+fn circle_circumference_matches_two_pi_r() {
+    // Four cubics approximating a unit circle, the standard kappa control
+    // offset. Quadrature should land on 2*pi to well under a thousandth.
+    const K: f64 = 0.552_284_749_831;
+    let c = vec![
+        PathElement::MoveTo(1.0, 0.0),
+        PathElement::CurveTo(1.0, K, K, 1.0, 0.0, 1.0),
+        PathElement::CurveTo(-K, 1.0, -1.0, K, -1.0, 0.0),
+        PathElement::CurveTo(-1.0, -K, -K, -1.0, 0.0, -1.0),
+        PathElement::CurveTo(K, -1.0, 1.0, -K, 1.0, 0.0),
+        PathElement::ClosePath,
+    ];
+    let expected = 2.0 * std::f64::consts::PI;
+    assert!(
+        (path_length(&c) - expected).abs() < 1e-3,
+        "got {}, want {expected}",
+        path_length(&c)
+    );
+}
+
+#[test]
+fn length_of_a_straight_cubic_is_its_span() {
+    // Control points on the line: the curve is a straight run of length 9.
+    let line = vec![
+        PathElement::MoveTo(1.0, 0.0),
+        PathElement::CurveTo(4.0, 0.0, 7.0, 0.0, 10.0, 0.0),
+    ];
+    assert!((path_length(&line) - 9.0).abs() < 1e-9);
+}
+
+#[test]
+fn subpaths_each_contribute_their_own_length() {
+    let two = vec![
+        PathElement::MoveTo(0.0, 0.0),
+        PathElement::LineTo(3.0, 0.0),
+        PathElement::MoveTo(10.0, 0.0),
+        PathElement::LineTo(10.0, 4.0),
+        PathElement::ClosePath,
+    ];
+    // 3, then 4 out and 4 back.
+    assert!((path_length(&two) - 11.0).abs() < 1e-9);
+}

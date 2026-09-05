@@ -1,0 +1,429 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Meta",
+  "description": "The metadata sidecar (§3.12) — a JSON-serialisable payload returned\nalongside the SVG with per-node layout information and aggregate stats.\n\nThis is the primary machine-oriented output that enables agentic\nworkflows: a consumer can inspect every shape's bounding box, centroid,\narea, fill, group membership, and paint order without parsing SVG.",
+  "type": "object",
+  "properties": {
+    "current_color_applied": {
+      "type": "boolean",
+      "default": false
+    },
+    "groups": {
+      "description": "The `<g>` tree exactly as emitted in the SVG (§3.12, #11).\n\nSame shape, same ids, same order as the markup, so a consumer can\nbind to a whole object without parsing the SVG. Empty only for a\nscene with no groups.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GroupMeta"
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NodeMeta"
+      }
+    },
+    "schema_version": {
+      "description": "The schema this payload was written against; see\n[`META_SCHEMA_VERSION`]. Absent in pre-versioning sidecars, which\ntherefore read back as [`META_SCHEMA_UNVERSIONED`].",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    },
+    "stats": {
+      "$ref": "#/$defs/Stats"
+    }
+  },
+  "required": [
+    "nodes",
+    "stats"
+  ],
+  "$defs": {
+    "Bbox": {
+      "description": "Axis-aligned bounding box for a shape or group.",
+      "type": "object",
+      "properties": {
+        "x_max": {
+          "type": "number",
+          "format": "double"
+        },
+        "x_min": {
+          "type": "number",
+          "format": "double"
+        },
+        "y_max": {
+          "type": "number",
+          "format": "double"
+        },
+        "y_min": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x_min",
+        "y_min",
+        "x_max",
+        "y_max"
+      ]
+    },
+    "GradientStop": {
+      "description": "A gradient stop representing a color at a specific offset.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "offset": {
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "offset",
+        "color"
+      ]
+    },
+    "GroupMeta": {
+      "description": "One `<g>` in the metadata sidecar's group tree.\n\nMirrors `Group`: `nodes` lists the ids painted directly by this group,\nin paint order, and `groups` its nested child groups, which paint after\nthose nodes.",
+      "type": "object",
+      "properties": {
+        "groups": {
+          "description": "Nested child groups, painted after this group's own nodes.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GroupMeta"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "nodes": {
+          "description": "Ids of the nodes painted directly by this group, in paint order.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "nodes"
+      ]
+    },
+    "NodeMeta": {
+      "description": "Per-element metadata recorded in the sidecar.\n\nFields added after schema version 0 all carry serde defaults, so a\nsidecar written by an older build still deserializes — see\n[`META_SCHEMA_VERSION`].",
+      "type": "object",
+      "properties": {
+        "area": {
+          "type": "number",
+          "format": "double"
+        },
+        "bbox": {
+          "$ref": "#/$defs/Bbox"
+        },
+        "centroid": {
+          "type": "array",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "number",
+              "format": "double"
+            }
+          ]
+        },
+        "closed": {
+          "description": "Whether the outline closes back on itself. Primitives always do;\ncentreline strokes generally do not.",
+          "type": "boolean",
+          "default": false
+        },
+        "fill": {
+          "description": "One representative colour, kept for consumers that only want to know\nroughly what colour a shape is. [`NodeMeta::paint`] is the lossless\nform; for a gradient this is the first stop.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rgb"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "group": {
+          "description": "The id of the node's immediate parent `<g>`.",
+          "type": "string"
+        },
+        "group_path": {
+          "description": "Ids of every enclosing group, outermost first, ending with\n[`NodeMeta::group`]. Answers \"which object is this part of\" without\nwalking [`Meta::groups`].",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "paint": {
+          "description": "Fill paint without loss. `None` for a node that is stroked only.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaintMeta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path_length": {
+          "description": "Outline length in user units, following the shape as drawn.\n\nStroke output declares `pathLength=\"100\"`, so a dash offset expressed\nas a percentage of this length maps straight onto the emitted\n`stroke-dasharray` without rescaling.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "shape": {
+          "description": "The element this node is emitted as.",
+          "$ref": "#/$defs/ShapeKind",
+          "default": "path"
+        },
+        "stroke": {
+          "description": "Stroke paint and width. `None` for a node that is filled only.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StrokeMeta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_draw_order": {
+          "description": "A reveal order for animation, which is not paint order — see\n[`Meta::suggested_draw_order`](Meta) and the module docs on\n`suggested_draw_order`.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "z_order": {
+          "description": "Position in paint order: 0 paints first, and later entries paint over\nearlier ones.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "bbox",
+        "centroid",
+        "area",
+        "group",
+        "z_order",
+        "suggested_draw_order"
+      ]
+    },
+    "PaintMeta": {
+      "description": "Paint on a node, recorded without loss.\n\n`NodeMeta::fill` reduces paint to a single representative colour, which\nis all a thumbnail or a colour-swap needs but throws away everything a\ngradient is. This keeps the stops and their geometry, so a consumer can\nreproduce or retarget the paint without going back to the SVG.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/Rgb"
+            },
+            "kind": {
+              "type": "string",
+              "const": "solid"
+            }
+          },
+          "required": [
+            "kind",
+            "color"
+          ]
+        },
+        {
+          "description": "Emitted as `fill=\"currentColor\"`: the colour comes from the host\ndocument, and `fallback` is what the shape was traced as.",
+          "type": "object",
+          "properties": {
+            "fallback": {
+              "$ref": "#/$defs/Rgb"
+            },
+            "kind": {
+              "type": "string",
+              "const": "current-color"
+            }
+          },
+          "required": [
+            "kind",
+            "fallback"
+          ]
+        },
+        {
+          "description": "Coordinates are in the node's own space, the same space its shape\ndata is written in, so they need no separate transform to apply.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "linear-gradient"
+            },
+            "stops": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/GradientStop"
+              }
+            },
+            "x1": {
+              "type": "number",
+              "format": "double"
+            },
+            "x2": {
+              "type": "number",
+              "format": "double"
+            },
+            "y1": {
+              "type": "number",
+              "format": "double"
+            },
+            "y2": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "kind",
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+            "stops"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cx": {
+              "type": "number",
+              "format": "double"
+            },
+            "cy": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "type": "string",
+              "const": "radial-gradient"
+            },
+            "r": {
+              "type": "number",
+              "format": "double"
+            },
+            "stops": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/GradientStop"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "cx",
+            "cy",
+            "r",
+            "stops"
+          ]
+        }
+      ]
+    },
+    "Rgb": {
+      "description": "An sRGB 8-bit colour with red, green, and blue components.",
+      "type": "object",
+      "properties": {
+        "b": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "g": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "r": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "r",
+        "g",
+        "b"
+      ]
+    },
+    "ShapeKind": {
+      "description": "The SVG element a node is emitted as.\n\nA consumer that wants to animate a radius, or to know whether a shape\nsurvived primitive detection, would otherwise have to parse the markup\nto find out.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "path",
+            "circle",
+            "ellipse",
+            "rect"
+          ]
+        },
+        {
+          "description": "An elliptical arc. Emitted as a `<path>`, but distinguished here\nbecause the underlying primitive is still an arc.",
+          "type": "string",
+          "const": "arc"
+        }
+      ]
+    },
+    "Stats": {
+      "description": "Aggregate statistics for the entire conversion result.",
+      "type": "object",
+      "properties": {
+        "byte_count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "node_count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "path_count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "node_count",
+        "path_count",
+        "byte_count"
+      ]
+    },
+    "StrokeMeta": {
+      "description": "Stroke paint and width on a node. Absent for filled shapes.",
+      "type": "object",
+      "properties": {
+        "paint": {
+          "$ref": "#/$defs/PaintMeta"
+        },
+        "width": {
+          "description": "Stroke width in user units.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "paint",
+        "width"
+      ]
+    }
+  }
+}

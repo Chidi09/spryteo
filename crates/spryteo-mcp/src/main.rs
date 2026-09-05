@@ -139,6 +139,7 @@ pub fn inspect_svg_inner(meta_json: &str) -> Result<String, String> {
 
     let mut summary = String::new();
     summary.push_str("### Spryteo SVG Inspection Summary\n\n");
+    summary.push_str(&format!("- **Schema Version**: {}\n", meta.schema_version));
     summary.push_str(&format!("- **Total Nodes**: {}\n", meta.stats.node_count));
     summary.push_str(&format!("- **Path Count**: {}\n", meta.stats.path_count));
     summary.push_str(&format!(
@@ -150,30 +151,92 @@ pub fn inspect_svg_inner(meta_json: &str) -> Result<String, String> {
     if meta.nodes.is_empty() {
         summary.push_str("_No individual node metadata available._\n");
     } else {
-        summary.push_str("| Node ID | Group | Color (sRGB) | Bounding Box (x_min, y_min, x_max, y_max) | Centroid | Area |\n");
-        summary.push_str("|---|---|---|---|---|---|\n");
+        summary.push_str("| Node ID | Group | Shape | Paint | Bounding Box (x_min, y_min, x_max, y_max) | Centroid | Area | Length | Draw Order |\n");
+        summary.push_str("|---|---|---|---|---|---|---|---|---|\n");
         for node in &meta.nodes {
-            let color_str = if let Some(rgb) = node.fill {
-                format!("rgb({}, {}, {})", rgb.r, rgb.g, rgb.b)
-            } else {
-                "None / Stroke".to_string()
-            };
             summary.push_str(&format!(
-                "| `{}` | {} | {} | ({:.2}, {:.2}, {:.2}, {:.2}) | ({:.2}, {:.2}) | {:.2} |\n",
+                "| `{}` | {} | {} | {} | ({:.2}, {:.2}, {:.2}, {:.2}) | ({:.2}, {:.2}) | {:.2} | {:.2} | {} |\n",
                 node.id,
                 node.group,
-                color_str,
+                describe_shape(node),
+                describe_paint(node),
                 node.bbox.x_min,
                 node.bbox.y_min,
                 node.bbox.x_max,
                 node.bbox.y_max,
                 node.centroid.0,
                 node.centroid.1,
-                node.area
+                node.area,
+                node.path_length,
+                node.suggested_draw_order,
             ));
         }
     }
     Ok(summary)
+}
+
+/// The element kind, marked when the outline is left open.
+fn describe_shape(node: &spryteo_core::ir::NodeMeta) -> String {
+    let kind = format!("{:?}", node.shape).to_lowercase();
+    if node.closed {
+        kind
+    } else {
+        format!("{kind} (open)")
+    }
+}
+
+/// Paint as the sidecar records it.
+///
+/// A gradient is named as a gradient with its stop count rather than shown
+/// as one colour: reporting the first stop as though it were the fill is
+/// what made this summary misleading for gradient output.
+fn describe_paint(node: &spryteo_core::ir::NodeMeta) -> String {
+    use spryteo_core::ir::PaintMeta;
+
+    let rgb = |c: spryteo_core::ir::Rgb| format!("rgb({}, {}, {})", c.r, c.g, c.b);
+    let fill = match &node.paint {
+        Some(PaintMeta::Solid { color }) => rgb(*color),
+        Some(PaintMeta::CurrentColor { fallback }) => {
+            format!("currentColor (fallback {})", rgb(*fallback))
+        }
+        Some(PaintMeta::LinearGradient { stops, .. }) => {
+            format!("linear gradient, {} stops", stops.len())
+        }
+        Some(PaintMeta::RadialGradient { stops, .. }) => {
+            format!("radial gradient, {} stops", stops.len())
+        }
+        // A sidecar from an older build carries no `paint`; fall back to the
+        // representative colour rather than reporting nothing.
+        None => match node.fill {
+            Some(c) => rgb(c),
+            None => String::new(),
+        },
+    };
+
+    match &node.stroke {
+        Some(stroke) => {
+            let paint = match &stroke.paint {
+                PaintMeta::Solid { color } => rgb(*color),
+                PaintMeta::CurrentColor { fallback } => {
+                    format!("currentColor (fallback {})", rgb(*fallback))
+                }
+                PaintMeta::LinearGradient { stops, .. } => {
+                    format!("linear gradient, {} stops", stops.len())
+                }
+                PaintMeta::RadialGradient { stops, .. } => {
+                    format!("radial gradient, {} stops", stops.len())
+                }
+            };
+            let stroke_desc = format!("stroke {paint} @ {:.2}", stroke.width);
+            if fill.is_empty() {
+                stroke_desc
+            } else {
+                format!("{fill}; {stroke_desc}")
+            }
+        }
+        None if fill.is_empty() => "none".to_string(),
+        None => fill,
+    }
 }
 
 #[tokio::main]

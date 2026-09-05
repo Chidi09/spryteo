@@ -171,6 +171,7 @@ fn scene_graph_serde_round_trip() {
 #[test]
 fn meta_serde_round_trip() {
     let meta = Meta {
+        schema_version: crate::ir::META_SCHEMA_VERSION,
         nodes: vec![
             NodeMeta {
                 id: "s-abc".into(),
@@ -190,6 +191,7 @@ fn meta_serde_round_trip() {
                 group: "g-root".into(),
                 z_order: 1,
                 suggested_draw_order: 0,
+                ..Default::default()
             },
             NodeMeta {
                 id: "s-def".into(),
@@ -205,6 +207,7 @@ fn meta_serde_round_trip() {
                 group: "g-child".into(),
                 z_order: 2,
                 suggested_draw_order: 1,
+                ..Default::default()
             },
         ],
         groups: Vec::new(),

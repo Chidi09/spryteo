@@ -41,6 +41,7 @@
                         byte_count: 12,
                     },
                     current_color_applied: false,
+                    ..Default::default()
                 },
             })
         });
@@ -326,6 +327,7 @@
                 group: "g-root".to_string(),
                 z_order: 0,
                 suggested_draw_order: 0,
+                ..Default::default()
             }],
             groups: Vec::new(),
             stats: Stats {
@@ -334,6 +336,7 @@
                 byte_count: 42,
             },
             current_color_applied: false,
+            ..Default::default()
         };
 
         let report = format_meta_report(&meta);
@@ -899,4 +902,60 @@
     fn a_multicolor_object_comes_back_as_one_nested_group_tree() {
         let res = run_convert(MULTICOLOR_OBJECT, &ConvertOptions::default()).unwrap();
         assert_multicolor_object_grouped(&res.svg, &res.meta);
+    }
+
+    /// Every surface must publish the same sidecar contract (#22): the
+    /// schema version, the lossless paint, the shape kind and outline
+    /// length, and a payload that survives JSON in both directions. A
+    /// binding that quietly serialized a reduced `Meta` would look fine
+    /// until someone tried to animate from it.
+    fn assert_meta_contract(meta: &spryteo_core::ir::Meta) {
+        use spryteo_core::ir::{PaintMeta, ShapeKind, META_SCHEMA_VERSION};
+
+        assert_eq!(meta.schema_version, META_SCHEMA_VERSION);
+        assert!(!meta.nodes.is_empty());
+
+        for node in &meta.nodes {
+            assert!(!node.id.is_empty(), "every node is addressable");
+            assert_eq!(
+                node.group_path.last(),
+                Some(&node.group),
+                "the ancestor chain must end at the node's own group"
+            );
+            let paint = node.paint.as_ref().expect("a filled node records paint");
+            match paint {
+                PaintMeta::Solid { color } => {
+                    assert_eq!(Some(*color), node.fill, "fill is the representative colour")
+                }
+                other => panic!("this fixture is flat colour, got {other:?}"),
+            }
+            assert!(node.closed, "traced fill outlines close");
+            assert!(
+                node.path_length > 0.0,
+                "{} has no outline length",
+                node.id
+            );
+            assert!(
+                matches!(node.shape, ShapeKind::Path | ShapeKind::Circle | ShapeKind::Rect),
+                "unexpected shape kind {:?}",
+                node.shape
+            );
+        }
+
+        // `suggested_draw_order` is a permutation of the nodes, distinct
+        // from paint order and never a partial or repeated ranking.
+        let mut ranks: Vec<usize> = meta.nodes.iter().map(|n| n.suggested_draw_order).collect();
+        ranks.sort_unstable();
+        assert_eq!(ranks, (0..meta.nodes.len()).collect::<Vec<_>>());
+
+        let json = serde_json::to_string(meta).expect("the sidecar serialises");
+        let back: spryteo_core::ir::Meta =
+            serde_json::from_str(&json).expect("the sidecar deserialises");
+        assert_eq!(meta, &back, "the sidecar must survive a JSON round trip");
+    }
+
+    #[test]
+    fn the_metadata_sidecar_matches_the_published_contract() {
+        let res = run_convert(MULTICOLOR_OBJECT, &ConvertOptions::default()).unwrap();
+        assert_meta_contract(&res.meta);
     }

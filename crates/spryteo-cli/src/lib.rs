@@ -220,21 +220,39 @@ pub fn run_pipeline_sam(
 /// Render a human-readable report from a `Meta` sidecar (as written by
 /// `convert --json`), for `spryteo inspect --meta`.
 pub fn format_meta_report(meta: &spryteo_core::Meta) -> String {
+    use spryteo_core::ir::PaintMeta;
+
     let mut out = String::new();
     out.push_str(&format!(
-        "nodes={} paths={} bytes={}\n\n",
-        meta.stats.node_count, meta.stats.path_count, meta.stats.byte_count
+        "schema={} nodes={} paths={} bytes={}\n\n",
+        meta.schema_version, meta.stats.node_count, meta.stats.path_count, meta.stats.byte_count
     ));
     for n in &meta.nodes {
-        let fill_str = match n.fill {
-            Some(rgb) => format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b),
-            None => "-".to_string(),
+        // A gradient is named rather than flattened to its first stop, which
+        // would read as a solid fill the SVG does not have.
+        let fill_str = match &n.paint {
+            Some(PaintMeta::Solid { color }) => {
+                format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+            }
+            Some(PaintMeta::CurrentColor { .. }) => "currentColor".to_string(),
+            Some(PaintMeta::LinearGradient { stops, .. }) => format!("linear({})", stops.len()),
+            Some(PaintMeta::RadialGradient { stops, .. }) => format!("radial({})", stops.len()),
+            None => match n.fill {
+                Some(rgb) => format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b),
+                None => "-".to_string(),
+            },
         };
+        let shape_str = format!(
+            "{}{}",
+            format!("{:?}", n.shape).to_lowercase(),
+            if n.closed { "" } else { "/open" }
+        );
         out.push_str(&format!(
-            "{:<16} group={:<12} z={:<4} fill={:<9} bbox=({:.1},{:.1},{:.1},{:.1}) centroid=({:.1},{:.1}) area={:.1} draw_order={}\n",
+            "{:<16} group={:<12} z={:<4} {:<12} fill={:<12} bbox=({:.1},{:.1},{:.1},{:.1}) centroid=({:.1},{:.1}) area={:.1} len={:.1} draw_order={}\n",
             n.id,
             n.group,
             n.z_order,
+            shape_str,
             fill_str,
             n.bbox.x_min,
             n.bbox.y_min,
@@ -243,6 +261,7 @@ pub fn format_meta_report(meta: &spryteo_core::Meta) -> String {
             n.centroid.0,
             n.centroid.1,
             n.area,
+            n.path_length,
             n.suggested_draw_order,
         ));
     }

@@ -311,6 +311,7 @@ fn apply_semantic_grouping(
     cancel.check()?;
 
     let meta = Meta {
+        schema_version: spryteo_core::ir::META_SCHEMA_VERSION,
         nodes: spryteo_svg::build_node_metas(&scene, opts.arcs),
         groups: spryteo_svg::build_group_metas(&scene),
         stats: Stats {

@@ -1,7 +1,8 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// An sRGB 8-bit colour with red, green, and blue components.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Rgb {
     pub r: u8,
     pub g: u8,
@@ -9,7 +10,7 @@ pub struct Rgb {
 }
 
 /// A gradient stop representing a color at a specific offset.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GradientStop {
     pub offset: f32, // 0.0..=1.0
     pub color: Rgb,
@@ -304,7 +305,7 @@ pub struct SvgDocument {
 }
 
 /// Axis-aligned bounding box for a shape or group.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Bbox {
     pub x_min: f64,
     pub y_min: f64,
@@ -313,24 +314,138 @@ pub struct Bbox {
 }
 
 /// Aggregate statistics for the entire conversion result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Stats {
     pub node_count: usize,
     pub path_count: usize,
     pub byte_count: usize,
 }
 
+/// The version of the metadata sidecar schema this build emits.
+///
+/// Consumers should branch on `Meta::schema_version` rather than sniffing
+/// for fields. Sidecars written before versioning existed have no
+/// `schema_version` key at all and deserialize as [`META_SCHEMA_UNVERSIONED`].
+pub const META_SCHEMA_VERSION: u32 = 1;
+
+/// The version reported for a sidecar written before the schema was
+/// versioned. Every field added since is optional, so such a payload still
+/// deserializes; it simply carries less.
+pub const META_SCHEMA_UNVERSIONED: u32 = 0;
+
+/// Paint on a node, recorded without loss.
+///
+/// `NodeMeta::fill` reduces paint to a single representative colour, which
+/// is all a thumbnail or a colour-swap needs but throws away everything a
+/// gradient is. This keeps the stops and their geometry, so a consumer can
+/// reproduce or retarget the paint without going back to the SVG.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum PaintMeta {
+    Solid {
+        color: Rgb,
+    },
+    /// Emitted as `fill="currentColor"`: the colour comes from the host
+    /// document, and `fallback` is what the shape was traced as.
+    CurrentColor {
+        fallback: Rgb,
+    },
+    /// Coordinates are in the node's own space, the same space its shape
+    /// data is written in, so they need no separate transform to apply.
+    LinearGradient {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        stops: Vec<GradientStop>,
+    },
+    RadialGradient {
+        cx: f64,
+        cy: f64,
+        r: f64,
+        stops: Vec<GradientStop>,
+    },
+}
+
+/// Stroke paint and width on a node. Absent for filled shapes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StrokeMeta {
+    pub paint: PaintMeta,
+    /// Stroke width in user units.
+    pub width: f64,
+}
+
+/// The SVG element a node is emitted as.
+///
+/// A consumer that wants to animate a radius, or to know whether a shape
+/// survived primitive detection, would otherwise have to parse the markup
+/// to find out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShapeKind {
+    #[default]
+    Path,
+    Circle,
+    Ellipse,
+    Rect,
+    /// An elliptical arc. Emitted as a `<path>`, but distinguished here
+    /// because the underlying primitive is still an arc.
+    Arc,
+}
+
 /// Per-element metadata recorded in the sidecar.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Fields added after schema version 0 all carry serde defaults, so a
+/// sidecar written by an older build still deserializes — see
+/// [`META_SCHEMA_VERSION`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NodeMeta {
     pub id: String,
     pub bbox: Bbox,
     pub centroid: (f64, f64),
     pub area: f64,
+    /// One representative colour, kept for consumers that only want to know
+    /// roughly what colour a shape is. [`NodeMeta::paint`] is the lossless
+    /// form; for a gradient this is the first stop.
     pub fill: Option<Rgb>,
+    /// The id of the node's immediate parent `<g>`.
     pub group: String,
+    /// Ids of every enclosing group, outermost first, ending with
+    /// [`NodeMeta::group`]. Answers "which object is this part of" without
+    /// walking [`Meta::groups`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_path: Vec<String>,
+    /// Position in paint order: 0 paints first, and later entries paint over
+    /// earlier ones.
     pub z_order: usize,
+    /// A reveal order for animation, which is not paint order — see
+    /// [`Meta::suggested_draw_order`](Meta) and the module docs on
+    /// `suggested_draw_order`.
     pub suggested_draw_order: usize,
+    /// Fill paint without loss. `None` for a node that is stroked only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<PaintMeta>,
+    /// Stroke paint and width. `None` for a node that is filled only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<StrokeMeta>,
+    /// The element this node is emitted as.
+    #[serde(default = "default_shape_kind")]
+    pub shape: ShapeKind,
+    /// Whether the outline closes back on itself. Primitives always do;
+    /// centreline strokes generally do not.
+    #[serde(default)]
+    pub closed: bool,
+    /// Outline length in user units, following the shape as drawn.
+    ///
+    /// Stroke output declares `pathLength="100"`, so a dash offset expressed
+    /// as a percentage of this length maps straight onto the emitted
+    /// `stroke-dasharray` without rescaling.
+    #[serde(default)]
+    pub path_length: f64,
+}
+
+fn default_shape_kind() -> ShapeKind {
+    ShapeKind::Path
 }
 
 /// The metadata sidecar (§3.12) — a JSON-serialisable payload returned
@@ -339,8 +454,13 @@ pub struct NodeMeta {
 /// This is the primary machine-oriented output that enables agentic
 /// workflows: a consumer can inspect every shape's bounding box, centroid,
 /// area, fill, group membership, and paint order without parsing SVG.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Meta {
+    /// The schema this payload was written against; see
+    /// [`META_SCHEMA_VERSION`]. Absent in pre-versioning sidecars, which
+    /// therefore read back as [`META_SCHEMA_UNVERSIONED`].
+    #[serde(default)]
+    pub schema_version: u32,
     pub nodes: Vec<NodeMeta>,
     /// The `<g>` tree exactly as emitted in the SVG (§3.12, #11).
     ///
@@ -359,7 +479,7 @@ pub struct Meta {
 /// Mirrors `Group`: `nodes` lists the ids painted directly by this group,
 /// in paint order, and `groups` its nested child groups, which paint after
 /// those nodes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GroupMeta {
     pub id: String,
     /// Ids of the nodes painted directly by this group, in paint order.
@@ -381,7 +501,7 @@ impl GroupMeta {
 }
 
 /// The top-level result returned by every conversion surface.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ConvertResult {
     pub svg: String,
     pub meta: Meta,

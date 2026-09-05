@@ -2,7 +2,8 @@
 
 use spryteo_core::ir::{
     Bbox, ConvertResult, CurveOrigin, CurveSet, Fill, Group, GroupMeta, Meta, Node, NodeMeta,
-    PathElement, Primitive, Rgb, SceneGraph, Shape, Stats, Stroke, Transform,
+    PaintMeta, PathElement, Primitive, Rgb, SceneGraph, Shape, ShapeKind, Stats, Stroke,
+    StrokeMeta, Transform, META_SCHEMA_VERSION,
 };
 use spryteo_core::options::{ConvertOptions, Grouping, IdStyle, OutputFormat, Preset, TOrigin};
 use spryteo_geom::{dedupe_ids, stable_id};
@@ -1722,7 +1723,20 @@ pub fn emit_svg(
         byte_count,
     };
 
+    let mut nodes_meta = nodes_meta;
+    if current_color_applied {
+        // The markup says `fill="currentColor"`, so the sidecar has to say
+        // the same thing rather than reporting a colour the document will
+        // not use. The traced colour is kept as the fallback.
+        for node in &mut nodes_meta {
+            if let Some(PaintMeta::Solid { color }) = node.paint {
+                node.paint = Some(PaintMeta::CurrentColor { fallback: color });
+            }
+        }
+    }
+
     let meta = Meta {
+        schema_version: META_SCHEMA_VERSION,
         nodes: nodes_meta,
         groups: build_group_metas(scene),
         stats,
@@ -1746,9 +1760,11 @@ pub fn build_node_metas(scene: &SceneGraph, arcs: bool) -> Vec<NodeMeta> {
     fn walk_group(
         group: &Group,
         arcs: bool,
+        ancestors: &mut Vec<String>,
         nodes_meta: &mut Vec<NodeMeta>,
         node_index: &mut usize,
     ) {
+        ancestors.push(group.id.clone());
         for node in &group.nodes {
             let (rel_bbox, rel_centroid, area) = get_shape_geom(&node.shape, arcs);
             let tx = node.transform.translate_x;
@@ -1770,23 +1786,177 @@ pub fn build_node_metas(scene: &SceneGraph, arcs: bool) -> Vec<NodeMeta> {
                 area,
                 fill: get_representative_color(&node.fill),
                 group: group.id.clone(),
+                group_path: ancestors.clone(),
                 z_order: *node_index,
+                // Filled in once every node is known: the order depends on
+                // how this node compares with the rest of the scene.
                 suggested_draw_order: *node_index,
+                paint: node.fill.as_ref().map(paint_meta),
+                stroke: node.stroke.as_ref().map(|stroke| StrokeMeta {
+                    paint: stroke.paint.as_ref().map_or(
+                        PaintMeta::Solid {
+                            color: stroke.color,
+                        },
+                        paint_meta,
+                    ),
+                    width: stroke.width,
+                }),
+                shape: shape_kind(&node.shape),
+                closed: is_closed(&node.shape),
+                path_length: outline_length(&node.shape),
             });
 
             *node_index += 1;
         }
         for child in &group.groups {
-            walk_group(child, arcs, nodes_meta, node_index);
+            walk_group(child, arcs, ancestors, nodes_meta, node_index);
         }
+        ancestors.pop();
     }
 
     let mut nodes_meta = Vec::new();
     let mut node_index = 0;
+    let mut ancestors = Vec::new();
     for group in &scene.groups {
-        walk_group(group, arcs, &mut nodes_meta, &mut node_index);
+        walk_group(
+            group,
+            arcs,
+            &mut ancestors,
+            &mut nodes_meta,
+            &mut node_index,
+        );
     }
+    assign_draw_order(&mut nodes_meta);
     nodes_meta
+}
+
+/// Record a fill without reducing it to one colour.
+fn paint_meta(fill: &Fill) -> PaintMeta {
+    match fill {
+        Fill::Solid(color) => PaintMeta::Solid { color: *color },
+        Fill::LinearGradient {
+            x1,
+            y1,
+            x2,
+            y2,
+            stops,
+        } => PaintMeta::LinearGradient {
+            x1: *x1,
+            y1: *y1,
+            x2: *x2,
+            y2: *y2,
+            stops: stops.clone(),
+        },
+        Fill::RadialGradient { cx, cy, r, stops } => PaintMeta::RadialGradient {
+            cx: *cx,
+            cy: *cy,
+            r: *r,
+            stops: stops.clone(),
+        },
+    }
+}
+
+fn shape_kind(shape: &Shape) -> ShapeKind {
+    match shape {
+        Shape::Path(_) => ShapeKind::Path,
+        Shape::Primitive(Primitive::Circle { .. }) => ShapeKind::Circle,
+        Shape::Primitive(Primitive::Ellipse { .. }) => ShapeKind::Ellipse,
+        Shape::Primitive(Primitive::Rect { .. }) => ShapeKind::Rect,
+        Shape::Primitive(Primitive::Arc { .. }) => ShapeKind::Arc,
+    }
+}
+
+/// Whether the outline returns to where it started.
+///
+/// Primitives are closed by definition. An arc is the exception: it is a
+/// span of an ellipse, not the whole of one. A path is closed when its data
+/// says so — fill paths end in `ClosePath`, centreline strokes do not.
+fn is_closed(shape: &Shape) -> bool {
+    match shape {
+        Shape::Primitive(Primitive::Arc { .. }) => false,
+        Shape::Primitive(_) => true,
+        Shape::Path(segments) => matches!(segments.last(), Some(PathElement::ClosePath)),
+    }
+}
+
+/// Outline length in user units.
+///
+/// Primitives are measured analytically rather than by flattening them
+/// first, so the number does not depend on a sampling count. The ellipse
+/// uses Ramanujan's second approximation, whose relative error is under
+/// 1e-9 for the eccentricities primitive detection admits.
+fn outline_length(shape: &Shape) -> f64 {
+    fn ellipse_perimeter(rx: f64, ry: f64) -> f64 {
+        let (a, b) = (rx.abs(), ry.abs());
+        if a + b == 0.0 {
+            return 0.0;
+        }
+        let h = ((a - b) / (a + b)).powi(2);
+        std::f64::consts::PI * (a + b) * (1.0 + (3.0 * h) / (10.0 + (4.0 - 3.0 * h).sqrt()))
+    }
+
+    match shape {
+        Shape::Path(segments) => spryteo_geom::path_length(segments),
+        Shape::Primitive(Primitive::Circle { r, .. }) => std::f64::consts::TAU * r.abs(),
+        Shape::Primitive(Primitive::Ellipse { rx, ry, .. }) => ellipse_perimeter(*rx, *ry),
+        Shape::Primitive(Primitive::Rect {
+            width,
+            height,
+            rx,
+            ry,
+            ..
+        }) => {
+            let (w, h) = (width.abs(), height.abs());
+            // A rounded rect trades four right angles for four quarter
+            // ellipses: drop the corner extents from the straight runs and
+            // add the arc back.
+            let cx = rx.unwrap_or(0.0).abs().min(w / 2.0);
+            let cy = ry.or(*rx).unwrap_or(0.0).abs().min(h / 2.0);
+            2.0 * (w - 2.0 * cx) + 2.0 * (h - 2.0 * cy) + ellipse_perimeter(cx, cy)
+        }
+        Shape::Primitive(Primitive::Arc {
+            rx,
+            ry,
+            start_angle,
+            end_angle,
+            ..
+        }) => {
+            // No closed form for an elliptical arc; scale the full
+            // perimeter by the swept fraction, which is exact for a circle
+            // and a good estimate otherwise.
+            let sweep = (end_angle - start_angle).abs().min(std::f64::consts::TAU);
+            ellipse_perimeter(*rx, *ry) * sweep / std::f64::consts::TAU
+        }
+    }
+}
+
+/// Fill in `suggested_draw_order`, which is a reveal order, not paint order.
+///
+/// Paint order answers "what covers what". A draw-on animation wants
+/// something else: the eye should meet a shape before the detail sitting on
+/// top of it, and the masses that carry the composition before the specks.
+/// So nodes are ranked by how deeply nested they are, then by descending
+/// area, and ties fall back to paint order to keep the result deterministic.
+///
+/// It is deliberately a permutation of the same nodes and never a reordering
+/// of the SVG: rendering still follows `z_order`.
+fn assign_draw_order(nodes: &mut [NodeMeta]) {
+    let mut order: Vec<usize> = (0..nodes.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (na, nb) = (&nodes[a], &nodes[b]);
+        na.group_path
+            .len()
+            .cmp(&nb.group_path.len())
+            .then_with(|| {
+                nb.area
+                    .partial_cmp(&na.area)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| na.z_order.cmp(&nb.z_order))
+    });
+    for (rank, &i) in order.iter().enumerate() {
+        nodes[i].suggested_draw_order = rank;
+    }
 }
 
 /// Mirror the scene's `<g>` tree into the metadata sidecar (#11).
@@ -2293,55 +2463,21 @@ pub fn emit_stroke_svg(
     height: u32,
     opts: &ConvertOptions,
 ) -> ConvertResult {
-    let mut nodes_meta = Vec::new();
-    let mut node_index = 0;
+    // Built by the same walk the fill path uses, so a stroke sidecar carries
+    // the same fields — including the stroke paint and outline length that
+    // a draw-on animation needs most.
+    let nodes_meta = build_node_metas(scene, opts.arcs);
+
     let mut path_count = 0;
-
     for group in &scene.groups {
-        for node in &group.nodes {
-            let (rel_bbox, rel_centroid, area) = get_shape_geom(&node.shape, opts.arcs);
-
-            let tx = node.transform.translate_x;
-            let ty = node.transform.translate_y;
-
-            let bbox = Bbox {
-                x_min: rel_bbox.x_min + tx,
-                x_max: rel_bbox.x_max + tx,
-                y_min: rel_bbox.y_min + ty,
-                y_max: rel_bbox.y_max + ty,
-            };
-
-            let centroid = (rel_centroid.0 + tx, rel_centroid.1 + ty);
-
-            let is_path = match &node.shape {
-                Shape::Path(_) => true,
-                Shape::Primitive(Primitive::Arc { .. }) => !opts.arcs,
-                _ => false,
-            };
-            if is_path {
-                path_count += 1;
-            }
-
-            nodes_meta.push(NodeMeta {
-                id: node.id.clone(),
-                bbox,
-                centroid,
-                area,
-                fill: get_representative_color(&node.fill),
-                group: group.id.clone(),
-                z_order: node_index,
-                suggested_draw_order: node_index,
-            });
-
-            node_index += 1;
-        }
+        count_paths_recursive(group, opts.arcs, &mut path_count);
     }
 
     let svg = serialize_stroke_svg(scene, width, height, opts);
     let byte_count = svg.len();
 
     let stats = Stats {
-        node_count: node_index,
+        node_count: nodes_meta.len(),
         path_count,
         byte_count,
     };
@@ -2349,6 +2485,7 @@ pub fn emit_stroke_svg(
     let current_color_applied = opts.current_color && analyze_scene_fills(scene).1;
 
     let meta = Meta {
+        schema_version: META_SCHEMA_VERSION,
         nodes: nodes_meta,
         groups: build_group_metas(scene),
         stats,
