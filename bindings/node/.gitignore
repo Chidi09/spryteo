@@ -1,2 +1,11 @@
 node_modules
 *.node
+*.tgz
+# Built by `npm run build:wasm`; shipped in the tarball, not in git.
+wasm/
+# The CLI binary: copied here by `npm run build:cli`, and into each
+# platform package at release time.
+/spryteo
+/spryteo.exe
+npm/*/spryteo
+npm/*/spryteo.exe

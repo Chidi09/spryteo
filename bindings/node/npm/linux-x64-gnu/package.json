@@ -1,0 +1,23 @@
+{
+  "name": "spryteo-linux-x64-gnu",
+  "version": "0.0.1",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "spryteo.linux-x64-gnu.node",
+  "files": [
+    "spryteo.linux-x64-gnu.node",
+    "spryteo"
+  ],
+  "description": "Raster-to-SVG engine: clean, animateable, semantically grouped SVGs from icons and images.",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "node": ">= 18"
+  },
+  "libc": [
+    "glibc"
+  ]
+}

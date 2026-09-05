@@ -1,0 +1,20 @@
+{
+  "name": "spryteo-win32-x64-msvc",
+  "version": "0.0.1",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "spryteo.win32-x64-msvc.node",
+  "files": [
+    "spryteo.win32-x64-msvc.node",
+    "spryteo.exe"
+  ],
+  "description": "Raster-to-SVG engine: clean, animateable, semantically grouped SVGs from icons and images.",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "node": ">= 18"
+  }
+}

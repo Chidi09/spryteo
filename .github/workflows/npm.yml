@@ -1,0 +1,244 @@
+# Build, smoke-test and publish the npm distribution (#1).
+#
+# `spryteo` on npm is a thin JS package plus seven `spryteo-<platform>`
+# packages, each carrying the native addon and the CLI executable for one
+# target. A WASM build ships inside the main package so an unsupported
+# platform still converts.
+#
+# The publish is gated on installing the packed tarballs into a clean
+# directory on Linux, macOS and Windows and doing a real conversion --
+# both through the library and through the `spryteo` command.
+
+name: npm
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+defaults:
+  run:
+    # Windows runners have bash, so every step reads the same everywhere.
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The platform-independent half: the WASM fallback and the JS package.
+  bindings:
+    name: js + wasm
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build the WASM fallback
+        working-directory: bindings/node
+        run: npm run build:wasm
+      - name: Pack the JS package
+        working-directory: bindings/node
+        run: npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: bindings/node/wasm/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: bindings/node/spryteo-*.tgz
+
+  # One native addon and one CLI executable per published platform.
+  native:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-x64
+            target: x86_64-apple-darwin
+            host: macos-13
+            lib: libspryteo_node.dylib
+          - platform: darwin-arm64
+            target: aarch64-apple-darwin
+            host: macos-14
+            lib: libspryteo_node.dylib
+          - platform: linux-x64-gnu
+            target: x86_64-unknown-linux-gnu
+            host: ubuntu-22.04
+            lib: libspryteo_node.so
+            # Node 18 itself needs glibc 2.28, so nothing is lost by
+            # pinning the floor there and gaining older distros.
+            zig: x86_64-unknown-linux-gnu.2.28
+          - platform: linux-arm64-gnu
+            target: aarch64-unknown-linux-gnu
+            host: ubuntu-22.04
+            lib: libspryteo_node.so
+            zig: aarch64-unknown-linux-gnu.2.28
+          - platform: linux-x64-musl
+            target: x86_64-unknown-linux-musl
+            host: ubuntu-22.04
+            lib: libspryteo_node.so
+            zig: x86_64-unknown-linux-musl
+          - platform: linux-arm64-musl
+            target: aarch64-unknown-linux-musl
+            host: ubuntu-22.04
+            lib: libspryteo_node.so
+            zig: aarch64-unknown-linux-musl
+          - platform: win32-x64-msvc
+            target: x86_64-pc-windows-msvc
+            host: windows-2022
+            lib: spryteo_node.dll
+            exe: .exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v1
+        if: matrix.zig != ''
+      - uses: taiki-e/install-action@v2
+        if: matrix.zig != ''
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build (zig cross)
+        if: matrix.zig != ''
+        # A cdylib cannot be statically linked against musl, so the musl
+        # addon and CLI are both dynamically linked -- Alpine ships the
+        # musl loader, so the CLI still runs there.
+        run: |
+          if [[ "${{ matrix.target }}" == *musl ]]; then
+            export RUSTFLAGS="-C target-feature=-crt-static"
+          fi
+          cargo zigbuild --release --target ${{ matrix.zig }} -p spryteo-node -p spryteo-cli
+
+      - name: Build (native)
+        if: matrix.zig == ''
+        run: cargo build --release --target ${{ matrix.target }} -p spryteo-node -p spryteo-cli
+
+      - name: Assemble the platform package
+        run: |
+          out="bindings/node/npm/${{ matrix.platform }}"
+          built="target/${{ matrix.target }}/release"
+          cp "$built/${{ matrix.lib }}" "$out/spryteo.${{ matrix.platform }}.node"
+          cp "$built/spryteo${{ matrix.exe }}" "$out/spryteo${{ matrix.exe }}"
+          ls -l "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}
+          path: |
+            bindings/node/npm/${{ matrix.platform }}/spryteo.${{ matrix.platform }}.node
+            bindings/node/npm/${{ matrix.platform }}/spryteo${{ matrix.exe }}
+
+  # Install what we would publish, in a directory that shares nothing
+  # with the checkout, and convert a real PNG through both surfaces.
+  smoke:
+    name: smoke ${{ matrix.platform }}
+    needs: [bindings, native]
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64-gnu
+            host: ubuntu-22.04
+          - platform: darwin-x64
+            host: macos-13
+          - platform: darwin-arm64
+            host: macos-14
+          - platform: win32-x64-msvc
+            host: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}
+          path: bindings/node/npm/${{ matrix.platform }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: tarball
+          path: bindings/node
+
+      - name: Restore the executable bit
+        # Artifact upload does not carry file modes, and npm ships the
+        # mode it finds -- without this the published CLI will not run.
+        run: chmod +x bindings/node/npm/${{ matrix.platform }}/spryteo || true
+
+      - name: Install into a clean directory and convert
+        run: |
+          node bindings/node/scripts/install-test.mjs \
+            --main bindings/node \
+            --platform bindings/node/npm/${{ matrix.platform }}
+
+      - name: Install without a platform package and convert through WASM
+        run: node bindings/node/scripts/install-test.mjs --main bindings/node --fallback
+
+  publish:
+    name: publish
+    needs: [smoke]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: bindings/node/wasm
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: /tmp/native
+
+      - name: Assemble every platform package
+        run: |
+          for dir in /tmp/native/native-*; do
+            platform="${dir#/tmp/native/native-}"
+            cp "$dir"/* "bindings/node/npm/$platform/"
+            chmod +x "bindings/node/npm/$platform"/spryteo 2>/dev/null || true
+          done
+
+      - name: Stamp the tag version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          if [ "$tag" != "$crate" ]; then
+            echo "tag $tag does not match the workspace version $crate" >&2
+            exit 1
+          fi
+          node bindings/node/scripts/set-version.mjs "$tag"
+
+      - name: Publish the platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # The platform packages go first: the main package declares them
+        # as optional dependencies at an exact version, so they have to
+        # exist by the time anyone installs it.
+        run: |
+          for dir in bindings/node/npm/*/; do
+            npm publish "$dir" --access public
+          done
+
+      - name: Publish spryteo
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish bindings/node --access public

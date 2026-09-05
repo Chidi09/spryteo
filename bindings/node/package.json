@@ -2,18 +2,51 @@
   "name": "spryteo",
   "version": "0.0.1",
   "description": "Raster-to-SVG engine: clean, animateable, semantically grouped SVGs from icons and images.",
+  "keywords": [
+    "svg",
+    "vectorize",
+    "raster-to-svg",
+    "trace",
+    "image",
+    "animation",
+    "napi-rs",
+    "wasm"
+  ],
+  "homepage": "https://spryteo.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chidi09/spryteo.git",
+    "directory": "bindings/node"
+  },
+  "license": "MIT OR Apache-2.0",
   "main": "index.js",
   "types": "index.d.ts",
-  "license": "MIT OR Apache-2.0",
+  "bin": {
+    "spryteo": "bin/spryteo.js"
+  },
   "napi": {
     "name": "spryteo",
     "triples": {
-      "defaults": true
+      "defaults": false,
+      "additional": [
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+        "x86_64-pc-windows-msvc"
+      ]
     }
   },
   "scripts": {
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform"
+    "build": "napi build --platform --release --js native.js --dts native.d.ts",
+    "build:debug": "napi build --platform --js native.js --dts native.d.ts",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "build:cli": "node scripts/build-cli.mjs",
+    "test": "node scripts/smoke.mjs .",
+    "test:install": "node scripts/install-test.mjs --main . --fallback",
+    "version:sync": "node scripts/set-version.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.0"
@@ -21,6 +54,24 @@
   "files": [
     "index.js",
     "index.d.ts",
-    "meta.d.ts"
-  ]
+    "native.js",
+    "native.d.ts",
+    "meta.d.ts",
+    "bin/",
+    "wasm/",
+    "scripts/smoke.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">= 18"
+  },
+  "optionalDependencies": {
+    "spryteo-darwin-arm64": "0.0.1",
+    "spryteo-darwin-x64": "0.0.1",
+    "spryteo-linux-arm64-gnu": "0.0.1",
+    "spryteo-linux-arm64-musl": "0.0.1",
+    "spryteo-linux-x64-gnu": "0.0.1",
+    "spryteo-linux-x64-musl": "0.0.1",
+    "spryteo-win32-x64-msvc": "0.0.1"
+  }
 }

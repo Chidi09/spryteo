@@ -1,0 +1,23 @@
+{
+  "name": "spryteo-linux-arm64-musl",
+  "version": "0.0.1",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "spryteo.linux-arm64-musl.node",
+  "files": [
+    "spryteo.linux-arm64-musl.node",
+    "spryteo"
+  ],
+  "description": "Raster-to-SVG engine: clean, animateable, semantically grouped SVGs from icons and images.",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "node": ">= 18"
+  },
+  "libc": [
+    "musl"
+  ]
+}

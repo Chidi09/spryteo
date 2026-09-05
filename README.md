@@ -46,6 +46,21 @@ $ npm install -g spryteo
 $ npm install spryteo
 ```
 
+`spryteo` pulls in one `spryteo-<platform>` package as an optional
+dependency, carrying the native addon and the `spryteo` executable for
+your machine. Prebuilt platforms:
+
+| | x64 | arm64 |
+| --- | --- | --- |
+| macOS | yes | yes |
+| Linux (glibc >= 2.28) | yes | yes |
+| Linux (musl / Alpine) | yes | yes |
+| Windows | yes | no |
+
+Anywhere else -- or under `--omit=optional` -- the library falls back to
+the WASM build bundled in the main package, so `convert` still works. The
+`spryteo` command needs the native binary and says so if it is missing.
+
 ## Quick start
 
 ### CLI
@@ -72,7 +87,7 @@ const { svg, meta } = await convert(
   JSON.stringify({ mode: 'icon', colors: 8 })
 )
 
-console.log(meta.stats) // { nodeCount, pathCount, byteCount }
+console.log(meta.stats) // { node_count, path_count, byte_count }
 ```
 
 ### Browser / WASM

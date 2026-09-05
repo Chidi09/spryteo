@@ -1,0 +1,20 @@
+{
+  "name": "spryteo-darwin-x64",
+  "version": "0.0.1",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "spryteo.darwin-x64.node",
+  "files": [
+    "spryteo.darwin-x64.node",
+    "spryteo"
+  ],
+  "description": "Raster-to-SVG engine: clean, animateable, semantically grouped SVGs from icons and images.",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "node": ">= 18"
+  }
+}
