@@ -62,6 +62,13 @@ for:
       only:
         - image: Visual Studio 2022
 
+    # AppVeyor runs `ps:` steps with $ErrorActionPreference = "Stop",
+    # which turns *any* write to stderr by a native command into a
+    # terminating error. cargo, rustup and npm all report progress on
+    # stderr, so a successful build failed the job on its own "Finished
+    # `release` profile" line. Every block below drops back to Continue
+    # and decides success from $LASTEXITCODE, which is the only thing
+    # that actually says whether the command worked.
     install:
       - ps: Install-Product node 18 x64
       # Rust is not on this image at all -- unlike the Linux and macOS
@@ -69,6 +76,7 @@ for:
       # `$env:PATH` set in one step does not carry to the next, hence the
       # prefix on every later step that reaches for cargo.
       - ps: |
+          $ErrorActionPreference = "Continue"
           if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
             Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile "$env:TEMP\rustup-init.exe"
             & "$env:TEMP\rustup-init.exe" -y --default-toolchain stable --profile minimal
@@ -76,11 +84,14 @@ for:
           }
           $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
           rustup default stable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustup target add x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --version; cargo --version
 
     build_script:
       - ps: |
+          $ErrorActionPreference = "Continue"
           $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
           cargo build --release --target x86_64-pc-windows-msvc -p spryteo-node -p spryteo-cli
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -95,13 +106,18 @@ for:
       # The main package is packed without the WASM fallback here: this
       # job is proving the native addon and the CLI shim. The fallback is
       # covered on Ubuntu, which is also the job that publishes it.
-      - ps: node bindings/node/scripts/install-test.mjs --main bindings/node --platform bindings/node/npm/win32-x64-msvc
+      - ps: |
+          $ErrorActionPreference = "Continue"
+          node bindings/node/scripts/install-test.mjs --main bindings/node --platform bindings/node/npm/win32-x64-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     deploy_script:
       - ps: |
+          $ErrorActionPreference = "Continue"
           if ($env:APPVEYOR_REPO_TAG -ne "true") { Write-Host "not a tag; nothing to publish"; exit 0 }
-          if (-not $env:NPM_TOKEN) { Write-Error "NPM_TOKEN is not set"; exit 1 }
+          if (-not $env:NPM_TOKEN) { Write-Host "NPM_TOKEN is not set"; exit 1 }
           node bindings/node/scripts/set-version.mjs $env:APPVEYOR_REPO_TAG_NAME
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "//registry.npmjs.org/:_authToken=$env:NPM_TOKEN" | Out-File -Encoding ascii "$env:USERPROFILE\.npmrc"
           npm publish bindings/node/npm/win32-x64-msvc --access public
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
