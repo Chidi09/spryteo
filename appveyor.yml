@@ -1,30 +1,262 @@
+# CI and the npm release (#1).
+#
+# Two things happen here. The Ubuntu job is the project's gate -- fmt,
+# clippy, the workspace test suite and the browser WASM size budget --
+# and it also builds the npm distribution. The Windows and macOS jobs
+# exist only for the npm distribution.
+#
+# `spryteo` on npm is a thin JS package plus seven `spryteo-<platform>`
+# packages, each carrying the native addon and the CLI executable for one
+# target. A WASM build ships inside the main package so an unsupported
+# platform still converts.
+#
+# AppVeyor has no ARM hosts, so the ARM builds are cross-compiled: Linux
+# ARM through zig, macOS ARM through the Xcode toolchain, which carries
+# both slices.
+#
+#   Visual Studio 2022  ->  win32-x64-msvc
+#   macos-sonoma        ->  darwin-x64, darwin-arm64
+#   Ubuntu2204          ->  the Rust gate, linux-{x64,arm64}-{gnu,musl},
+#                           the WASM fallback, and the main package
+#
+# Each job publishes what it built: AppVeyor has no cross-job artifact
+# transfer. The free plan runs one job at a time, in the order the images
+# are listed, so Ubuntu is last -- the main package pins every platform
+# package at an exact version and must not be published before they
+# resolve. It confirms that against the registry rather than assuming it.
+#
+# Publishing needs NPM_TOKEN as a secure environment variable, set in the
+# AppVeyor project settings. Nothing publishes except on a `v*` tag.
+
 version: '{build}'
 
-image: Ubuntu2204
+image:
+  - Visual Studio 2022
+  - macos-sonoma
+  - Ubuntu2204
+
+# There is no MSBuild project here; every image drives cargo itself.
+build: off
 
 environment:
   CARGO_TERM_COLOR: always
+  # Verified together locally against this workspace: zig 0.15.1 builds
+  # all four Linux targets, cdylib and binary alike.
+  ZIG_VERSION: 0.15.1
+  CARGO_ZIGBUILD_VERSION: 0.23.4
 
 cache:
   - $HOME/.cargo/registry -> Cargo.lock
   - target -> Cargo.lock
+  - '%USERPROFILE%\.cargo\registry -> Cargo.lock'
 
-install:
-  - curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
-  - export PATH=$HOME/.cargo/bin:$PATH
-  - rustup component add rustfmt clippy
-  - curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-  - rustc --version
-  - cargo --version
+artifacts:
+  - path: bindings/node/*.tgz
+  - path: bindings/node/npm/*/*.tgz
 
-build_script:
-  - export PATH=$HOME/.cargo/bin:$PATH
-  - cargo fmt --all -- --check
-  - cargo clippy --workspace --all-targets -- -D warnings
-  - cargo build --workspace --all-targets
+for:
+  ############################################################
+  # Windows: one native target.
+  ############################################################
+  - matrix:
+      only:
+        - image: Visual Studio 2022
 
-test_script:
-  - export PATH=$HOME/.cargo/bin:$PATH
-  - cargo test --workspace --release
-  - wasm-pack build bindings/wasm --target web --release
-  - test $(gzip -c bindings/wasm/pkg/spryteo_wasm_bg.wasm | wc -c) -lt 819200
+    install:
+      - ps: Install-Product node 18 x64
+      - ps: rustup update stable
+      - ps: rustup default stable
+      - ps: rustup target add x86_64-pc-windows-msvc
+      - ps: node --version; cargo --version
+
+    build_script:
+      - ps: cargo build --release --target x86_64-pc-windows-msvc -p spryteo-node -p spryteo-cli
+      - ps: |
+          $out = "bindings/node/npm/win32-x64-msvc"
+          $built = "target/x86_64-pc-windows-msvc/release"
+          Copy-Item "$built/spryteo_node.dll" "$out/spryteo.win32-x64-msvc.node"
+          Copy-Item "$built/spryteo.exe" "$out/spryteo.exe"
+          Get-ChildItem $out
+
+    test_script:
+      # The main package is packed without the WASM fallback here: this
+      # job is proving the native addon and the CLI shim. The fallback is
+      # covered on Ubuntu, which is also the job that publishes it.
+      - ps: node bindings/node/scripts/install-test.mjs --main bindings/node --platform bindings/node/npm/win32-x64-msvc
+
+    deploy_script:
+      - ps: |
+          if ($env:APPVEYOR_REPO_TAG -ne "true") { Write-Host "not a tag; nothing to publish"; exit 0 }
+          if (-not $env:NPM_TOKEN) { Write-Error "NPM_TOKEN is not set"; exit 1 }
+          node bindings/node/scripts/set-version.mjs $env:APPVEYOR_REPO_TAG_NAME
+          "//registry.npmjs.org/:_authToken=$env:NPM_TOKEN" | Out-File -Encoding ascii "$env:USERPROFILE\.npmrc"
+          npm publish bindings/node/npm/win32-x64-msvc --access public
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  ############################################################
+  # macOS: both slices from one host. Which one is native depends
+  # on the worker, so the smoke test follows process.arch.
+  ############################################################
+  - matrix:
+      only:
+        - image: macos-sonoma
+
+    install:
+      - sh: |
+          command -v rustup >/dev/null || curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          rustup update stable && rustup default stable
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      - sh: |
+          node --version
+          node -e "if (+process.versions.node.split('.')[0] < 18) { console.error('need Node 18+'); process.exit(1) }"
+
+    build_script:
+      - sh: |
+          set -e
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          for pair in "x86_64-apple-darwin darwin-x64" "aarch64-apple-darwin darwin-arm64"; do
+            set -- $pair
+            target=$1; platform=$2
+            cargo build --release --target "$target" -p spryteo-node -p spryteo-cli
+            out="bindings/node/npm/$platform"
+            cp "target/$target/release/libspryteo_node.dylib" "$out/spryteo.$platform.node"
+            cp "target/$target/release/spryteo" "$out/spryteo"
+            ls -l "$out"
+          done
+
+    test_script:
+      # npm refuses a platform package whose `cpu` does not match, so the
+      # smoke test has to pick the slice this worker can actually run.
+      # The other slice ships on the strength of the build alone.
+      - sh: node bindings/node/scripts/install-test.mjs --main bindings/node --platform "bindings/node/npm/darwin-$(node -p 'process.arch')"
+
+    deploy_script:
+      - sh: |
+          set -e
+          if [ "$APPVEYOR_REPO_TAG" != "true" ]; then echo "not a tag; nothing to publish"; exit 0; fi
+          if [ -z "$NPM_TOKEN" ]; then echo "NPM_TOKEN is not set" >&2; exit 1; fi
+          node bindings/node/scripts/set-version.mjs "$APPVEYOR_REPO_TAG_NAME"
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > "$HOME/.npmrc"
+          npm publish bindings/node/npm/darwin-x64 --access public
+          npm publish bindings/node/npm/darwin-arm64 --access public
+
+  ############################################################
+  # Linux: four targets through zig, plus the WASM fallback and
+  # the main package.
+  ############################################################
+  - matrix:
+      only:
+        - image: Ubuntu2204
+
+    install:
+      - sh: |
+          command -v rustup >/dev/null || curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          rustup update stable && rustup default stable
+          rustup component add rustfmt clippy
+          rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+                            x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+      # Official prebuilts rather than pip: the Ubuntu image's Python is
+      # externally managed (PEP 668), which makes `pip install` fail.
+      - sh: |
+          set -e
+          mkdir -p "$HOME/ci-tools" && cd "$HOME/ci-tools"
+          curl -sSL "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" | tar xJ
+          mv "zig-x86_64-linux-$ZIG_VERSION" zig
+          curl -sSL "https://github.com/rust-cross/cargo-zigbuild/releases/download/v$CARGO_ZIGBUILD_VERSION/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz" | tar xJ
+          # The release tarball unpacks into a directory of its own.
+          mv cargo-zigbuild-x86_64-unknown-linux-musl/cargo-zigbuild .
+          "$HOME/ci-tools/zig/zig" version
+          "$HOME/ci-tools/cargo-zigbuild" --version
+      - sh: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+      - sh: |
+          node --version
+          node -e "if (+process.versions.node.split('.')[0] < 18) { console.error('need Node 18+'); process.exit(1) }"
+
+    # The gate that used to be this whole file: it must pass before any
+    # of the packaging work is worth doing.
+    before_build:
+      - sh: |
+          set -e
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          # rustfmt reformats the #[path]-included *_tests.rs files as
+          # if they were standalone -- de-indenting and reflowing what is
+          # really a module body, 11k lines it cannot see the context
+          # for. It follows the #[path] from the parent whatever files
+          # you hand it, and --skip-children is nightly-only, so the
+          # report is filtered instead. Everything else is still gated.
+          cargo fmt --all -- --check > /tmp/fmt-report.txt 2>&1 || true
+          if grep -o '^Diff in [^:]*' /tmp/fmt-report.txt | grep -v '_tests\.rs$'; then
+            echo "run: cargo fmt --all" >&2
+            exit 1
+          fi
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo build --workspace --all-targets
+
+    build_script:
+      - sh: |
+          set -e
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          export PATH="$HOME/ci-tools:$HOME/ci-tools/zig:$PATH"
+          # Node 18 itself needs glibc 2.28, so pinning the floor there
+          # costs nothing and gains older distros. A cdylib cannot be
+          # statically linked against musl; the CLI still comes out
+          # static-pie, so it runs on Alpine and anywhere else.
+          build() {
+            target=$1; zig=$2; platform=$3
+            if [ "${target%musl}" != "$target" ]; then
+              export RUSTFLAGS="-C target-feature=-crt-static"
+            else
+              unset RUSTFLAGS
+            fi
+            cargo-zigbuild zigbuild --release --target "$zig" -p spryteo-node -p spryteo-cli
+            out="bindings/node/npm/$platform"
+            cp "target/$target/release/libspryteo_node.so" "$out/spryteo.$platform.node"
+            cp "target/$target/release/spryteo" "$out/spryteo"
+            ls -l "$out"
+            # The image is small; each target is copied out then dropped.
+            cargo clean --release --target "$target"
+          }
+          build x86_64-unknown-linux-gnu   x86_64-unknown-linux-gnu.2.28   linux-x64-gnu
+          build aarch64-unknown-linux-gnu  aarch64-unknown-linux-gnu.2.28  linux-arm64-gnu
+          build x86_64-unknown-linux-musl  x86_64-unknown-linux-musl       linux-x64-musl
+          build aarch64-unknown-linux-musl aarch64-unknown-linux-musl      linux-arm64-musl
+      - sh: cd bindings/node && npm run build:wasm
+
+    test_script:
+      - sh: |
+          set -e
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo test --workspace --release
+      # The browser build is a separate artifact from the Node fallback
+      # above, and the hero demo has to stay under its download budget.
+      - sh: |
+          set -e
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          wasm-pack build bindings/wasm --target web --release
+          test $(gzip -c bindings/wasm/pkg/spryteo_wasm_bg.wasm | wc -c) -lt 819200
+      - sh: node bindings/node/scripts/install-test.mjs --main bindings/node --platform bindings/node/npm/linux-x64-gnu
+      - sh: node bindings/node/scripts/install-test.mjs --main bindings/node --fallback
+
+    deploy_script:
+      - sh: |
+          set -e
+          if [ "$APPVEYOR_REPO_TAG" != "true" ]; then echo "not a tag; nothing to publish"; exit 0; fi
+          if [ -z "$NPM_TOKEN" ]; then echo "NPM_TOKEN is not set" >&2; exit 1; fi
+          tag="${APPVEYOR_REPO_TAG_NAME#v}"
+          crate="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          if [ "$tag" != "$crate" ]; then
+            echo "tag $tag does not match the workspace version $crate" >&2
+            exit 1
+          fi
+          node bindings/node/scripts/set-version.mjs "$tag"
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > "$HOME/.npmrc"
+          # The tarball left by the smoke test carries the old version.
+          rm -f bindings/node/*.tgz
+          for platform in linux-x64-gnu linux-arm64-gnu linux-x64-musl linux-arm64-musl; do
+            npm publish "bindings/node/npm/$platform" --access public
+          done
+          # The main package pins all seven exactly, so it goes last.
+          node bindings/node/scripts/await-platform-packages.mjs "$tag"
+          npm publish bindings/node --access public

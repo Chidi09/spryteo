@@ -9,13 +9,14 @@
 # directory on Linux, macOS and Windows and doing a real conversion --
 # both through the library and through the `spryteo` command.
 
+# NOT the active CI. AppVeyor drives releases -- see /appveyor.yml.
+# This workflow is kept for the day GitHub Actions is available on this
+# account again; until then it only runs when started by hand, so it does
+# not fail every push.
+
 name: npm
 
 on:
-  push:
-    branches: [master]
-    tags: ['v*']
-  pull_request:
   workflow_dispatch:
 
 defaults:
