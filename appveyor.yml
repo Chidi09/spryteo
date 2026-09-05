@@ -64,13 +64,26 @@ for:
 
     install:
       - ps: Install-Product node 18 x64
-      - ps: rustup update stable
-      - ps: rustup default stable
-      - ps: rustup target add x86_64-pc-windows-msvc
-      - ps: node --version; cargo --version
+      # Rust is not on this image at all -- unlike the Linux and macOS
+      # workers, `rustup` is not even on PATH -- so install it here. A
+      # `$env:PATH` set in one step does not carry to the next, hence the
+      # prefix on every later step that reaches for cargo.
+      - ps: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile "$env:TEMP\rustup-init.exe"
+            & "$env:TEMP\rustup-init.exe" -y --default-toolchain stable --profile minimal
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+          node --version; cargo --version
 
     build_script:
-      - ps: cargo build --release --target x86_64-pc-windows-msvc -p spryteo-node -p spryteo-cli
+      - ps: |
+          $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          cargo build --release --target x86_64-pc-windows-msvc -p spryteo-node -p spryteo-cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - ps: |
           $out = "bindings/node/npm/win32-x64-msvc"
           $built = "target/x86_64-pc-windows-msvc/release"
@@ -114,6 +127,7 @@ for:
     build_script:
       - sh: |
           set -e
+          cd "$APPVEYOR_BUILD_FOLDER"
           . "$HOME/.cargo/env" 2>/dev/null || true
           for pair in "x86_64-apple-darwin darwin-x64" "aarch64-apple-darwin darwin-arm64"; do
             set -- $pair
@@ -129,11 +143,12 @@ for:
       # npm refuses a platform package whose `cpu` does not match, so the
       # smoke test has to pick the slice this worker can actually run.
       # The other slice ships on the strength of the build alone.
-      - sh: node bindings/node/scripts/install-test.mjs --main bindings/node --platform "bindings/node/npm/darwin-$(node -p 'process.arch')"
+      - sh: cd "$APPVEYOR_BUILD_FOLDER" && node bindings/node/scripts/install-test.mjs --main bindings/node --platform "bindings/node/npm/darwin-$(node -p 'process.arch')"
 
     deploy_script:
       - sh: |
           set -e
+          cd "$APPVEYOR_BUILD_FOLDER"
           if [ "$APPVEYOR_REPO_TAG" != "true" ]; then echo "not a tag; nothing to publish"; exit 0; fi
           if [ -z "$NPM_TOKEN" ]; then echo "NPM_TOKEN is not set" >&2; exit 1; fi
           node bindings/node/scripts/set-version.mjs "$APPVEYOR_REPO_TAG_NAME"
@@ -159,16 +174,21 @@ for:
                             x86_64-unknown-linux-musl aarch64-unknown-linux-musl
       # Official prebuilts rather than pip: the Ubuntu image's Python is
       # externally managed (PEP 668), which makes `pip install` fail.
+      # No `cd`: AppVeyor keeps the working directory between steps, so
+      # changing it here left the next one running cargo outside the
+      # checkout. Everything below is absolute or `tar -C`.
       - sh: |
           set -e
-          mkdir -p "$HOME/ci-tools" && cd "$HOME/ci-tools"
-          curl -sSL "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" | tar xJ
-          mv "zig-x86_64-linux-$ZIG_VERSION" zig
-          curl -sSL "https://github.com/rust-cross/cargo-zigbuild/releases/download/v$CARGO_ZIGBUILD_VERSION/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz" | tar xJ
+          cd "$APPVEYOR_BUILD_FOLDER"
+          tools="$HOME/ci-tools"
+          mkdir -p "$tools"
+          curl -sSL "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" | tar xJ -C "$tools"
+          mv "$tools/zig-x86_64-linux-$ZIG_VERSION" "$tools/zig"
+          curl -sSL "https://github.com/rust-cross/cargo-zigbuild/releases/download/v$CARGO_ZIGBUILD_VERSION/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz" | tar xJ -C "$tools"
           # The release tarball unpacks into a directory of its own.
-          mv cargo-zigbuild-x86_64-unknown-linux-musl/cargo-zigbuild .
-          "$HOME/ci-tools/zig/zig" version
-          "$HOME/ci-tools/cargo-zigbuild" --version
+          mv "$tools/cargo-zigbuild-x86_64-unknown-linux-musl/cargo-zigbuild" "$tools/"
+          "$tools/zig/zig" version
+          "$tools/cargo-zigbuild" --version
       - sh: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
       - sh: |
           node --version
@@ -179,6 +199,7 @@ for:
     before_build:
       - sh: |
           set -e
+          cd "$APPVEYOR_BUILD_FOLDER"
           . "$HOME/.cargo/env" 2>/dev/null || true
           # rustfmt reformats the #[path]-included *_tests.rs files as
           # if they were standalone -- de-indenting and reflowing what is
@@ -197,6 +218,7 @@ for:
     build_script:
       - sh: |
           set -e
+          cd "$APPVEYOR_BUILD_FOLDER"
           . "$HOME/.cargo/env" 2>/dev/null || true
           export PATH="$HOME/ci-tools:$HOME/ci-tools/zig:$PATH"
           # Node 18 itself needs glibc 2.28, so pinning the floor there
@@ -227,21 +249,24 @@ for:
     test_script:
       - sh: |
           set -e
+          cd "$APPVEYOR_BUILD_FOLDER"
           . "$HOME/.cargo/env" 2>/dev/null || true
           cargo test --workspace --release
       # The browser build is a separate artifact from the Node fallback
       # above, and the hero demo has to stay under its download budget.
       - sh: |
           set -e
+          cd "$APPVEYOR_BUILD_FOLDER"
           . "$HOME/.cargo/env" 2>/dev/null || true
           wasm-pack build bindings/wasm --target web --release
           test $(gzip -c bindings/wasm/pkg/spryteo_wasm_bg.wasm | wc -c) -lt 819200
-      - sh: node bindings/node/scripts/install-test.mjs --main bindings/node --platform bindings/node/npm/linux-x64-gnu
-      - sh: node bindings/node/scripts/install-test.mjs --main bindings/node --fallback
+      - sh: cd "$APPVEYOR_BUILD_FOLDER" && node bindings/node/scripts/install-test.mjs --main bindings/node --platform bindings/node/npm/linux-x64-gnu
+      - sh: cd "$APPVEYOR_BUILD_FOLDER" && node bindings/node/scripts/install-test.mjs --main bindings/node --fallback
 
     deploy_script:
       - sh: |
           set -e
+          cd "$APPVEYOR_BUILD_FOLDER"
           if [ "$APPVEYOR_REPO_TAG" != "true" ]; then echo "not a tag; nothing to publish"; exit 0; fi
           if [ -z "$NPM_TOKEN" ]; then echo "NPM_TOKEN is not set" >&2; exit 1; fi
           tag="${APPVEYOR_REPO_TAG_NAME#v}"
