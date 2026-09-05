@@ -1,6 +1,6 @@
 {
   "icons/chevron_48": {
-    "bytes": 942,
+    "bytes": 941,
     "nodes": 3
   },
   "icons/circle_256": {
@@ -40,7 +40,7 @@
     "nodes": 19
   },
   "line-art/arcs_256": {
-    "bytes": 2134,
+    "bytes": 2136,
     "nodes": 3
   },
   "line-art/segments_256": {
@@ -48,7 +48,7 @@
     "nodes": 2
   },
   "line-art/spiral_256": {
-    "bytes": 5747,
+    "bytes": 5742,
     "nodes": 2
   },
   "line-art/squiggle_256": {
@@ -96,7 +96,7 @@
     "nodes": 5
   },
   "pixel-art/sprite_32": {
-    "bytes": 1457,
+    "bytes": 1458,
     "nodes": 4
   },
   "pixel-art/star_32": {
@@ -104,11 +104,11 @@
     "nodes": 2
   },
   "real/dj_logo_1024": {
-    "bytes": 92933,
-    "nodes": 115
+    "bytes": 102659,
+    "nodes": 173
   },
   "real/runner_lineart_480": {
-    "bytes": 13238,
+    "bytes": 13176,
     "nodes": 18
   },
   "stroke/corner_256": {

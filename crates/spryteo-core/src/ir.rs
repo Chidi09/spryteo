@@ -284,7 +284,7 @@ pub struct SvgDocument {
 }
 
 /// Axis-aligned bounding box for a shape or group.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bbox {
     pub x_min: f64,
     pub y_min: f64,

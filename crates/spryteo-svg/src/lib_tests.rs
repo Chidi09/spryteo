@@ -2392,6 +2392,150 @@
         assert_ne!(a, b, "a recoloured shape must change the ID");
     }
 
+    // ── Exact path geometry reaches the scene graph (#8) ───────────────
+
+    /// A shape whose curves bulge well past their endpoints must report a
+    /// bbox that covers the bulge. The endpoint hull would report a flat
+    /// box of zero height.
+    #[test]
+    fn metadata_bbox_covers_curve_extrema() {
+        let lens = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::CurveTo(0.0, 40.0, 100.0, 40.0, 100.0, 0.0),
+                PathElement::CurveTo(100.0, -40.0, 0.0, -40.0, 0.0, 0.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let scene = build_scene_graph(
+            &CurveSet {
+                curves: vec![lens],
+            },
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &[red()],
+            false,
+        );
+
+        let metas = build_node_metas(&scene, false);
+        let node = &metas[0];
+        assert!(
+            node.bbox.y_max > 20.0 && node.bbox.y_min < -20.0,
+            "bbox must cover the bulge, got {:?}",
+            node.bbox
+        );
+        assert!(
+            node.area > 1000.0,
+            "a lens encloses real area, got {}",
+            node.area
+        );
+    }
+
+    /// A curved shape whose endpoints are collinear has zero *polygon*
+    /// area, so it used to be dropped as degenerate even though it
+    /// encloses ink.
+    #[test]
+    fn a_bulging_shape_is_not_filtered_as_degenerate() {
+        let lens = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 50.0),
+                PathElement::CurveTo(0.0, 90.0, 100.0, 90.0, 100.0, 50.0),
+                PathElement::CurveTo(100.0, 10.0, 0.0, 10.0, 0.0, 50.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let scene = build_scene_graph(
+            &CurveSet {
+                curves: vec![lens],
+            },
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &[red()],
+            false,
+        );
+        assert_eq!(
+            scene.groups.len(),
+            1,
+            "a curved shape with collinear endpoints must survive"
+        );
+    }
+
+    /// Two subpaths must be measured as a ring and its hole, not joined
+    /// end-to-end into one nonsense polygon.
+    #[test]
+    fn a_hole_is_subtracted_from_reported_area() {
+        let ring = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::LineTo(100.0, 0.0),
+                PathElement::LineTo(100.0, 100.0),
+                PathElement::LineTo(0.0, 100.0),
+                PathElement::ClosePath,
+                PathElement::MoveTo(25.0, 25.0),
+                PathElement::LineTo(75.0, 25.0),
+                PathElement::LineTo(75.0, 75.0),
+                PathElement::LineTo(25.0, 75.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let scene = build_scene_graph(
+            &CurveSet {
+                curves: vec![ring],
+            },
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &[red()],
+            false,
+        );
+
+        let area = build_node_metas(&scene, false)[0].area;
+        assert!(
+            (area - 7500.0).abs() < 1.0,
+            "expected 10000 - 2500 = 7500, got {area}"
+        );
+    }
+
+    /// The centroid transform origin must come from the real enclosed
+    /// area, so a curved shape's origin sits inside its ink.
+    #[test]
+    fn centroid_origin_uses_exact_area() {
+        // A quarter-disc-ish wedge: endpoints alone would put the centroid
+        // at the chord midpoint, not inside the filled region.
+        let wedge = Curve {
+            segments: vec![
+                PathElement::MoveTo(0.0, 0.0),
+                PathElement::CurveTo(0.0, 80.0, 80.0, 80.0, 80.0, 0.0),
+                PathElement::ClosePath,
+            ],
+            primitive: None,
+        };
+        let scene = build_scene_graph(
+            &CurveSet {
+                curves: vec![wedge],
+            },
+            &IdStyle::Sequential,
+            &TOrigin::Centroid,
+            &[red()],
+            false,
+        );
+
+        let t = &scene.groups[0].nodes[0].transform;
+        assert!(
+            t.translate_y > 5.0,
+            "the centroid must sit inside the bulge, not on the chord \
+             (y = 0); got {}",
+            t.translate_y
+        );
+        assert!(
+            (t.translate_x - 40.0).abs() < 1.0,
+            "the wedge is symmetric about x = 40; got {}",
+            t.translate_x
+        );
+    }
+
     /// Two identical shapes are legitimately the same content; they collide
     /// and are separated deterministically rather than by position.
     #[test]

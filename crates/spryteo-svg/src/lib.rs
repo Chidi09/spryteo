@@ -32,96 +32,6 @@ fn get_representative_color(fill: &Option<Fill>) -> Option<Rgb> {
     }
 }
 
-/// Extracts the endpoints from a sequence of path elements.
-///
-/// For a curved node, this flattens its path elements to a point sequence.
-/// The endpoint of each segment is sufficient for hashing and geometry calculation.
-fn extract_endpoints(segments: &[PathElement]) -> Vec<(f64, f64)> {
-    let mut points = Vec::new();
-    for seg in segments {
-        match seg {
-            PathElement::MoveTo(x, y) => points.push((*x, *y)),
-            PathElement::LineTo(x, y) => points.push((*x, *y)),
-            PathElement::CurveTo(_, _, _, _, x3, y3) => points.push((*x3, *y3)),
-            PathElement::ClosePath => {}
-        }
-    }
-    points
-}
-
-/// Computes the axis-aligned bounding box, centroid, and area of a polygon defined by points.
-fn get_polygon_geom(points: &[(f64, f64)]) -> (Bbox, (f64, f64), f64) {
-    let n = points.len();
-    if n == 0 {
-        return (
-            Bbox {
-                x_min: 0.0,
-                x_max: 0.0,
-                y_min: 0.0,
-                y_max: 0.0,
-            },
-            (0.0, 0.0),
-            0.0,
-        );
-    }
-
-    let mut x_min = f64::INFINITY;
-    let mut x_max = f64::NEG_INFINITY;
-    let mut y_min = f64::INFINITY;
-    let mut y_max = f64::NEG_INFINITY;
-    for &(x, y) in points {
-        if x < x_min {
-            x_min = x;
-        }
-        if x > x_max {
-            x_max = x;
-        }
-        if y < y_min {
-            y_min = y;
-        }
-        if y > y_max {
-            y_max = y;
-        }
-    }
-
-    let mut area = 0.0;
-    let mut cx = 0.0;
-    let mut cy = 0.0;
-    for i in 0..n {
-        let p1 = points[i];
-        let p2 = points[(i + 1) % n];
-        let factor = p1.0 * p2.1 - p2.0 * p1.1;
-        area += factor;
-        cx += (p1.0 + p2.0) * factor;
-        cy += (p1.1 + p2.1) * factor;
-    }
-    area *= 0.5;
-    let unsigned_area = area.abs();
-
-    let centroid = if area.abs() > 1e-9 {
-        (cx / (6.0 * area), cy / (6.0 * area))
-    } else {
-        let mut sx = 0.0;
-        let mut sy = 0.0;
-        for &(x, y) in points {
-            sx += x;
-            sy += y;
-        }
-        (sx / n as f64, sy / n as f64)
-    };
-
-    (
-        Bbox {
-            x_min,
-            x_max,
-            y_min,
-            y_max,
-        },
-        centroid,
-        unsigned_area,
-    )
-}
-
 /// Computes the bounding box, centroid, and area of a Shape.
 ///
 /// Uses closed-form formulas for primitives and polygon formulas for paths.
@@ -212,8 +122,67 @@ fn get_shape_geom(shape: &Shape, arcs: bool) -> (Bbox, (f64, f64), f64) {
             }
         },
         Shape::Path(segments) => {
-            let points = extract_endpoints(segments);
-            get_polygon_geom(&points)
+            // Exact: curve extrema for the box, Green's-theorem integrals
+            // for area and centroid, subpaths measured separately with
+            // holes subtracted (#8).
+            let g = spryteo_geom::path_geometry(segments);
+            (g.bbox, g.centroid, g.area)
+        }
+    }
+}
+
+/// The coarse polygon used for containment tests between shapes.
+///
+/// Primitives are sampled from their closed form; paths reuse the
+/// flattened outline `path_geometry` already produced, so a curved shape
+/// is tested by its real outline rather than by its endpoint hull (#8).
+fn containment_polygon(shape: &Shape) -> Vec<(f64, f64)> {
+    match shape {
+        Shape::Path(segments) => spryteo_geom::path_geometry(segments).polygon,
+        Shape::Primitive(prim) => {
+            const N: usize = 32;
+            let sample = |cx: f64, cy: f64, rx: f64, ry: f64, rot: f64| {
+                (0..N)
+                    .map(|i| {
+                        let t = std::f64::consts::TAU * i as f64 / N as f64;
+                        let (x, y) = (rx * t.cos(), ry * t.sin());
+                        (
+                            cx + x * rot.cos() - y * rot.sin(),
+                            cy + x * rot.sin() + y * rot.cos(),
+                        )
+                    })
+                    .collect()
+            };
+            match *prim {
+                Primitive::Circle { cx, cy, r } => sample(cx, cy, r, r, 0.0),
+                Primitive::Ellipse {
+                    cx,
+                    cy,
+                    rx,
+                    ry,
+                    rotation,
+                } => sample(cx, cy, rx, ry, rotation),
+                Primitive::Arc {
+                    cx,
+                    cy,
+                    rx,
+                    ry,
+                    rotation,
+                    ..
+                } => sample(cx, cy, rx, ry, rotation),
+                Primitive::Rect {
+                    x,
+                    y,
+                    width,
+                    height,
+                    ..
+                } => vec![
+                    (x, y),
+                    (x + width, y),
+                    (x + width, y + height),
+                    (x, y + height),
+                ],
+            }
         }
     }
 }
@@ -1383,7 +1352,10 @@ pub fn build_scene_graph(
             }
         };
 
-        let poly = extract_endpoints(&curve.segments);
+        // Containment is judged on the shape as emitted — a promoted
+        // circle by its circle, a path by its real flattened outline —
+        // not by the raw endpoint hull (#8).
+        let poly = containment_polygon(&shape);
         let (bbox, _, area) = get_shape_geom(&shape, arcs);
 
         polys.push(poly);
