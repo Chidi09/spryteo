@@ -221,7 +221,7 @@ impl CancelToken {
         if self.inner.is_none() {
             return Ok(());
         }
-        if iteration % POLL_INTERVAL == 0 {
+        if iteration.is_multiple_of(POLL_INTERVAL) {
             self.check()
         } else {
             Ok(())

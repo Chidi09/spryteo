@@ -3,40 +3,13 @@
 use napi::bindgen_prelude::{AsyncTask, Buffer};
 use napi::{Env, Task};
 use napi_derive::napi;
-use spryteo_core::{ConvertOptions, ConvertResult};
+use spryteo_core::{options_from_json, ConvertResult};
 
 /// Core conversion logic returning standard Rust types for testability on native.
 pub fn convert_impl(bytes: &[u8], options_json: &str) -> Result<ConvertResult, String> {
-    let options_json_trimmed = options_json.trim();
-    let opts = if options_json_trimmed.is_empty() || options_json_trimmed == "{}" {
-        ConvertOptions::default()
-    } else {
-        // Parse the user options into a serde_json::Value
-        let user_val: serde_json::Value = serde_json::from_str(options_json)
-            .map_err(|e| format!("Failed to parse options JSON: {}", e))?;
-
-        // If it's not an object, it's invalid
-        if !user_val.is_object() {
-            return Err("Failed to parse options JSON: expected a JSON object".to_string());
-        }
-
-        // Serialize default options to a Value
-        let mut default_val = serde_json::to_value(ConvertOptions::default())
-            .map_err(|e| format!("Failed to serialize default options: {}", e))?;
-
-        // Merge user_val into default_val
-        if let (Some(default_obj), Some(user_obj)) =
-            (default_val.as_object_mut(), user_val.as_object())
-        {
-            for (k, v) in user_obj {
-                default_obj.insert(k.clone(), v.clone());
-            }
-        }
-
-        // Deserialize back to ConvertOptions
-        serde_json::from_value::<ConvertOptions>(default_val)
-            .map_err(|e| format!("Failed to parse options JSON: {}", e))?
-    };
+    // Options parsing lives in the core so the accepted schema cannot drift
+    // between Node, WASM, MCP and the CLI (#2).
+    let opts = options_from_json(options_json).map_err(|e| e.to_string())?;
 
     // The addon is an adapter: Buffer and options string in, JSON out.
     // The pipeline, its limits, cancellation and panic trapping live in

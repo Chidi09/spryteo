@@ -208,11 +208,9 @@ fn run_fill(
     // can only shrink, an image reduced to <= 1600px leaves the automatic
     // rule with nothing to do. The tighter of the two always wins.
     let image = match opts.max_trace_dimension {
-        Some(max_dim) => spryteo_raster::downscale_to_max_dimension(
-            classified.image,
-            max_dim,
-            &classified.mode,
-        ),
+        Some(max_dim) => {
+            spryteo_raster::downscale_to_max_dimension(classified.image, max_dim, &classified.mode)
+        }
         None => classified.image,
     };
     let classified = ClassifiedInput {
@@ -285,7 +283,9 @@ fn run_fill(
     let scene = apply_semantic_grouping(scene, &layer_stack, &contour_set, masks, opts, cancel)?;
 
     cancel.check()?;
-    Ok(spryteo_svg::emit_svg(&scene, width, height, opts, rect_color))
+    Ok(spryteo_svg::emit_svg(
+        &scene, width, height, opts, rect_color,
+    ))
 }
 
 /// Regroup the scene when `Grouping::Semantic` is requested.
@@ -349,9 +349,7 @@ fn run_stroke(
         None => ScaledGeometry::for_scale(opts, 1.0),
     };
     let image = match opts.max_trace_dimension {
-        Some(max_dim) => {
-            spryteo_raster::downscale_to_max_dimension(image, max_dim, &Mode::LineArt)
-        }
+        Some(max_dim) => spryteo_raster::downscale_to_max_dimension(image, max_dim, &Mode::LineArt),
         None => image,
     };
 

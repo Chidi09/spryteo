@@ -110,36 +110,15 @@ fn parse_seg(s: &str) -> Result<spryteo_cli::sheet::SegChoice, String> {
     }
 }
 
-fn parse_hex_rgb(s: &str) -> Result<Rgb, String> {
-    let hex = s.strip_prefix('#').unwrap_or(s);
-    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(format!("Invalid color '{}'. Expected #rrggbb", s));
-    }
-    Ok(Rgb {
-        r: u8::from_str_radix(&hex[0..2], 16).unwrap(),
-        g: u8::from_str_radix(&hex[2..4], 16).unwrap(),
-        b: u8::from_str_radix(&hex[4..6], 16).unwrap(),
-    })
+/// A `--palette` entry: one explicit colour, `#rgb` or `#rrggbb` (#21).
+fn parse_palette_color(s: &str) -> Result<Rgb, String> {
+    spryteo_core::parse_hex_color(s)
 }
 
+/// `--alpha-mode`, sharing the core's parser so the flag and the JSON
+/// surfaces accept exactly the same spellings (#2).
 fn parse_alpha_mode(s: &str) -> Result<AlphaMode, String> {
-    let lower = s.to_lowercase();
-    if lower == "keep" {
-        return Ok(AlphaMode::Keep);
-    }
-    if let Some(color) = lower.strip_prefix("matte:") {
-        return Ok(AlphaMode::Matte(parse_hex_rgb(color)?));
-    }
-    if let Some(value) = lower.strip_prefix("threshold:") {
-        return value
-            .parse::<u8>()
-            .map(AlphaMode::Threshold)
-            .map_err(|_| format!("Invalid alpha threshold '{}'. Expected 0-255", value));
-    }
-    Err(format!(
-        "Invalid alpha-mode '{}'. Expected keep, matte:#rrggbb, or threshold:0-255",
-        s
-    ))
+    spryteo_core::parse_alpha_mode(s)
 }
 
 #[derive(Parser)]
@@ -179,6 +158,13 @@ struct ConvertArgs {
     /// quantization, so the final count can be lower.
     #[arg(long)]
     colors: Option<u8>,
+
+    /// Pin the output to an exact palette instead of choosing colours by
+    /// quantization. Repeat the flag or pass a comma-separated list:
+    /// `--palette '#ff0000,#00ff00' --palette '#0000ff'`. Overrides
+    /// `--colors` when both are given (#21).
+    #[arg(long, value_delimiter = ',', value_parser = parse_palette_color)]
+    palette: Vec<Rgb>,
 
     /// Layer composition mode for photo-mode quantization
     #[arg(long, value_parser = parse_layering)]
@@ -353,18 +339,30 @@ struct SheetArgs {
     no_unify_width: bool,
 }
 
+/// Decide the colour specification from the two flags that can set it.
+///
+/// An explicit `--palette` is the strongest statement of intent, so it wins
+/// over a bare `--colors` count when both are given (#21).
+fn resolve_colors(args: &ConvertArgs) -> ColorSpec {
+    if !args.palette.is_empty() {
+        return ColorSpec::Palette(args.palette.clone());
+    }
+    match args.colors {
+        Some(n) => ColorSpec::N(n),
+        None => ColorSpec::Auto,
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli {
         Cli::Convert(args) => {
             let default_opts = ConvertOptions::default();
+            let colors = resolve_colors(&args);
             let opts = ConvertOptions {
                 mode: args.mode,
                 stroke: args.stroke,
-                colors: match args.colors {
-                    Some(n) => ColorSpec::N(n),
-                    None => ColorSpec::Auto,
-                },
+                colors,
                 layering: args.layering.clone().unwrap_or(default_opts.layering),
                 gradients: args.gradients.clone().unwrap_or(default_opts.gradients),
                 tolerance: args.tolerance.unwrap_or(default_opts.tolerance),
@@ -657,5 +655,115 @@ fn main() {
             }
             std::process::exit(0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn convert_args(extra: &[&str]) -> ConvertArgs {
+        let mut argv = vec!["spryteo", "convert", "in.png", "-o", "out.svg"];
+        argv.extend_from_slice(extra);
+        match Cli::try_parse_from(argv).expect("args should parse") {
+            Cli::Convert(a) => a,
+            _ => panic!("expected the convert subcommand"),
+        }
+    }
+
+    fn rgb(r: u8, g: u8, b: u8) -> Rgb {
+        Rgb { r, g, b }
+    }
+
+    #[test]
+    fn no_colour_flags_means_auto() {
+        assert!(matches!(
+            resolve_colors(&convert_args(&[])),
+            ColorSpec::Auto
+        ));
+    }
+
+    #[test]
+    fn colors_flag_sets_a_ceiling() {
+        assert!(matches!(
+            resolve_colors(&convert_args(&["--colors", "6"])),
+            ColorSpec::N(6)
+        ));
+    }
+
+    /// `--palette` accepts a comma-separated list, a repeated flag, or both.
+    #[test]
+    fn palette_accepts_comma_lists_and_repetition() {
+        let expected = vec![rgb(255, 0, 0), rgb(0, 255, 0), rgb(0, 0, 255)];
+
+        for argv in [
+            vec!["--palette", "#ff0000,#00ff00,#0000ff"],
+            vec![
+                "--palette",
+                "#ff0000",
+                "--palette",
+                "#00ff00",
+                "--palette",
+                "#0000ff",
+            ],
+            vec!["--palette", "#ff0000,#00ff00", "--palette", "#0000ff"],
+        ] {
+            match resolve_colors(&convert_args(&argv)) {
+                ColorSpec::Palette(p) => assert_eq!(p, expected, "for {argv:?}"),
+                other => panic!("expected a palette for {argv:?}, got {other:?}"),
+            }
+        }
+    }
+
+    /// Short hex and a bare (unprefixed) hex are the same colour, matching
+    /// what the JSON surfaces accept (#2, #21).
+    #[test]
+    fn palette_accepts_the_same_hex_spellings_as_json() {
+        match resolve_colors(&convert_args(&["--palette", "#f00,00ff00"])) {
+            ColorSpec::Palette(p) => assert_eq!(p, vec![rgb(255, 0, 0), rgb(0, 255, 0)]),
+            other => panic!("expected a palette, got {other:?}"),
+        }
+    }
+
+    /// The precedence rule: an explicit palette beats a count.
+    #[test]
+    fn palette_overrides_a_colour_count() {
+        let args = convert_args(&["--colors", "16", "--palette", "#123456"]);
+        match resolve_colors(&args) {
+            ColorSpec::Palette(p) => assert_eq!(p, vec![rgb(0x12, 0x34, 0x56)]),
+            other => panic!("expected the palette to win, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_malformed_palette_colour_is_rejected() {
+        let argv = [
+            "spryteo",
+            "convert",
+            "in.png",
+            "-o",
+            "out.svg",
+            "--palette",
+            "#gg0000",
+        ];
+        assert!(Cli::try_parse_from(argv).is_err());
+    }
+
+    /// The flag parser delegates to the core, so it must accept exactly the
+    /// spellings the JSON `alphaMode` field accepts (#2).
+    #[test]
+    fn alpha_mode_flag_matches_the_json_spellings() {
+        assert_eq!(parse_alpha_mode("keep").unwrap(), AlphaMode::Keep);
+        assert_eq!(
+            parse_alpha_mode("matte:#ff00ff").unwrap(),
+            AlphaMode::Matte(rgb(255, 0, 255))
+        );
+        assert_eq!(
+            parse_alpha_mode("threshold:128").unwrap(),
+            AlphaMode::Threshold(128)
+        );
+        assert!(parse_alpha_mode("matte:#nothex").is_err());
+        assert!(parse_alpha_mode("threshold:999").is_err());
+        assert!(parse_alpha_mode("nonsense").is_err());
     }
 }

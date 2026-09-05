@@ -13,8 +13,9 @@ pub use ir::{
     SceneGraph, Shape, Stats, Stroke, SvgDocument, Transform,
 };
 pub use options::{
-    AlphaMode, Background, ColorSpec, ConvertOptions, Grouping, IdStyle, Layering, Mode,
-    OutputFormat, Preset, TOrigin, Tri,
+    format_hex_color, options_from_json, options_from_json_with_base, parse_alpha_mode,
+    parse_hex_color, AlphaMode, Background, ColorSpec, ConvertOptions, ConvertOptionsPatch,
+    Grouping, IdStyle, Layering, Mode, OutputFormat, Preset, TOrigin, Tri,
 };
 
 #[cfg(test)]

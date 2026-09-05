@@ -441,6 +441,10 @@ fn resize_rgba_with(
         // colour, so they stay at 0 rather than inventing one.
         for px in pixels.chunks_exact_mut(4) {
             let a = px[3] as u32;
+            // Not a division guard: a fully transparent pixel carries no
+            // recoverable colour, so it is forced to zero rather than
+            // left holding whatever the resampler averaged into it.
+            #[allow(clippy::manual_checked_ops)]
             if a == 0 {
                 px[0] = 0;
                 px[1] = 0;

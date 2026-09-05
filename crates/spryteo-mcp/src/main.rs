@@ -106,25 +106,18 @@ pub fn decode_base64_image(base64_str: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to decode base64 image: {}", e))
 }
 
+/// Resolve the tool's optional `options` argument into full options.
+///
+/// The schema itself is defined once in the core (#2), so what this server
+/// accepts is exactly what the CLI, Node addon and WASM binding accept.
 pub fn merge_options(user_val: Option<serde_json::Value>) -> Result<ConvertOptions, String> {
-    let mut default_val = serde_json::to_value(ConvertOptions::default())
-        .map_err(|e| format!("Failed to serialize default options: {}", e))?;
-
-    if let Some(user_val) = user_val {
-        if !user_val.is_object() {
-            return Err("Failed to parse options: expected a JSON object".to_string());
+    let json = match user_val {
+        None | Some(serde_json::Value::Null) => return Ok(ConvertOptions::default()),
+        Some(v) => {
+            serde_json::to_string(&v).map_err(|e| format!("Failed to re-encode options: {}", e))?
         }
-        if let (Some(default_obj), Some(user_obj)) =
-            (default_val.as_object_mut(), user_val.as_object())
-        {
-            for (k, v) in user_obj {
-                default_obj.insert(k.clone(), v.clone());
-            }
-        }
-    }
-
-    serde_json::from_value::<ConvertOptions>(default_val)
-        .map_err(|e| format!("Failed to parse options: {}", e))
+    };
+    spryteo_core::options_from_json(&json).map_err(|e| e.to_string())
 }
 
 pub fn convert_image_inner(

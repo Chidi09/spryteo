@@ -42,36 +42,52 @@ fn fixture(size: u32) -> Vec<u8> {
 
 /// The option sets each surface exposes, exercised across all of them.
 fn option_matrix() -> Vec<(&'static str, ConvertOptions)> {
-    let mut v = Vec::new();
-
-    v.push(("defaults", ConvertOptions::default()));
-
-    let mut o = ConvertOptions::default();
-    o.mode = Mode::Icon;
-    o.colors = ColorSpec::N(4);
-    v.push(("icon-4-colors", o));
-
-    let mut o = ConvertOptions::default();
-    o.grouping = Grouping::Semantic;
-    v.push(("semantic-grouping", o));
-
-    let mut o = ConvertOptions::default();
-    o.grouping = Grouping::Flat;
-    v.push(("flat-grouping", o));
-
-    let mut o = ConvertOptions::default();
-    o.alpha_mode = AlphaMode::Matte(Rgb { r: 0, g: 0, b: 0 });
-    v.push(("matte-black", o));
-
-    let mut o = ConvertOptions::default();
-    o.max_trace_dimension = Some(32);
-    v.push(("max-dim-32", o));
-
-    let mut o = ConvertOptions::default();
-    o.stroke = true;
-    v.push(("stroke", o));
-
-    v
+    vec![
+        ("defaults", ConvertOptions::default()),
+        (
+            "icon-4-colors",
+            ConvertOptions {
+                mode: Mode::Icon,
+                colors: ColorSpec::N(4),
+                ..Default::default()
+            },
+        ),
+        (
+            "semantic-grouping",
+            ConvertOptions {
+                grouping: Grouping::Semantic,
+                ..Default::default()
+            },
+        ),
+        (
+            "flat-grouping",
+            ConvertOptions {
+                grouping: Grouping::Flat,
+                ..Default::default()
+            },
+        ),
+        (
+            "matte-black",
+            ConvertOptions {
+                alpha_mode: AlphaMode::Matte(Rgb { r: 0, g: 0, b: 0 }),
+                ..Default::default()
+            },
+        ),
+        (
+            "max-dim-32",
+            ConvertOptions {
+                max_trace_dimension: Some(32),
+                ..Default::default()
+            },
+        ),
+        (
+            "stroke",
+            ConvertOptions {
+                stroke: true,
+                ..Default::default()
+            },
+        ),
+    ]
 }
 
 /// `convert` (the plain entry the MCP and Node adapters use via
@@ -102,8 +118,10 @@ fn every_engine_entry_point_agrees() {
 #[test]
 fn empty_mask_slice_matches_no_masks() {
     let bytes = fixture(96);
-    let mut opts = ConvertOptions::default();
-    opts.grouping = Grouping::Semantic;
+    let opts = ConvertOptions {
+        grouping: Grouping::Semantic,
+        ..Default::default()
+    };
 
     let without = convert(&bytes, &opts).unwrap();
     let with_empty = convert_with(EngineRequest::new(&bytes, &opts).with_masks(&[])).unwrap();
@@ -118,7 +136,11 @@ fn conversion_is_stable_across_runs() {
     for (name, opts) in option_matrix() {
         let first = convert(&bytes, &opts).unwrap().svg;
         for _ in 0..3 {
-            assert_eq!(first, convert(&bytes, &opts).unwrap().svg, "{name} unstable");
+            assert_eq!(
+                first,
+                convert(&bytes, &opts).unwrap().svg,
+                "{name} unstable"
+            );
         }
     }
 }
@@ -130,10 +152,14 @@ fn conversion_is_stable_across_runs() {
 fn semantic_grouping_is_not_a_silent_no_op() {
     let bytes = fixture(96);
 
-    let mut component = ConvertOptions::default();
-    component.grouping = Grouping::Component;
-    let mut semantic = ConvertOptions::default();
-    semantic.grouping = Grouping::Semantic;
+    let component = ConvertOptions {
+        grouping: Grouping::Component,
+        ..Default::default()
+    };
+    let semantic = ConvertOptions {
+        grouping: Grouping::Semantic,
+        ..Default::default()
+    };
 
     let a = convert(&bytes, &component).unwrap().svg;
     let b = convert(&bytes, &semantic).unwrap().svg;
@@ -150,12 +176,17 @@ fn semantic_grouping_is_not_a_silent_no_op() {
 #[test]
 fn invalid_options_are_rejected_by_every_entry_point() {
     let bytes = fixture(32);
-    let mut opts = ConvertOptions::default();
-    opts.colors = ColorSpec::N(0);
+    let opts = ConvertOptions {
+        colors: ColorSpec::N(0),
+        ..Default::default()
+    };
 
     for (label, result) in [
         ("convert", convert(&bytes, &opts)),
-        ("convert_with", convert_with(EngineRequest::new(&bytes, &opts))),
+        (
+            "convert_with",
+            convert_with(EngineRequest::new(&bytes, &opts)),
+        ),
         ("convert_with_timeout", convert_with_timeout(&bytes, &opts)),
     ] {
         match result {
