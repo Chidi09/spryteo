@@ -50,7 +50,7 @@ pub fn apply_alpha_mode(image: RasterImage, mode: &AlphaMode) -> RasterImage {
 }
 
 fn matte(mut image: RasterImage, bg: Rgb) -> RasterImage {
-    for px in image.pixels.chunks_exact_mut(4) {
+    for px in image.pixels.as_chunks_mut::<4>().0 {
         let a = px[3];
         px[0] = composite_channel(px[0], bg.r, a);
         px[1] = composite_channel(px[1], bg.g, a);
@@ -61,7 +61,7 @@ fn matte(mut image: RasterImage, bg: Rgb) -> RasterImage {
 }
 
 fn threshold(mut image: RasterImage, t: u8) -> RasterImage {
-    for px in image.pixels.chunks_exact_mut(4) {
+    for px in image.pixels.as_chunks_mut::<4>().0 {
         px[3] = if px[3] >= t { 255 } else { 0 };
     }
     image

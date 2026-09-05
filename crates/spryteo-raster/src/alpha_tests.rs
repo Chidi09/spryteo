@@ -27,7 +27,7 @@ fn matte_makes_every_pixel_opaque() {
         img(vec![10, 20, 30, 0, 10, 20, 30, 128, 10, 20, 30, 255]),
         &AlphaMode::Matte(MAGENTA),
     );
-    for px in out.pixels.chunks_exact(4) {
+    for px in out.pixels.as_chunks::<4>().0 {
         assert_eq!(px[3], 255, "matte must produce a fully opaque image");
     }
 }
@@ -80,7 +80,7 @@ fn threshold_is_binary_and_keeps_rgb() {
         img(vec![1, 2, 3, 0, 4, 5, 6, 127, 7, 8, 9, 128, 1, 1, 1, 255]),
         &AlphaMode::Threshold(128),
     );
-    let alphas: Vec<u8> = out.pixels.chunks_exact(4).map(|p| p[3]).collect();
+    let alphas: Vec<u8> = out.pixels.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
     assert_eq!(alphas, vec![0, 0, 255, 255], "alpha >= t is opaque");
     // RGB is untouched by thresholding.
     assert_eq!(&out.pixels[0..3], &[1, 2, 3]);
@@ -96,7 +96,7 @@ fn threshold_boundary_is_inclusive() {
 #[test]
 fn threshold_zero_makes_everything_opaque() {
     let out = apply_alpha_mode(img(vec![0, 0, 0, 0, 0, 0, 0, 1]), &AlphaMode::Threshold(0));
-    assert!(out.pixels.chunks_exact(4).all(|p| p[3] == 255));
+    assert!(out.pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn threshold_255_keeps_only_fully_opaque() {
         img(vec![0, 0, 0, 254, 0, 0, 0, 255]),
         &AlphaMode::Threshold(255),
     );
-    let alphas: Vec<u8> = out.pixels.chunks_exact(4).map(|p| p[3]).collect();
+    let alphas: Vec<u8> = out.pixels.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
     assert_eq!(alphas, vec![0, 255]);
 }
 

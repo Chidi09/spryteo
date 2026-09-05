@@ -76,7 +76,7 @@ pub fn analyze_luma(image: &RasterImage, cfg: &LumaConfig) -> LumaInfo {
     let dark_on_light = background >= 128.0;
 
     let mut d_vals: Vec<f32> = Vec::new();
-    for pixel in image.pixels.chunks_exact(4) {
+    for pixel in image.pixels.as_chunks::<4>().0 {
         let a = pixel[3];
         if a < cfg.alpha_min {
             continue;
@@ -111,7 +111,7 @@ pub fn luma_coverage(image: &RasterImage, info: &LumaInfo, cfg: &LumaConfig) -> 
     let total = (image.width as usize) * (image.height as usize);
     let mut coverage = Vec::with_capacity(total);
 
-    for pixel in image.pixels.chunks_exact(4) {
+    for pixel in image.pixels.as_chunks::<4>().0 {
         let a = pixel[3];
         if a < cfg.alpha_min || info.ink_ref <= 0.0 {
             coverage.push(0.0);

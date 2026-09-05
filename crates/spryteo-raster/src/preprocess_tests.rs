@@ -471,7 +471,7 @@
         let out = downscale_to_max_dimension(two_bands(256, 256), 64, &Mode::Icon);
         let overshot = out
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .filter(|px| px[0] != 0 && px[0] != 255)
             .count();
         // Some genuine intermediate pixels appear at the edge from area
@@ -489,7 +489,7 @@
         let out = downscale_to_max_dimension(two_bands(64, 64), 16, &Mode::PixelArt);
         assert!(
             out.pixels
-                .chunks_exact(4)
+                .as_chunks::<4>().0.iter()
                 .all(|px| px[0] == 0 || px[0] == 255),
             "nearest-neighbour must never blend pixel-art colours"
         );
@@ -526,7 +526,7 @@
         };
 
         let out = downscale_to_max_dimension(src, 16, &Mode::Icon);
-        for px in out.pixels.chunks_exact(4) {
+        for px in out.pixels.as_chunks::<4>().0 {
             if px[3] > 32 {
                 assert!(
                     px[1] < 64,
@@ -543,7 +543,7 @@
         let out = downscale_to_max_dimension(src, 16, &Mode::PixelArt);
         assert!(out
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .all(|px| px[3] == 255 && (px[0] == 0 || px[0] == 255)));
     }
 

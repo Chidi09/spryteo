@@ -408,9 +408,14 @@ fn resize_rgba_with(
     filter: image::imageops::FilterType,
 ) -> RasterImage {
     let mut image = image;
-    let fully_opaque = image.pixels.chunks_exact(4).all(|px| px[3] == 255);
+    let fully_opaque = image
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|px| px[3] == 255);
     if !fully_opaque {
-        for px in image.pixels.chunks_exact_mut(4) {
+        for px in image.pixels.as_chunks_mut::<4>().0 {
             let a = px[3] as u32;
             px[0] = ((px[0] as u32 * a + 127) / 255) as u8;
             px[1] = ((px[1] as u32 * a + 127) / 255) as u8;
@@ -439,7 +444,7 @@ fn resize_rgba_with(
     if !fully_opaque {
         // Undo the premultiply. Zero-coverage pixels have no recoverable
         // colour, so they stay at 0 rather than inventing one.
-        for px in pixels.chunks_exact_mut(4) {
+        for px in pixels.as_chunks_mut::<4>().0 {
             let a = px[3] as u32;
             // Not a division guard: a fully transparent pixel carries no
             // recoverable colour, so it is forced to zero rather than

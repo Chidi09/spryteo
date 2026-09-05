@@ -234,7 +234,7 @@ pub fn image_to_hwc_f32(image: &RasterImage) -> (Vec<f32>, ResizeInfo) {
     let w = image.width;
     let total = (h * w) as usize;
     let mut data = Vec::with_capacity(total * 3);
-    for pixel in image.pixels.chunks_exact(4) {
+    for pixel in image.pixels.as_chunks::<4>().0 {
         data.push(pixel[0] as f32);
         data.push(pixel[1] as f32);
         data.push(pixel[2] as f32);

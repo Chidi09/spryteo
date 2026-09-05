@@ -113,7 +113,7 @@
         };
         let result = upscale_bicubic(&img, 4);
         let expected_pixel = [100u8, 150, 200, 255];
-        for chunk in result.pixels.chunks_exact(4) {
+        for chunk in result.pixels.as_chunks::<4>().0 {
             assert_eq!(chunk, &expected_pixel);
         }
     }

@@ -86,7 +86,7 @@ pub fn chroma_mask(image: &RasterImage, cfg: &ChromaConfig) -> Mask {
     let total = (w as usize) * (h as usize);
     let mut bits = Vec::with_capacity(total);
 
-    for pixel in image.pixels.chunks_exact(4) {
+    for pixel in image.pixels.as_chunks::<4>().0 {
         let r = pixel[0];
         let g = pixel[1];
         let b = pixel[2];
@@ -108,7 +108,7 @@ pub fn auto_sat_threshold(image: &RasterImage) -> u8 {
     let mut hist = [0u64; 256];
     let cfg = ChromaConfig::default();
 
-    for pixel in image.pixels.chunks_exact(4) {
+    for pixel in image.pixels.as_chunks::<4>().0 {
         let r = pixel[0];
         let g = pixel[1];
         let b = pixel[2];
@@ -168,7 +168,7 @@ pub fn ink_coverage(image: &RasterImage, sat_ref: u8, cfg: &ChromaConfig) -> Vec
     let total = (image.width as usize) * (image.height as usize);
     let mut coverage = Vec::with_capacity(total);
 
-    for pixel in image.pixels.chunks_exact(4) {
+    for pixel in image.pixels.as_chunks::<4>().0 {
         let r = pixel[0];
         let g = pixel[1];
         let b = pixel[2];
