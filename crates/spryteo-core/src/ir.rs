@@ -205,6 +205,26 @@ pub struct CurveSet {
     pub curves: Vec<Curve>,
 }
 
+/// Where one emitted curve came from in the trace pipeline (§3.12, #11).
+///
+/// `fit_contours` flattens `ContourSet` — layers of top-level contours, each
+/// with nested holes and islands — into one flat `CurveSet`, which loses the
+/// structure the scene graph needs to build real `<g>` groups. A parallel
+/// slice of these, one per emitted curve and in the same order, carries that
+/// structure forward.
+///
+/// A *component* is one top-level traced contour together with the islands
+/// nested inside its holes: the letter "O" and the dot inside a "!" are each
+/// one component. Components never span layers, so a two-colour mark is two
+/// components that the scene graph then nests by containment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurveOrigin {
+    /// Index into `LayerStack.layers` — also the layer's paint order.
+    pub layer: usize,
+    /// Index of the top-level contour within that layer.
+    pub component: usize,
+}
+
 // ── Stage 6: Scene graph ────────────────────────────────────────────────────
 
 /// A stroke specification for a scene node.
@@ -322,9 +342,42 @@ pub struct NodeMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Meta {
     pub nodes: Vec<NodeMeta>,
+    /// The `<g>` tree exactly as emitted in the SVG (§3.12, #11).
+    ///
+    /// Same shape, same ids, same order as the markup, so a consumer can
+    /// bind to a whole object without parsing the SVG. Empty only for a
+    /// scene with no groups.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<GroupMeta>,
     pub stats: Stats,
     #[serde(default)]
     pub current_color_applied: bool,
+}
+
+/// One `<g>` in the metadata sidecar's group tree.
+///
+/// Mirrors `Group`: `nodes` lists the ids painted directly by this group,
+/// in paint order, and `groups` its nested child groups, which paint after
+/// those nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupMeta {
+    pub id: String,
+    /// Ids of the nodes painted directly by this group, in paint order.
+    pub nodes: Vec<String>,
+    /// Nested child groups, painted after this group's own nodes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<GroupMeta>,
+}
+
+impl GroupMeta {
+    /// How many groups deep this subtree runs, counting itself as one.
+    ///
+    /// A caller deciding what is animatable cares about this: a group whose
+    /// depth is 1 is a single flat object, while a deeper one carries parts
+    /// that move with it.
+    pub fn depth(&self) -> usize {
+        1 + self.groups.iter().map(GroupMeta::depth).max().unwrap_or(0)
+    }
 }
 
 /// The top-level result returned by every conversion surface.

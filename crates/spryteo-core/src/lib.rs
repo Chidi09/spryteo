@@ -8,9 +8,9 @@ pub mod options;
 pub use cancel::{CancelToken, Clock, ManualClock, POLL_INTERVAL};
 pub use error::{LimitKind, SpryteoError};
 pub use ir::{
-    Bbox, ClassifiedInput, Contour, ContourSet, ConvertResult, Curve, CurveSet, Fill, GradientStop,
-    Group, Layer, LayerStack, Meta, Node, NodeMeta, PathElement, Primitive, RasterImage, Rgb,
-    SceneGraph, Shape, Stats, Stroke, SvgDocument, Transform,
+    Bbox, ClassifiedInput, Contour, ContourSet, ConvertResult, Curve, CurveOrigin, CurveSet, Fill,
+    GradientStop, Group, GroupMeta, Layer, LayerStack, Meta, Node, NodeMeta, PathElement,
+    Primitive, RasterImage, Rgb, SceneGraph, Shape, Stats, Stroke, SvgDocument, Transform,
 };
 pub use options::{
     format_hex_color, options_from_json, options_from_json_with_base, parse_alpha_mode,

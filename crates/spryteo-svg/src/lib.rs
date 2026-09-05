@@ -1,8 +1,8 @@
 //! SceneGraph to SVG emission, optimizer, metadata sidecar.
 
 use spryteo_core::ir::{
-    Bbox, ConvertResult, CurveSet, Fill, Group, Meta, Node, NodeMeta, PathElement, Primitive, Rgb,
-    SceneGraph, Shape, Stats, Stroke, Transform,
+    Bbox, ConvertResult, CurveOrigin, CurveSet, Fill, Group, GroupMeta, Meta, Node, NodeMeta,
+    PathElement, Primitive, Rgb, SceneGraph, Shape, Stats, Stroke, Transform,
 };
 use spryteo_core::options::{ConvertOptions, Grouping, IdStyle, OutputFormat, Preset, TOrigin};
 use spryteo_geom::{dedupe_ids, stable_id};
@@ -141,7 +141,17 @@ fn containment_polygon(shape: &Shape) -> Vec<(f64, f64)> {
         Shape::Path(segments) => spryteo_geom::path_geometry(segments).polygon,
         Shape::Primitive(prim) => {
             const N: usize = 32;
+            // A polygon through N points *on* an ellipse inscribes it: every
+            // edge cuts inside the true outline by up to 1 - cos(pi/N) of the
+            // radius. That is enough to report a shape as outside the ring it
+            // genuinely sits within — traced anti-aliasing rings differ by
+            // well under a percent of radius — so the sample radius is scaled
+            // out to make the polygon circumscribe instead. Containment then
+            // errs towards including a borderline shape rather than
+            // fabricating an overlap that the geometry does not have.
+            let circumscribe = 1.0 / (std::f64::consts::PI / N as f64).cos();
             let sample = |cx: f64, cy: f64, rx: f64, ry: f64, rot: f64| {
+                let (rx, ry) = (rx * circumscribe, ry * circumscribe);
                 (0..N)
                     .map(|i| {
                         let t = std::f64::consts::TAU * i as f64 / N as f64;
@@ -1275,6 +1285,10 @@ fn is_shape_inside(
     bbox_b: &Bbox,
     area_b: f64,
 ) -> bool {
+    // Strictly smaller by a clear margin. Traced anti-aliasing can leave
+    // several rings with the same area to within floating-point noise, and
+    // those are coincident outlines rather than nested ones: which contained
+    // which would be arbitrary, so neither does.
     if area_a <= 0.0 || area_b <= 0.0 || area_a >= area_b * 0.98 {
         return false;
     }
@@ -1307,6 +1321,62 @@ pub fn build_scene_graph(
     transform_origin: &TOrigin,
     fills: &[Fill],
     arcs: bool,
+) -> SceneGraph {
+    build_scene_graph_with_origins(
+        curves,
+        id_style,
+        transform_origin,
+        fills,
+        arcs,
+        &SceneGrouping::default(),
+    )
+}
+
+/// The provenance and canvas context needed to build real `<g>` groups (#11).
+///
+/// Defaults to "no provenance", which reproduces the historical one-group-
+/// per-shape scene.
+#[derive(Debug, Clone, Default)]
+pub struct SceneGrouping<'a> {
+    /// One [`CurveOrigin`] per curve, in the same order as `curves.curves`.
+    /// Empty disables component grouping.
+    pub origins: &'a [CurveOrigin],
+    /// Canvas size in pixels, used only to recognise a backdrop.
+    pub canvas: Option<(u32, u32)>,
+}
+
+/// A component covering at least this fraction of the canvas is treated as a
+/// backdrop and never adopts children.
+///
+/// A background layer's bbox contains everything else on the canvas, so plain
+/// containment would nest the entire drawing inside it. That reads as "the
+/// artwork is part of the backdrop", and worse, animating the backdrop would
+/// drag the artwork with it. A backdrop is scenery: it stays a sibling.
+const BACKDROP_COVERAGE: f64 = 0.9;
+
+/// [`build_scene_graph`] with the trace-pipeline provenance needed to build
+/// real groups (#11).
+///
+/// `origins` carries one [`CurveOrigin`] per curve in `curves.curves`, in the
+/// same order — the engine builds it from the same `ContourSet` walk that
+/// produces `fills`. With it, every top-level traced contour and the islands
+/// inside its holes become one `<g>`, and those groups are then nested by
+/// geometric containment, so a shape that sits inside another is emitted
+/// inside its group.
+///
+/// Passing an empty slice keeps the older behaviour of one `<g>` per shape,
+/// which is what the flat entry point above does.
+///
+/// Paint order is preserved in both cases: groups appear in the order their
+/// first shape is painted, a group's own nodes precede its child groups, and
+/// no shape ever moves relative to another.
+pub fn build_scene_graph_with_origins(
+    curves: &CurveSet,
+    id_style: &IdStyle,
+    transform_origin: &TOrigin,
+    fills: &[Fill],
+    arcs: bool,
+    grouping: &SceneGrouping<'_>,
 ) -> SceneGraph {
     let mut groups = Vec::new();
 
@@ -1385,6 +1455,14 @@ pub fn build_scene_graph(
     // Stable: shapes at equal depth keep their existing quantization order,
     // preserving current behavior (and byte-identical output) for scenes
     // without nesting.
+    //
+    // This runs whether or not provenance is available. It is not merely a
+    // nesting concern: shapes that *nearly* contain one another — the
+    // concentric anti-aliasing rings around a traced disc, whose areas sit
+    // within a couple of percent — fail the strict containment test used
+    // for grouping, so only this sort keeps them painting back-to-front.
+    // Grouping is layered on top of the order it produces, never instead
+    // of it.
     let mut ordered_indices: Vec<usize> = (0..n).collect();
     ordered_indices.sort_by_key(|&i| depths[i]);
 
@@ -1439,20 +1517,170 @@ pub fn build_scene_graph(
             shape,
         };
 
-        let group_id = if id.is_empty() {
-            "".to_string()
-        } else {
-            format!("g-{}", id)
-        };
-
-        let group = Group {
-            id: group_id,
-            nodes: vec![node],
-            groups: vec![],
-        };
-
-        groups.push(group);
+        groups.push((i, node));
     }
+
+    assemble_groups(groups, grouping, &polys, &bboxes, &areas)
+}
+
+/// Turn the painted shapes into the `<g>` tree.
+///
+/// `painted` holds `(curve index, node)` in final paint order. Without
+/// provenance each shape becomes its own group, which is the historical
+/// behaviour. With it, shapes are gathered into their traced components and
+/// components are nested by containment.
+///
+/// ## Why this does not disturb the rendering
+///
+/// A group paints its own nodes before its child groups, so the flattened
+/// emission order of the tree is its pre-order traversal — depth-first, while
+/// the paint order arriving here is breadth-first (see the containment depth
+/// sort in `build_scene_graph_with_origins`). Nesting therefore does move
+/// shapes relative to one another, and it is worth being precise about why
+/// that is safe.
+///
+/// Reordering two shapes is only visible when they overlap. Containment
+/// nesting pulls a shape ahead only of shapes that do *not* contain it and
+/// that it does not contain — and for clean traced geometry, regions are
+/// laminar: any two either nest or are disjoint, so those shapes are disjoint
+/// and the swap is invisible. The interesting case is the non-laminar one:
+/// the concentric anti-aliasing rings around a traced disc genuinely overlap
+/// while sitting within a couple of percent of one another's area, so strict
+/// containment reports neither inside the other. Such shapes always land at
+/// equal containment depth, which makes them siblings here — and sibling
+/// order is taken straight from the paint order and never rearranged. The
+/// pairs whose order actually matters are exactly the pairs this function
+/// leaves alone.
+fn assemble_groups(
+    painted: Vec<(usize, Node)>,
+    grouping: &SceneGrouping<'_>,
+    polys: &[Vec<(f64, f64)>],
+    bboxes: &[Bbox],
+    areas: &[f64],
+) -> SceneGraph {
+    let origins = grouping.origins;
+    let group_id_for = |node: &Node| {
+        if node.id.is_empty() {
+            String::new()
+        } else {
+            format!("g-{}", node.id)
+        }
+    };
+
+    if origins.is_empty() {
+        return SceneGraph {
+            groups: painted
+                .into_iter()
+                .map(|(_, node)| Group {
+                    id: group_id_for(&node),
+                    nodes: vec![node],
+                    groups: Vec::new(),
+                })
+                .collect(),
+        };
+    }
+
+    // Bucket shapes into components, keeping first-appearance order so the
+    // groups paint in the sequence their shapes did.
+    let mut order: Vec<CurveOrigin> = Vec::new();
+    let mut buckets: Vec<Vec<Node>> = Vec::new();
+    let mut opener: Vec<usize> = Vec::new();
+    for (i, node) in painted {
+        let origin = origins.get(i).copied().unwrap_or(CurveOrigin {
+            layer: usize::MAX,
+            component: i,
+        });
+        match order.iter().position(|o| *o == origin) {
+            Some(pos) => buckets[pos].push(node),
+            None => {
+                order.push(origin);
+                buckets.push(vec![node]);
+                // The component's first shape in paint order is also its
+                // shallowest, so it is the contour the rest sit inside — a
+                // sounder stand-in for the component than the largest-area
+                // member, which can be a stray island.
+                opener.push(i);
+            }
+        }
+    }
+
+    let n = buckets.len();
+
+    // Scenery, not a parent: see `BACKDROP_COVERAGE`.
+    let canvas_area = grouping
+        .canvas
+        .map(|(w, h)| f64::from(w) * f64::from(h))
+        .filter(|a| *a > 0.0);
+    let is_backdrop = |component: usize| match canvas_area {
+        Some(canvas) => areas[opener[component]] >= canvas * BACKDROP_COVERAGE,
+        None => false,
+    };
+
+    // Nest a component under the *last-painted* component that contains it,
+    // not the smallest one. Both are containers, so either would read
+    // correctly as structure — but a group paints before its children, and
+    // the choice therefore fixes where the child lands in the output. A
+    // shape contained by several others has to paint after all of them; only
+    // the last of them puts it there. Choosing the smallest instead is what
+    // slides a traced highlight back underneath the coincident rings that
+    // were meant to sit behind it.
+    //
+    // Containment uses the real flattened outline rather than the bounding
+    // box, so a shape merely sharing a box with another is not swallowed by
+    // it. No cycle is possible: a container is strictly larger in area, so
+    // parent links climb a strict order and must terminate.
+    let mut parent: Vec<Option<usize>> = vec![None; n];
+    for a in 0..n {
+        let ra = opener[a];
+        parent[a] = (0..n).rfind(|&b| {
+            if b == a || is_backdrop(b) {
+                return false;
+            }
+            let rb = opener[b];
+            is_shape_inside(
+                &polys[ra],
+                &bboxes[ra],
+                areas[ra],
+                &polys[rb],
+                &bboxes[rb],
+                areas[rb],
+            )
+        });
+    }
+
+    // Children inherit first-appearance order from the bucket order.
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (a, p) in parent.iter().enumerate() {
+        if let Some(p) = *p {
+            children[p].push(a);
+        }
+    }
+
+    fn build(
+        idx: usize,
+        buckets: &mut [Option<Vec<Node>>],
+        children: &[Vec<usize>],
+        group_id_for: &dyn Fn(&Node) -> String,
+    ) -> Group {
+        let nodes = buckets[idx]
+            .take()
+            .expect("each component is built exactly once");
+        let id = nodes.first().map(group_id_for).unwrap_or_default();
+        Group {
+            id,
+            groups: children[idx]
+                .iter()
+                .map(|&c| build(c, buckets, children, group_id_for))
+                .collect(),
+            nodes,
+        }
+    }
+
+    let mut owned: Vec<Option<Vec<Node>>> = buckets.into_iter().map(Some).collect();
+    let groups = (0..n)
+        .filter(|&a| parent[a].is_none())
+        .map(|a| build(a, &mut owned, &children, &group_id_for))
+        .collect();
 
     SceneGraph { groups }
 }
@@ -1496,6 +1724,7 @@ pub fn emit_svg(
 
     let meta = Meta {
         nodes: nodes_meta,
+        groups: build_group_metas(scene),
         stats,
         current_color_applied,
     };
@@ -1558,6 +1787,21 @@ pub fn build_node_metas(scene: &SceneGraph, arcs: bool) -> Vec<NodeMeta> {
         walk_group(group, arcs, &mut nodes_meta, &mut node_index);
     }
     nodes_meta
+}
+
+/// Mirror the scene's `<g>` tree into the metadata sidecar (#11).
+///
+/// Walks the same groups, in the same order, that `serialize_svg` emits, so
+/// the tree in `Meta` and the tree in the markup can never disagree.
+pub fn build_group_metas(scene: &SceneGraph) -> Vec<GroupMeta> {
+    fn walk(group: &Group) -> GroupMeta {
+        GroupMeta {
+            id: group.id.clone(),
+            nodes: group.nodes.iter().map(|n| n.id.clone()).collect(),
+            groups: group.groups.iter().map(walk).collect(),
+        }
+    }
+    scene.groups.iter().map(walk).collect()
 }
 
 fn count_paths_recursive(group: &Group, arcs: bool, count: &mut usize) {
@@ -2106,6 +2350,7 @@ pub fn emit_stroke_svg(
 
     let meta = Meta {
         nodes: nodes_meta,
+        groups: build_group_metas(scene),
         stats,
         current_color_applied,
     };

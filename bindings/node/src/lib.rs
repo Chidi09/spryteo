@@ -188,4 +188,37 @@ mod tests {
         let res_fill = convert_impl(&bytes_fill, r#"{"stroke": false}"#).unwrap();
         assert!(!res_fill.svg.contains("pathLength="));
     }
+    /// A red disc, a dark blue disc inside it and a yellow core inside that,
+    /// on a white ground: one object built from several colour layers.
+    ///
+    /// Grouping is what makes such an object animatable as an object rather
+    /// than as a handful of unrelated quantization fragments, and #11 asks
+    /// for it on every surface, so each surface checks it on this same
+    /// fixture.
+    const MULTICOLOR_OBJECT: &[u8] = include_bytes!("../../../testdata/multicolor_object_64.png");
+
+    fn assert_multicolor_object_grouped(svg: &str, meta: &spryteo_core::ir::Meta) {
+        // The ground stands on its own; the object is a single three-deep
+        // tree rather than three siblings.
+        assert_eq!(
+            meta.groups.len(),
+            2,
+            "expected the ground and one object, got {:?}",
+            meta.groups.iter().map(|g| &g.id).collect::<Vec<_>>()
+        );
+        assert_eq!(meta.groups[0].depth(), 1, "the ground adopts nothing");
+        assert_eq!(meta.groups[1].depth(), 3, "the object nests three deep");
+
+        // And the SVG carries the same shape the metadata describes.
+        assert!(
+            svg.contains("</g></g></g>"),
+            "SVG should close a three-deep group chain: {svg}"
+        );
+    }
+
+    #[test]
+    fn a_multicolor_object_comes_back_as_one_nested_group_tree() {
+        let res = convert_impl(MULTICOLOR_OBJECT, "{}").unwrap();
+        assert_multicolor_object_grouped(&res.svg, &res.meta);
+    }
 }

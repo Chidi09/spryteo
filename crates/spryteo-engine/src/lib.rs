@@ -14,8 +14,8 @@
 pub mod validate;
 
 use spryteo_core::{
-    CancelToken, ClassifiedInput, ContourSet, ConvertOptions, ConvertResult, Fill, Grouping,
-    LayerStack, Meta, Mode, RasterImage, SpryteoError, Stats, Tri,
+    CancelToken, ClassifiedInput, ContourSet, ConvertOptions, ConvertResult, CurveOrigin, Fill,
+    Grouping, LayerStack, Meta, Mode, RasterImage, SpryteoError, Stats, Tri,
 };
 use spryteo_semantic::Mask;
 
@@ -272,12 +272,16 @@ fn run_fill(
         cancel,
     )?;
 
-    let scene = spryteo_svg::build_scene_graph(
+    let scene = spryteo_svg::build_scene_graph_with_origins(
         &curve_set,
         &opts.id_style,
         &opts.transform_origin,
         &fills,
         opts.arcs,
+        &spryteo_svg::SceneGrouping {
+            origins: &build_curve_origins(&contour_set),
+            canvas: Some((width, height)),
+        },
     );
 
     let scene = apply_semantic_grouping(scene, &layer_stack, &contour_set, masks, opts, cancel)?;
@@ -308,6 +312,7 @@ fn apply_semantic_grouping(
 
     let meta = Meta {
         nodes: spryteo_svg::build_node_metas(&scene, opts.arcs),
+        groups: spryteo_svg::build_group_metas(&scene),
         stats: Stats {
             node_count: 0,
             path_count: 0,
@@ -395,6 +400,23 @@ pub fn build_fills(
         fills.extend(std::iter::repeat_n(fill, count));
     }
     Ok(fills)
+}
+
+/// One [`CurveOrigin`] per emitted curve, in `fit_contours` order (#11).
+///
+/// Walks layers and top-level contours exactly as [`build_fills`] does, and
+/// for the same reason: `emitted_curve_count` is the only correct way to
+/// align per-curve data with the flattened `CurveSet`. Keeping the two walks
+/// identical is what guarantees a shape's fill and its group agree.
+pub fn build_curve_origins(contour_set: &ContourSet) -> Vec<CurveOrigin> {
+    let mut origins = Vec::new();
+    for (layer, contours) in contour_set.layers.iter().enumerate() {
+        for (component, contour) in contours.iter().enumerate() {
+            let count = contour.emitted_curve_count();
+            origins.extend(std::iter::repeat_n(CurveOrigin { layer, component }, count));
+        }
+    }
+    origins
 }
 
 /// Whether gradient detection should run for the resolved mode: `On`

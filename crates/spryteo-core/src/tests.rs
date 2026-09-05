@@ -207,6 +207,7 @@ fn meta_serde_round_trip() {
                 suggested_draw_order: 1,
             },
         ],
+        groups: Vec::new(),
         stats: Stats {
             node_count: 2,
             path_count: 1,

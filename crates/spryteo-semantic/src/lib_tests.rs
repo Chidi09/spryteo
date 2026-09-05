@@ -92,6 +92,7 @@
 
         let meta = Meta {
             nodes: vec![meta_a, meta_b, meta_c],
+            groups: Vec::new(),
             stats: Stats {
                 node_count: 3,
                 path_count: 3,
@@ -164,6 +165,7 @@
 
         let meta = Meta {
             nodes: vec![meta_a, meta_b],
+            groups: Vec::new(),
             stats: Stats {
                 node_count: 2,
                 path_count: 2,
@@ -231,6 +233,7 @@
                 make_test_node_meta("s-0", bbox.clone(), 4.0, 0),
                 make_test_node_meta("s-1", bbox.clone(), 4.0, 1),
             ],
+            groups: Vec::new(),
             stats: Stats {
                 node_count: 2,
                 path_count: 2,
@@ -308,6 +311,7 @@
         };
         let meta = Meta {
             nodes: vec![make_test_node_meta("s-0", bbox, 4.0, 0)],
+            groups: Vec::new(),
             stats: Stats {
                 node_count: 1,
                 path_count: 1,
@@ -375,4 +379,190 @@
         assert_eq!(cursor, 2, "Total node count must be 2");
         assert_eq!(layer_node_ranges[0].1, 0..1);
         assert_eq!(layer_node_ranges[1].1, 1..2);
+    }
+
+    /// A sun sitting in the sky: the two fixtures below share this setup and
+    /// differ only in the masks handed to `group_by_masks`.
+    ///
+    /// Geometry alone can only say "the sun is inside the sky", so containment
+    /// nests it there — and a nested group cannot be animated without dragging
+    /// its container along. Telling the sun apart from the sky is exactly what
+    /// masks are for.
+    fn sun_in_sky() -> (LayerStack, ContourSet, SceneGraph, Meta) {
+        // 4x4 canvas; the sun is the 2x2 block in the middle.
+        const SUN: [u8; 16] = [
+            0, 0, 0, 0, //
+            0, 255, 255, 0, //
+            0, 255, 255, 0, //
+            0, 0, 0, 0,
+        ];
+
+        let layer_stack = LayerStack {
+            layers: vec![
+                Layer {
+                    mask: vec![255; 16],
+                    color: Rgb {
+                        r: 135,
+                        g: 206,
+                        b: 235,
+                    },
+                    z_order: 0,
+                },
+                Layer {
+                    mask: SUN.to_vec(),
+                    color: Rgb {
+                        r: 255,
+                        g: 214,
+                        b: 0,
+                    },
+                    z_order: 1,
+                },
+            ],
+        };
+
+        let contour_set = ContourSet {
+            layers: vec![
+                vec![Contour {
+                    points: vec![],
+                    children: vec![],
+                }],
+                vec![Contour {
+                    points: vec![],
+                    children: vec![],
+                }],
+            ],
+        };
+
+        // The sun starts nested inside the sky, as containment grouping leaves it.
+        let mut sky = make_test_group("g-s-sky", "s-sky");
+        sky.groups = vec![make_test_group("g-s-sun", "s-sun")];
+        let scene = SceneGraph { groups: vec![sky] };
+
+        let meta = Meta {
+            nodes: vec![
+                make_test_node_meta(
+                    "s-sky",
+                    Bbox {
+                        x_min: 0.0,
+                        y_min: 0.0,
+                        x_max: 4.0,
+                        y_max: 4.0,
+                    },
+                    16.0,
+                    0,
+                ),
+                make_test_node_meta(
+                    "s-sun",
+                    Bbox {
+                        x_min: 1.0,
+                        y_min: 1.0,
+                        x_max: 3.0,
+                        y_max: 3.0,
+                    },
+                    4.0,
+                    1,
+                ),
+            ],
+            groups: Vec::new(),
+            stats: Stats {
+                node_count: 2,
+                path_count: 2,
+                byte_count: 0,
+            },
+            current_color_applied: false,
+        };
+
+        (layer_stack, contour_set, scene, meta)
+    }
+
+    #[test]
+    fn a_mask_lifts_the_sun_out_of_the_sky() {
+        let (layer_stack, contour_set, scene, meta) = sun_in_sky();
+
+        // Segmentation masks partition the image, so the sky mask stops at
+        // the sun rather than covering it. That matters: coverage is measured
+        // as the fraction of a layer falling inside a mask, which a mask
+        // spanning the whole canvas would max out for every layer at once.
+        let sky_mask = Mask {
+            id: "sky".to_string(),
+            width: 4,
+            height: 4,
+            pixels: vec![
+                255, 255, 255, 255, //
+                255, 0, 0, 255, //
+                255, 0, 0, 255, //
+                255, 255, 255, 255,
+            ],
+        };
+        let sun_mask = Mask {
+            id: "sun".to_string(),
+            width: 4,
+            height: 4,
+            pixels: vec![
+                0, 0, 0, 0, //
+                0, 255, 255, 0, //
+                0, 255, 255, 0, //
+                0, 0, 0, 0,
+            ],
+        };
+
+        let (grouped, updated) = group_by_masks(
+            &layer_stack,
+            &contour_set,
+            &scene,
+            &meta,
+            &[sky_mask, sun_mask],
+            0.6,
+        );
+
+        // Three quarters of the sky layer falls in the sky mask and all of
+        // the sun falls in the sun mask, so both clear the 60% gate — on
+        // different masks. The sun is therefore no longer the sky's child,
+        // and can be animated on its own.
+        let ids: Vec<&str> = grouped.groups.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(ids, ["g-mask-sky", "g-mask-sun"]);
+        assert_eq!(updated.nodes[0].group, "g-mask-sky");
+        assert_eq!(updated.nodes[1].group, "g-mask-sun");
+
+        let sky_group = &grouped.groups[0];
+        assert_eq!(sky_group.groups.len(), 1, "sky keeps only its own shape");
+        assert_eq!(sky_group.groups[0].id, "g-s-sky");
+        assert!(
+            sky_group.groups[0].groups.is_empty(),
+            "the sun must not still hang off the sky"
+        );
+    }
+
+    #[test]
+    fn a_mask_the_sun_barely_touches_leaves_it_in_the_sky() {
+        let (layer_stack, contour_set, scene, meta) = sun_in_sky();
+
+        // This mask catches one of the sun's four pixels: 25% coverage,
+        // under the 60% gate. A weak mask is worse than no mask, because
+        // acting on it would split an object on a guess, so the gate holds
+        // and the geometric nesting survives untouched.
+        let weak_sun = Mask {
+            id: "sun".to_string(),
+            width: 4,
+            height: 4,
+            pixels: vec![
+                0, 0, 0, 0, //
+                0, 255, 0, 0, //
+                0, 0, 0, 0, //
+                0, 0, 0, 0,
+            ],
+        };
+
+        let (grouped, updated) =
+            group_by_masks(&layer_stack, &contour_set, &scene, &meta, &[weak_sun], 0.6);
+
+        assert_eq!(grouped.groups.len(), 1);
+        assert_eq!(grouped.groups[0].id, "g-s-sky");
+        assert_eq!(
+            grouped.groups[0].groups.len(),
+            1,
+            "the sun stays nested in the sky"
+        );
+        assert_eq!(grouped.groups[0].groups[0].id, "g-s-sun");
+        assert_eq!(updated.nodes[1].group, "g-s-sun");
     }

@@ -1,6 +1,7 @@
     use super::*;
     use spryteo_core::ir::{
-        Curve, CurveSet, Fill, GradientStop, PathElement, Primitive, Rgb, Shape,
+        Curve, CurveOrigin, CurveSet, Fill, GradientStop, GroupMeta, PathElement, Primitive, Rgb,
+        Shape,
     };
     use spryteo_core::options::{ConvertOptions, IdStyle, OutputFormat, Preset, TOrigin};
 
@@ -2548,4 +2549,338 @@
         assert_eq!(ids.len(), 3);
         assert_eq!(ids[1], format!("{}-2", ids[0]));
         assert_eq!(ids[2], format!("{}-3", ids[0]));
+    }
+
+    /// Reads the `<g>`/element nesting straight back out of an emitted SVG,
+    /// as `(depth, id)` in document order. Deliberately a dumb tag scanner
+    /// rather than anything that shares code with the emitter — the point is
+    /// to check the metadata against what a reader of the file would see.
+    fn svg_tree(svg: &str) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        let mut depth = 0usize;
+        let mut rest = svg;
+        while let Some(lt) = rest.find('<') {
+            rest = &rest[lt..];
+            let gt = match rest.find('>') {
+                Some(gt) => gt,
+                None => break,
+            };
+            let tag = &rest[..gt + 1];
+            rest = &rest[gt + 1..];
+
+            if tag.starts_with("</g") {
+                depth -= 1;
+                continue;
+            }
+            let id = tag.split_once("id=\"").map(|(_, r)| {
+                r.split_once('"')
+                    .map(|(id, _)| id)
+                    .unwrap_or("")
+                    .to_string()
+            });
+            if tag.starts_with("<g") {
+                depth += 1;
+                out.push((depth, id.unwrap_or_default()));
+            } else if let Some(id) = id {
+                // A painted element, recorded at the depth of its group.
+                out.push((depth, id));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_metadata_group_tree_matches_the_emitted_svg() {
+        // A three-deep chain with a sibling, so the walk has to get both
+        // descent and return right.
+        fn node(id: &str) -> Node {
+            Node {
+                id: id.to_string(),
+                fill: Some(Fill::Solid(Rgb { r: 1, g: 2, b: 3 })),
+                stroke: None,
+                transform: Transform {
+                    translate_x: 0.0,
+                    translate_y: 0.0,
+                },
+                shape: Shape::Primitive(Primitive::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 4.0,
+                    height: 4.0,
+                    rx: None,
+                    ry: None,
+                }),
+            }
+        }
+        let inner = Group {
+            id: "g-s-inner".into(),
+            nodes: vec![node("s-inner")],
+            groups: vec![],
+        };
+        let middle = Group {
+            id: "g-s-middle".into(),
+            // Two nodes, so "nodes then child groups" ordering is exercised.
+            nodes: vec![node("s-middle"), node("s-middle-2")],
+            groups: vec![inner],
+        };
+        let outer = Group {
+            id: "g-s-outer".into(),
+            nodes: vec![node("s-outer")],
+            groups: vec![middle],
+        };
+        let sibling = Group {
+            id: "g-s-sibling".into(),
+            nodes: vec![node("s-sibling")],
+            groups: vec![],
+        };
+        let scene = SceneGraph {
+            groups: vec![outer, sibling],
+        };
+
+        let res = emit_svg(&scene, 64, 64, &make_test_options(), None);
+
+        // Flatten the metadata tree the same way, then require the two to
+        // agree exactly: this is the "metadata describes the SVG" contract.
+        fn flatten(groups: &[GroupMeta], depth: usize, out: &mut Vec<(usize, String)>) {
+            for g in groups {
+                out.push((depth, g.id.clone()));
+                out.extend(g.nodes.iter().map(|n| (depth, n.clone())));
+                flatten(&g.groups, depth + 1, out);
+            }
+        }
+        let mut from_meta = Vec::new();
+        flatten(&res.meta.groups, 1, &mut from_meta);
+
+        assert_eq!(svg_tree(&res.svg), from_meta);
+        assert_eq!(
+            from_meta,
+            vec![
+                (1, "g-s-outer".to_string()),
+                (1, "s-outer".to_string()),
+                (2, "g-s-middle".to_string()),
+                (2, "s-middle".to_string()),
+                (2, "s-middle-2".to_string()),
+                (3, "g-s-inner".to_string()),
+                (3, "s-inner".to_string()),
+                (1, "g-s-sibling".to_string()),
+                (1, "s-sibling".to_string()),
+            ]
+        );
+        assert_eq!(res.meta.groups[0].depth(), 3);
+        assert_eq!(res.meta.groups[1].depth(), 1);
+    }
+
+    /// Three concentric discs traced as three separate components, plus a
+    /// disjoint one off to the side.
+    fn concentric_curves() -> (CurveSet, Vec<Fill>, Vec<CurveOrigin>) {
+        fn disc(cx: f64, cy: f64, r: f64) -> Curve {
+            Curve {
+                segments: vec![
+                    PathElement::MoveTo(cx - r, cy),
+                    PathElement::LineTo(cx, cy - r),
+                    PathElement::LineTo(cx + r, cy),
+                    PathElement::LineTo(cx, cy + r),
+                    PathElement::ClosePath,
+                ],
+                primitive: None,
+            }
+        }
+        fn solid(r: u8, g: u8, b: u8) -> Fill {
+            Fill::Solid(Rgb { r, g, b })
+        }
+        let curves = CurveSet {
+            curves: vec![
+                disc(32.0, 32.0, 24.0),
+                disc(32.0, 32.0, 14.0),
+                disc(32.0, 32.0, 5.0),
+                disc(90.0, 32.0, 6.0),
+            ],
+        };
+        let fills = vec![
+            solid(214, 40, 40),
+            solid(0, 48, 73),
+            solid(252, 191, 73),
+            solid(80, 80, 80),
+        ];
+        // One component per layer, which is what tracing three nested colour
+        // regions produces.
+        let origins = (0..4)
+            .map(|layer| CurveOrigin {
+                layer,
+                component: 0,
+            })
+            .collect();
+        (curves, fills, origins)
+    }
+
+    #[test]
+    fn provenance_turns_containment_into_a_nested_group_tree() {
+        let (curves, fills, origins) = concentric_curves();
+        let scene = build_scene_graph_with_origins(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+            &SceneGrouping {
+                origins: &origins,
+                canvas: Some((128, 64)),
+            },
+        );
+
+        // The three concentric discs are one object three groups deep; the
+        // disjoint disc stands alone beside it.
+        assert_eq!(scene.groups.len(), 2);
+        let metas = build_group_metas(&scene);
+        assert_eq!(metas[0].depth(), 3);
+        assert_eq!(metas[1].depth(), 1);
+        assert_eq!(metas[0].nodes, vec!["s-0"]);
+        assert_eq!(metas[0].groups[0].nodes, vec!["s-1"]);
+        assert_eq!(metas[0].groups[0].groups[0].nodes, vec!["s-2"]);
+        assert_eq!(metas[1].nodes, vec!["s-3"]);
+    }
+
+    #[test]
+    fn without_provenance_the_scene_stays_one_group_per_shape() {
+        let (curves, fills, _) = concentric_curves();
+        let scene = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+
+        // The historical shape: no provenance, no tree.
+        assert_eq!(scene.groups.len(), 4);
+        assert!(scene.groups.iter().all(|g| g.groups.is_empty()));
+    }
+
+    #[test]
+    fn a_backdrop_does_not_adopt_the_drawing() {
+        let (mut curves, mut fills, mut origins) = concentric_curves();
+        // A white ground covering the canvas, traced first as layer 0.
+        curves.curves.insert(
+            0,
+            Curve {
+                segments: vec![
+                    PathElement::MoveTo(0.0, 0.0),
+                    PathElement::LineTo(128.0, 0.0),
+                    PathElement::LineTo(128.0, 64.0),
+                    PathElement::LineTo(0.0, 64.0),
+                    PathElement::ClosePath,
+                ],
+                primitive: None,
+            },
+        );
+        fills.insert(
+            0,
+            Fill::Solid(Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            }),
+        );
+        for origin in origins.iter_mut() {
+            origin.layer += 1;
+        }
+        origins.insert(
+            0,
+            CurveOrigin {
+                layer: 0,
+                component: 0,
+            },
+        );
+
+        let scene = build_scene_graph_with_origins(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+            &SceneGrouping {
+                origins: &origins,
+                canvas: Some((128, 64)),
+            },
+        );
+
+        // The ground contains everything geometrically, but adopting the
+        // drawing would mean animating the backdrop drags the artwork with
+        // it. Ground, object, stray disc: three siblings.
+        assert_eq!(scene.groups.len(), 3);
+        let metas = build_group_metas(&scene);
+        assert_eq!(metas[0].nodes, vec!["s-0"]);
+        assert!(metas[0].groups.is_empty(), "the backdrop adopts nothing");
+        assert_eq!(metas[1].depth(), 3);
+    }
+
+    #[test]
+    fn nesting_never_reorders_shapes_that_overlap() {
+        let (curves, fills, origins) = concentric_curves();
+        let opts = make_test_options();
+
+        let flat = build_scene_graph(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+        );
+        let grouped = build_scene_graph_with_origins(
+            &curves,
+            &IdStyle::Sequential,
+            &TOrigin::Baked,
+            &fills,
+            false,
+            &SceneGrouping {
+                origins: &origins,
+                canvas: Some((128, 64)),
+            },
+        );
+
+        let painted = |svg: &str| -> Vec<String> {
+            svg_tree(svg)
+                .into_iter()
+                .map(|(_, id)| id)
+                .filter(|id| !id.starts_with("g-"))
+                .collect()
+        };
+        let flat_painted = painted(&emit_svg(&flat, 128, 64, &opts, None).svg);
+        let grouped_painted = painted(&emit_svg(&grouped, 128, 64, &opts, None).svg);
+
+        // Grouping paints the same shapes, and only the same shapes.
+        let mut flat_sorted = flat_painted.clone();
+        let mut grouped_sorted = grouped_painted.clone();
+        flat_sorted.sort();
+        grouped_sorted.sort();
+        assert_eq!(flat_sorted, grouped_sorted);
+
+        // It does not paint them in the same sequence, and it is not supposed
+        // to: an ungrouped scene paints by containment depth, shallowest
+        // first, while a tree paints each branch to its end before starting
+        // the next. Here that lifts the disjoint disc `s-3` from second place
+        // to last.
+        assert_eq!(flat_painted, ["s-0", "s-3", "s-1", "s-2"]);
+        assert_eq!(grouped_painted, ["s-0", "s-1", "s-2", "s-3"]);
+
+        // What must hold is the narrower property that actually governs the
+        // rendering: two shapes only care about their order when they
+        // overlap, and for every overlapping pair the order is untouched.
+        // `s-3` overlaps nothing, so moving it is invisible.
+        let position = |painted: &[String], id: &str| {
+            painted
+                .iter()
+                .position(|p| p == id)
+                .expect("shape is painted")
+        };
+        for (behind, front) in [("s-0", "s-1"), ("s-0", "s-2"), ("s-1", "s-2")] {
+            assert!(
+                position(&flat_painted, behind) < position(&flat_painted, front),
+                "fixture check: {behind} paints behind {front}"
+            );
+            assert!(
+                position(&grouped_painted, behind) < position(&grouped_painted, front),
+                "{behind} must still paint behind {front} once grouped"
+            );
+        }
     }
