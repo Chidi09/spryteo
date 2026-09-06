@@ -38,6 +38,7 @@ export const ID = {
   site: `${SITE.url}/#website`,
   app: `${SITE.url}/#software`,
   source: `${SITE.url}/#sourcecode`,
+  blog: `${SITE.url}/blog#blog`,
   page: (path: string) => `${canonical(path)}#webpage`,
 } as const;
 
@@ -48,12 +49,6 @@ export function canonical(pathname: string): string {
   return `${SITE.url}${path.replace(/\/+$/, '')}`;
 }
 
-/**
- * URL of the generated Open Graph image for a page. Rendered on demand by
- * /og.png so every page gets art that names the page, instead of one shared
- * screenshot -- which is what earns the larger card treatment when a link is
- * pasted into Slack, iMessage, X or a search result.
- */
 /**
  * The social card for a page: a static PNG under /og/, generated from
  * src/lib/og-cards.js by `npm run og` and committed.
@@ -246,6 +241,53 @@ export function techArticle(opts: {
     publisher: { '@id': ID.org },
     inLanguage: 'en',
     proficiencyLevel: 'Beginner',
+  };
+}
+
+export function blogPosting(opts: {
+  path: string;
+  headline: string;
+  description: string;
+  image: string;
+  datePublished: string;
+  dateModified?: string;
+  section?: string;
+}): Node {
+  return {
+    '@type': 'BlogPosting',
+    '@id': `${canonical(opts.path)}#post`,
+    headline: opts.headline,
+    description: opts.description,
+    image: opts.image,
+    datePublished: opts.datePublished,
+    dateModified: opts.dateModified ?? opts.datePublished,
+    articleSection: opts.section,
+    about: { '@id': ID.app },
+    isPartOf: { '@id': ID.blog },
+    author: { '@id': ID.org },
+    publisher: { '@id': ID.org },
+    mainEntityOfPage: { '@id': ID.page(opts.path) },
+    inLanguage: 'en',
+  };
+}
+
+/** The Blog node itself, for the listing page. */
+export function blog(posts: { path: string; headline: string }[]): Node {
+  return {
+    '@type': 'Blog',
+    '@id': ID.blog,
+    name: `${SITE.name} blog`,
+    description: 'Notes on vectorization, structured SVG output, and the ideas behind Spryteo.',
+    url: canonical('/blog'),
+    isPartOf: { '@id': ID.site },
+    publisher: { '@id': ID.org },
+    inLanguage: 'en',
+    blogPost: posts.map((p) => ({
+      '@type': 'BlogPosting',
+      '@id': `${canonical(p.path)}#post`,
+      headline: p.headline,
+      url: canonical(p.path),
+    })),
   };
 }
 

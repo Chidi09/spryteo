@@ -1,0 +1,103 @@
+---
+import { getCollection, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import Header from '../../components/layout/Header.astro';
+import Footer from '../../components/layout/Footer.astro';
+import { blogPosting, ogImage } from '../../lib/seo';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog', ({ data }) => !data.draft);
+  return posts.map((post) => ({ params: { slug: post.id }, props: { post } }));
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+
+const path = `/blog/${post.id}`;
+const fmt = (d: Date) =>
+  d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+---
+
+<Base
+  title={`${post.data.title} — Spryteo`}
+  description={post.data.description}
+  crumbs={[
+    { name: 'Spryteo', path: '/' },
+    { name: 'Blog', path: '/blog' },
+    { name: post.data.title, path },
+  ]}
+  jsonLd={[
+    blogPosting({
+      path,
+      headline: post.data.title,
+      description: post.data.description,
+      image: ogImage(path),
+      datePublished: post.data.pubDate.toISOString(),
+      dateModified: post.data.updatedDate?.toISOString(),
+      section: post.data.topic,
+    }),
+  ]}
+>
+  <Header />
+  <main class="wrap">
+    <article>
+      <header>
+        <a href="/blog" class="back">← all posts</a>
+        <p class="topic">{post.data.topic}</p>
+        <h1>{post.data.title}</h1>
+        <p class="lede">{post.data.description}</p>
+        <time datetime={post.data.pubDate.toISOString()}>{fmt(post.data.pubDate)}</time>
+      </header>
+      <div class="prose">
+        <Content />
+      </div>
+    </article>
+  </main>
+  <Footer />
+</Base>
+
+<style>
+  .wrap { max-width: 720px; margin: 0 auto; padding: 96px 24px 120px; flex: 1; }
+  .back {
+    display: inline-block; color: var(--muted); font-family: var(--font-mono);
+    font-size: 13px; margin-bottom: 40px;
+  }
+  .back:hover { color: var(--accent); }
+  .topic {
+    color: var(--accent); font-family: var(--font-mono); font-size: 13px;
+    letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 16px;
+  }
+  h1 { font-size: clamp(30px, 4.6vw, 44px); letter-spacing: -0.03em; line-height: 1.1; margin: 0 0 20px; }
+  .lede { color: var(--muted); font-size: 19px; line-height: 1.6; margin: 0 0 20px; }
+  time { color: var(--muted); font-family: var(--font-mono); font-size: 13px; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 40px; margin-bottom: 48px; }
+
+  .prose { font-size: 17px; line-height: 1.75; }
+  .prose :global(h2) {
+    font-size: 26px; letter-spacing: -0.02em; margin: 56px 0 16px; scroll-margin-top: 96px;
+  }
+  .prose :global(h3) { font-size: 20px; margin: 40px 0 12px; }
+  .prose :global(p) { margin: 0 0 20px; }
+  .prose :global(ul), .prose :global(ol) { margin: 0 0 20px; padding-left: 24px; }
+  .prose :global(li) { margin-bottom: 8px; }
+  .prose :global(strong) { color: var(--text); font-weight: 600; }
+  .prose :global(blockquote) {
+    border-left: 2px solid var(--accent); margin: 32px 0; padding: 4px 0 4px 20px;
+    color: var(--muted);
+  }
+  .prose :global(code) {
+    font-family: var(--font-mono); font-size: 0.9em; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px;
+  }
+  .prose :global(pre) {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 20px; overflow-x: auto; margin: 0 0 24px;
+  }
+  .prose :global(pre code) { background: none; border: 0; padding: 0; font-size: 14px; }
+  .prose :global(table) { width: 100%; border-collapse: collapse; margin: 0 0 24px; font-size: 15px; }
+  .prose :global(th), .prose :global(td) {
+    border-bottom: 1px solid var(--border); padding: 10px 12px; text-align: left;
+  }
+  .prose :global(th) { color: var(--muted); font-weight: 500; }
+  .prose :global(hr) { border: 0; border-top: 1px solid var(--border); margin: 48px 0; }
+</style>

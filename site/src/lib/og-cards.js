@@ -30,6 +30,12 @@ export const cards = {
     title: 'Every option, every surface',
     kicker: 'CLI, Node, WebAssembly and MCP -- one engine, one set of options, one output.',
   },
+  '/blog': {
+    slug: 'blog',
+    eyebrow: 'writing',
+    title: 'Notes on vectorization',
+    kicker: 'Why structured SVG output is a different problem from tracing an outline.',
+  },
   '/sheet': {
     slug: 'sheet',
     eyebrow: 'sheet mode',
@@ -56,7 +62,13 @@ export function cardKey(pathname) {
   return trimmed === '' ? '/' : trimmed;
 }
 
-/** The card for a path, falling back to the home card for anything unlisted. */
+/**
+ * The card for a path. Individual posts share the blog card rather than each
+ * getting bespoke art, so writing a post never requires regenerating images.
+ */
 export function cardFor(pathname) {
-  return cards[cardKey(pathname)] ?? cards['/'];
+  const key = cardKey(pathname);
+  if (cards[key]) return cards[key];
+  if (key.startsWith('/blog/')) return cards['/blog'];
+  return cards['/'];
 }
