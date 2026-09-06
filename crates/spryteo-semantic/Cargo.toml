@@ -13,7 +13,7 @@ description = "SAM/ONNX segmentation and semantic grouping heuristics (feature-g
 ml = ["dep:ort", "dep:ndarray"]
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.2" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

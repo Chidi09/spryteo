@@ -10,7 +10,7 @@ documentation.workspace = true
 description = "Contour extraction: Suzuki-Abe border following, marching squares."
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.2" }
 serde.workspace = true
 thiserror.workspace = true
 rayon = { workspace = true, optional = true }

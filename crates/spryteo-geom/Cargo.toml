@@ -13,4 +13,4 @@ description = "Primitive recognition, geometry utilities, stable-ID hashing."
 serde.workspace = true
 thiserror.workspace = true
 blake3 = "1"
-spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.2" }

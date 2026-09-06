@@ -18,17 +18,17 @@ name = "spryteo_cli"
 path = "src/lib.rs"
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
-spryteo-engine = { path = "../spryteo-engine", version = "0.0.1", features = ["parallel"] }
-spryteo-raster = { path = "../spryteo-raster", version = "0.0.1" }
-spryteo-quant = { path = "../spryteo-quant", version = "0.0.1" }
-spryteo-trace = { path = "../spryteo-trace", version = "0.0.1", features = ["parallel"] }
-spryteo-fit = { path = "../spryteo-fit", version = "0.0.1", features = ["parallel"] }
-spryteo-svg = { path = "../spryteo-svg", version = "0.0.1" }
-spryteo-stroke = { path = "../spryteo-stroke", version = "0.0.1" }
-spryteo-sheet = { path = "../spryteo-sheet", version = "0.0.1" }
-spryteo-geom = { path = "../spryteo-geom", version = "0.0.1" }
-spryteo-semantic = { path = "../spryteo-semantic", version = "0.0.1" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.2" }
+spryteo-engine = { path = "../spryteo-engine", version = "0.0.2", features = ["parallel"] }
+spryteo-raster = { path = "../spryteo-raster", version = "0.0.2" }
+spryteo-quant = { path = "../spryteo-quant", version = "0.0.2" }
+spryteo-trace = { path = "../spryteo-trace", version = "0.0.2", features = ["parallel"] }
+spryteo-fit = { path = "../spryteo-fit", version = "0.0.2", features = ["parallel"] }
+spryteo-svg = { path = "../spryteo-svg", version = "0.0.2" }
+spryteo-stroke = { path = "../spryteo-stroke", version = "0.0.2" }
+spryteo-sheet = { path = "../spryteo-sheet", version = "0.0.2" }
+spryteo-geom = { path = "../spryteo-geom", version = "0.0.2" }
+spryteo-semantic = { path = "../spryteo-semantic", version = "0.0.2" }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

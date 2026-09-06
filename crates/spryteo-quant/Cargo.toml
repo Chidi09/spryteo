@@ -10,7 +10,7 @@ documentation.workspace = true
 description = "Color quantization, layering, palette handling."
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.2" }
 serde.workspace = true
 thiserror.workspace = true
 

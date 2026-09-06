@@ -10,7 +10,7 @@ documentation.workspace = true
 description = "SceneGraph to SVG emission, optimizer, metadata sidecar."
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
-spryteo-geom = { path = "../spryteo-geom", version = "0.0.1" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.2" }
+spryteo-geom = { path = "../spryteo-geom", version = "0.0.2" }
 serde.workspace = true
 thiserror.workspace = true

@@ -12,8 +12,8 @@ description = "Polygon simplification, corner detection, Bezier curve fitting."
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
-spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
-spryteo-geom = { path = "../spryteo-geom", version = "0.0.1" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.2" }
+spryteo-geom = { path = "../spryteo-geom", version = "0.0.2" }
 rayon = { workspace = true, optional = true }
 
 [features]

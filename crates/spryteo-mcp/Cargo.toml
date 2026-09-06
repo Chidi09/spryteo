@@ -14,8 +14,8 @@ name = "spryteo-mcp"
 path = "src/main.rs"
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
-spryteo-engine = { path = "../spryteo-engine", version = "0.0.1", features = ["parallel"] }
+spryteo-core = { path = "../spryteo-core", version = "0.0.2" }
+spryteo-engine = { path = "../spryteo-engine", version = "0.0.2", features = ["parallel"] }
 
 serde.workspace = true
 serde_json.workspace = true

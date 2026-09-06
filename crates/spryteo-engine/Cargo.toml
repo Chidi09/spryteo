@@ -10,14 +10,14 @@ documentation.workspace = true
 description = "spryteo conversion orchestration — the single engine behind the CLI, Node, WASM, and MCP surfaces."
 
 [dependencies]
-spryteo-core = { path = "../spryteo-core", version = "0.0.1" }
-spryteo-raster = { path = "../spryteo-raster", version = "0.0.1" }
-spryteo-quant = { path = "../spryteo-quant", version = "0.0.1" }
-spryteo-trace = { path = "../spryteo-trace", version = "0.0.1" }
-spryteo-fit = { path = "../spryteo-fit", version = "0.0.1" }
-spryteo-svg = { path = "../spryteo-svg", version = "0.0.1" }
-spryteo-stroke = { path = "../spryteo-stroke", version = "0.0.1" }
-spryteo-semantic = { path = "../spryteo-semantic", version = "0.0.1" }
+spryteo-core = { path = "../spryteo-core", version = "0.0.2" }
+spryteo-raster = { path = "../spryteo-raster", version = "0.0.2" }
+spryteo-quant = { path = "../spryteo-quant", version = "0.0.2" }
+spryteo-trace = { path = "../spryteo-trace", version = "0.0.2" }
+spryteo-fit = { path = "../spryteo-fit", version = "0.0.2" }
+spryteo-svg = { path = "../spryteo-svg", version = "0.0.2" }
+spryteo-stroke = { path = "../spryteo-stroke", version = "0.0.2" }
+spryteo-semantic = { path = "../spryteo-semantic", version = "0.0.2" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

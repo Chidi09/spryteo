@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "bindings/wasm", "bindings/node"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["chidiisking7@gmail.com"]
