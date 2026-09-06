@@ -45,10 +45,18 @@ environment:
   ZIG_VERSION: 0.15.1
   CARGO_ZIGBUILD_VERSION: 0.23.4
 
-cache:
-  - $HOME/.cargo/registry -> Cargo.lock
-  - target -> Cargo.lock
-  - '%USERPROFILE%\.cargo\registry -> Cargo.lock'
+# Cache is declared per image below, not here. One shared list meant every
+# job carried the other platforms' paths: the Linux job spent every build
+# reporting "Cache entry not found" for a %USERPROFILE% path that cannot
+# exist on Linux.
+#
+# `target` is deliberately not cached on Linux. That job builds four targets
+# through cargo-zigbuild, and the directory compresses to more than the
+# 1,048,576,000-byte ceiling AppVeyor puts on a single cache item, so the
+# save was rejected at the end of every build ("Compressed cache item cannot
+# exceed 1,048,576,000 bytes") after paying the cost of zipping it. The
+# registry cache still lands, so dependency downloads are reused; only
+# compilation is repeated.
 
 artifacts:
   - path: bindings/node/*.tgz
@@ -61,6 +69,10 @@ for:
   - matrix:
       only:
         - image: Visual Studio 2022
+
+    cache:
+      - '%USERPROFILE%\.cargo\registry -> Cargo.lock'
+      - 'target -> Cargo.lock'
 
     # AppVeyor's PowerShell host turns a native command's stderr into a
     # terminating error, so cargo failed this job on its own "Finished
@@ -88,6 +100,10 @@ for:
   - matrix:
       only:
         - image: macos-sonoma
+
+    cache:
+      - $HOME/.cargo/registry -> Cargo.lock
+      - target -> Cargo.lock
 
     install:
       - sh: |
@@ -149,8 +165,8 @@ for:
             esac
             node bindings/node/scripts/set-version.mjs "$APPVEYOR_REPO_TAG_NAME"
             echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > "$HOME/.npmrc"
-            npm publish bindings/node/npm/darwin-x64 --access public
-            npm publish bindings/node/npm/darwin-arm64 --access public
+            node bindings/node/scripts/publish-package.mjs bindings/node/npm/darwin-x64
+            node bindings/node/scripts/publish-package.mjs bindings/node/npm/darwin-arm64
           )
 
   ############################################################
@@ -160,6 +176,9 @@ for:
   - matrix:
       only:
         - image: Ubuntu2204
+
+    cache:
+      - $HOME/.cargo/registry -> Cargo.lock
 
     install:
       - sh: |
@@ -298,9 +317,9 @@ for:
             # The tarball left by the smoke test carries the old version.
             rm -f bindings/node/*.tgz
             for platform in linux-x64-gnu linux-arm64-gnu linux-x64-musl linux-arm64-musl; do
-              npm publish "bindings/node/npm/$platform" --access public
+              node bindings/node/scripts/publish-package.mjs "bindings/node/npm/$platform"
             done
             # The main package pins all seven exactly, so it goes last.
             node bindings/node/scripts/await-platform-packages.mjs "$tag"
-            npm publish bindings/node --access public
+            node bindings/node/scripts/publish-package.mjs bindings/node
           )
