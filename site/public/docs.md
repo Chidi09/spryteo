@@ -89,6 +89,18 @@ overridable with `--mode`.
 | `line-art` | Ink drawings binarize into exactly two layers — paper and ink — using a global Otsu threshold for solid strokes plus a capped Sauvola local threshold that rescues faint thin lines. A duotone validation gate falls back to full colour quantization when the image isn't genuinely two-tone. Pairs with `--stroke` for centerline output. |
 | `photo` | Everything else. K-means colour quantization, optional gradient detection, bilateral filtering + JPEG deblocking, and automatic downscaling above 1600px so a 4K photo doesn't blow the time budget. |
 
+## Choosing a mode
+
+Given an image in front of you, use this guide to select the right `--mode`:
+
+| Mode | Input assumptions | When to choose | Wrong mode symptom |
+|---|---|---|---|
+| `auto` | General input. Computes dimensions, unique colour count (1% noise floor), edge hardness, and ink ratio to select a profile automatically. | Default for initial runs or automated batch pipelines where image types vary. | Faint paper grain or scanner tints on ink art can trigger photo or icon mode instead of line-art; anti-aliased icon borders may classify as photo. |
+| `icon` | Flat fills, few unique colours (≤32 after 1% noise floor), or flat fills over an alpha channel. Runs primitive recognition for `<circle>`, `<ellipse>`, and `<rect>`. | UI icons, vector logos, geometric badges, flat illustrations, and pictograms. | Running on photos produces severe posterization and color banding. If photo mode is mistakenly used on an icon, outlines become fuzzy, node counts bloat, and primitive recognition is skipped. |
+| `pixel-art` | Low resolution (≤128px), ≤64 unique colours, sharp transitions with zero anti-aliasing. | Retro game sprites, pixel icons, 8-bit / 16-bit graphics, and favicon pixel grids. | Running on smooth icons or photos produces blocky, jagged pixel staircases. If auto or icon mode is run on pixel art, curve smoothing rounds sharp corners into distorted, pill-shaped blobs. |
+| `line-art` | Two-tone ink drawing on paper (ink ratio < 25%). Binarizes with Otsu + Sauvola thresholding. Pairs with `--stroke` for centerline tracing. | Scanned sketches, architectural diagrams, technical schematics, wireframes, and handwritten signatures. | Running on multi-colour images triggers duotone validation fallback to k-means or crushes subtle hues into high contrast. Tracing line art with icon mode creates doubled hollow outlines instead of single stroked centerlines. |
+| `photo` | Continuous-tone imagery, photographic palettes, subtle gradients, and complex real-world textures. | Photographs, paintings, renders with lighting gradients, and complex textured art. | Running on icons creates stacked layers with edge slivers and no primitive shapes. Running icon mode on a photo creates harsh color banding across gradual transitions. |
+
 ## How it works
 
 Every surface runs the same eleven-stage pipeline over the same Rust engine
@@ -202,25 +214,67 @@ same JSON options object as the Node and CLI surfaces.
 
 ## MCP server
 
-Register Spryteo as an MCP server and agents can convert and inspect icons
-mid-conversation, without shelling out or leaving the chat.
+Register Spryteo as an MCP server so AI agents can convert raster images and inspect vector output mid-conversation.
+
+### 1. Install
+
+```bash
+npm install -g spryteo-mcp
+```
+
+### 2. Configure
+
+Add the server to your client configuration:
 
 ```json
 {
   "mcpServers": {
-    "spryteo": { "command": "spryteo-mcp" }
+    "spryteo": {
+      "command": "spryteo-mcp"
+    }
   }
 }
 ```
 
-It exposes two tools:
+Config file locations:
 
-- **convert_image** — base64-encoded image bytes in, vectorized SVG +
-  metadata out. Takes the same partial JSON options object as every other
-  surface.
-- **inspect_svg** — feed it a metadata JSON string (from convert_image's
-  response) and get back a human-readable summary of nodes, groups,
-  centroids, bboxes, areas and colours.
+- **Claude Desktop**:
+  - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+  - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+  - Linux: `~/.config/Claude/claude_desktop_config.json`
+- **Claude Code**:
+  - Global: `~/.claude.json`
+  - Project: `.claude.json`
+  - One-line alternative (no manual JSON editing):
+    ```bash
+    claude mcp add spryteo -- spryteo-mcp
+    ```
+- **Cursor**:
+  - Global: `~/.cursor/mcp.json`
+  - Project: `.cursor/mcp.json`
+- **VS Code**:
+  - Workspace: `.vscode/mcp.json` (or user configuration via MCP extension settings)
+
+### 3. Verify
+
+Check that the server registered:
+
+- **Claude Desktop**: Open a conversation and click the hammer icon; verify `convert_image` and `inspect_svg` appear under `spryteo`.
+- **Claude Code**: Run `claude mcp list`; verify `spryteo` is listed with tools enabled.
+- **Cursor / VS Code**: Open the agent panel; verify `convert_image` and `inspect_svg` appear in the active tool list.
+
+### 4. Troubleshoot
+
+- **Command not found (`spryteo-mcp`)**: The global npm bin directory is not on your `PATH`. Run `npm prefix -g` to find the directory (for example `~/.npm-global/bin` or `/usr/local/bin`) and export it in your shell profile (`export PATH="$(npm prefix -g)/bin:$PATH"`), or set `"command"` in your configuration file to the absolute path of `spryteo-mcp`.
+- **Server registers but tools do not appear**: The client loads configuration only on startup. Completely quit and restart your editor or client application.
+- **Permissions error on install (`EACCES`)**: Do not use `sudo npm install`. Reconfigure npm to write global packages to a directory owned by your user (`npm config set prefix ~/.npm-global` and add `~/.npm-global/bin` to `PATH`), or configure your client to invoke npx directly: `"command": "npx"`, `"args": ["-y", "spryteo-mcp"]`.
+
+### Available tools
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `convert_image` | `image_base64` (string, required): Base64-encoded raw image bytes (PNG, JPEG, GIF, WebP, BMP), with or without `data:...;base64,` prefix.<br>`options` (object, optional): Partial `ConvertOptions` JSON object (e.g. `{"mode": "icon", "colors": 8, "stroke": true}`). Omitted fields fall back to `ConvertOptions::default()`. | Serialized `ConvertResult` JSON string containing `svg` (rendered SVG markup) and `meta` (metadata sidecar object). |
+| `inspect_svg` | `meta_json` (string, required): The serialized `meta` JSON sidecar string returned by `convert_image` (not the raw SVG markup). | Human-readable Markdown inspection summary showing schema version, total node count, path count, byte count, and a table of individual nodes (ID, group, shape, paint, bounding box, centroid, area, outline length, suggested draw order). |
 
 ## HTTP API
 
@@ -313,6 +367,55 @@ input bytes (8MB default), max pixel count (16MP default), and a hard
 8192px dimension ceiling — all configurable, all enforced before the full
 decode where possible.
 
+## Recipes
+
+Complete, runnable examples for common vectorization tasks:
+
+- **Vectorize a flat corporate logo into a clean 4-colour SVG:**
+  ```bash
+  spryteo convert logo.png -o logo.svg --mode icon --colors 4
+  ```
+
+- **Vectorize an icon with centroid transform origins and bake in a CSS pop animation:**
+  ```bash
+  spryteo convert icon.png -o icon.svg --mode icon --css pop --transform-origin centroid
+  ```
+
+- **Trace a retro pixel-art sprite preserving exact pixel corners without smoothing:**
+  ```bash
+  spryteo convert player.png -o player.svg --mode pixel-art
+  ```
+
+- **Trace an ink drawing or signature into single continuous stroked paths:**
+  ```bash
+  spryteo convert signature.png -o signature.svg --mode line-art --stroke
+  ```
+
+- **Vectorize a photograph into 16 stacked colour layers with gradient detection:**
+  ```bash
+  spryteo convert photo.jpg -o photo.svg --mode photo --colors 16 --layering stacked --gradients auto
+  ```
+
+- **Emit a reusable React JSX component with camelCase attributes:**
+  ```bash
+  spryteo convert badge.png -o Badge.jsx --mode icon --jsx
+  ```
+
+- **Split a raster icon contact sheet into individual SVGs on a 24px canonical grid:**
+  ```bash
+  spryteo sheet sheet.png -o ./icons/ --canonical-size 24 --name-prefix icon
+  ```
+
+- **Vectorize a monochrome glyph inheriting parent CSS color via currentColor:**
+  ```bash
+  spryteo convert glyph.png -o glyph.svg --mode icon --current-color
+  ```
+
+- **Export an SVG with a JSON metadata sidecar for programmatic inspection:**
+  ```bash
+  spryteo convert mark.png -o mark.svg --mode icon --json mark.json
+  ```
+
 ## Output & metadata
 
 Every surface returns the same shape: an `svg` string and a `meta`
@@ -322,6 +425,67 @@ a stable `id`, `bbox`, `centroid`, `area`, resolved `fill`, its `group`
 key into the SVG's `<g id=...>` tree, `zOrder`, and a
 `suggestedDrawOrder` for animation sequencing. `meta.stats` gives
 node/path/byte counts for a quick sanity check without walking the tree.
+
+## Output anatomy
+
+Spryteo produces structured vector scenes designed for CSS styling, animation, and programmatic inspection.
+
+### Group tree
+
+The emitted SVG organizes paths into a semantic `<g>` hierarchy:
+
+- **Component grouping (`--grouping component`, default)**: Connected visual regions become groups (`<g id="g-s-...">`). Shapes nested entirely inside another shape's bounding contour (containment order) become child `<g>` elements under the enclosing shape.
+- **Semantic mask grouping (`--grouping semantic`)**: External segmentation masks group shapes under labeled containers (`<g id="g-mask-<id>">`).
+- **Flat structure (`--grouping flat`)**: Groups are omitted and all shapes render directly under `<svg>`.
+- **Paint order**: Sibling groups and nodes follow document order (z-order), so background containers render first and nested details render on top.
+
+### ID scheme
+
+Every shape element and group receives a deterministic identifier controlled by `--id-style`:
+
+- **Hash (`--id-style hash`, default)**: IDs format as `s-<8 hex chars>`, computed using `blake3` over the shape's canonicalized coordinates (rounded to 3 decimals, `-0.0` normalized to `0.0`), primitive parameters, and fill color. Identical duplicate shapes append `-2`, `-3` in document order. Unaltered shapes maintain identical IDs across re-runs.
+- **Sequential (`--id-style sequential`)**: Shapes are numbered monotonically in paint order (`s-0`, `s-1`, `s-2`).
+- **None (`--id-style none`)**: Omits `id` attributes entirely from elements and groups.
+- Group IDs prefix the opening node ID (`g-s-a1b2c3d4` or `g-s-0`) or the semantic mask ID (`g-mask-<id>`).
+
+### Metadata sidecar fields
+
+When written via `--json <path>` or returned by the Node library, WASM build, or MCP server, the `meta` object contains:
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | Metadata schema version (currently `1`). Pre-versioning sidecars deserialize as `0`. |
+| `stats.node_count` | Total number of shape nodes in the scene. |
+| `stats.path_count` | Total number of vector paths emitted. |
+| `stats.byte_count` | Byte size of the serialized SVG markup. |
+| `current_color_applied` | Boolean indicating whether monochrome fill was mapped to `fill="currentColor"`. |
+| `groups` | Mirrors the emitted `<g>` element hierarchy with `id`, `nodes` (IDs), and nested `groups`. |
+| `nodes[].id` | Content-derived stable identifier (e.g. `s-a1b2c3d4`). |
+| `nodes[].bbox` | Exact axis-aligned bounding box `[x_min, y_min, x_max, y_max]`. |
+| `nodes[].centroid` | Center of mass `(cx, cy)` computed by Green's theorem curve integrals. |
+| `nodes[].area` | Surface area in square user units. |
+| `nodes[].fill` | Representative sRGB colour `{ r, g, b }` for quick identification. |
+| `nodes[].paint` | Lossless paint definition: solid colour, `currentColor` with fallback, or linear/radial gradient with stops and coordinate vectors. |
+| `nodes[].stroke` | Lossless stroke paint and width for centerline paths (`null` for filled shapes). |
+| `nodes[].shape` | Emitted element kind: `path`, `circle`, `ellipse`, `rect`, or `arc`. |
+| `nodes[].closed` | Whether the outline closes back on itself (`false` for open centerline strokes). |
+| `nodes[].path_length` | Total outline length in user units (normalizes with `pathLength="100"` in stroke mode). |
+| `nodes[].group` | ID of the immediate parent `<g>` element. |
+| `nodes[].group_path` | Ancestor group IDs from root down to immediate parent. |
+| `nodes[].z_order` | Paint order index (0 = bottom layer, painted first). |
+| `nodes[].suggested_draw_order` | Reveal sequence index for entrance animations (ranks nesting depth first, descending area second). |
+
+## Troubleshooting
+
+Common symptoms, root causes, and CLI fixes:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Output file size too large / too many nodes | Curve-fit tolerance is too strict, noise suppression area is too low, or colour count is too high. | Increase `--tolerance` (e.g. `--tolerance 1.0`), increase `--turdsize` (e.g. `--turdsize 8`) to drop speckle noise, or reduce `--colors`. |
+| Fine details or small shapes lost as noise | The `--turdsize` area threshold exceeds the pixel area of small dots or punctuation, or downscaling discarded them. | Decrease `--turdsize` (e.g. `--turdsize 1` or `--turdsize 0`), or increase `--max-trace-dimension` to prevent downscaling. |
+| Logo or line drawing traced as hollow outlines instead of filled shapes or strokes | Image was traced in default fill mode instead of centerline tracing. | Pass `--stroke` (typically with `--mode line-art`) to run the skeletonizing centerline tracer instead of contour outlining. |
+| Colours merged together that should remain distinct | `--colors` target is too low, or k-means clustering in Lab space merged visually close hues. | Increase `--colors` (e.g. `--colors 16`), or specify exact brand colours with `--palette '#hex1,#hex2,#hex3'`. |
+| Slow conversion on a large photograph | High-resolution images require extensive contour extraction across multiple quantized layers. | Lower working dimension with `--max-trace-dimension 1024` (or `800`), use `--layering cutout`, or lower `--colors`. |
 
 ## Crate architecture
 

@@ -73,6 +73,142 @@ const pipelineStages = [
   { name: 'build_scene_graph', desc: 'Groups shapes into a <g> tree (containment-order by default, or mask-guided) and assigns stable content-derived or sequential IDs.' },
   { name: 'emit_svg', desc: 'Serializes the scene graph — minified or --pretty, JSX component or plain markup — plus the JSON metadata sidecar if requested.' },
 ];
+
+const modeGuide = [
+  {
+    mode: 'auto',
+    assumes: 'General input. Computes dimensions, unique colours (1% noise floor), edge hardness, and ink ratio to select a profile automatically.',
+    when: 'Default for initial runs or automated batch pipelines where image types vary.',
+    symptom: 'Faint paper grain or scanner tints on ink art can trigger photo or icon mode instead of line-art; anti-aliased icon borders may classify as photo.',
+  },
+  {
+    mode: 'icon',
+    assumes: 'Flat fills, few unique colours (≤32 after 1% noise floor), or flat fills over an alpha channel. Runs primitive recognition for <circle>, <ellipse>, and <rect>.',
+    when: 'UI icons, vector logos, geometric badges, flat illustrations, and pictograms.',
+    symptom: 'Running on photos produces severe posterization and color banding. If photo mode is mistakenly used on an icon, outlines become fuzzy, node counts bloat, and primitive recognition is skipped.',
+  },
+  {
+    mode: 'pixel-art',
+    assumes: 'Low resolution (≤128px), ≤64 unique colours, sharp transitions with zero anti-aliasing.',
+    when: 'Retro game sprites, pixel icons, 8-bit / 16-bit graphics, and favicon pixel grids.',
+    symptom: 'Running on smooth icons or photos produces blocky, jagged pixel staircases. If auto or icon mode is run on pixel art, curve smoothing rounds sharp corners into distorted, pill-shaped blobs.',
+  },
+  {
+    mode: 'line-art',
+    assumes: 'Two-tone ink drawing on paper (ink ratio < 25%). Binarizes with Otsu + Sauvola thresholding. Pairs with --stroke for centerline tracing.',
+    when: 'Scanned sketches, architectural diagrams, technical schematics, wireframes, and handwritten signatures.',
+    symptom: 'Running on multi-colour images triggers duotone validation fallback to k-means or crushes subtle hues into high contrast. Tracing line art with icon mode creates doubled hollow outlines instead of single stroked centerlines.',
+  },
+  {
+    mode: 'photo',
+    assumes: 'Continuous-tone imagery, photographic palettes, subtle gradients, and complex real-world textures.',
+    when: 'Photographs, paintings, renders with lighting gradients, and complex textured art.',
+    symptom: 'Running on icons creates stacked layers with edge slivers and no primitive shapes. Running icon mode on a photo creates harsh color banding across gradual transitions.',
+  },
+];
+
+const recipes = [
+  {
+    goal: 'Vectorize a flat corporate logo into a clean 4-colour SVG',
+    cmd: 'spryteo convert logo.png -o logo.svg --mode icon --colors 4',
+  },
+  {
+    goal: 'Vectorize an icon with centroid transform origins and bake in a CSS pop animation',
+    cmd: 'spryteo convert icon.png -o icon.svg --mode icon --css pop --transform-origin centroid',
+  },
+  {
+    goal: 'Trace a retro pixel-art sprite preserving exact pixel corners without smoothing',
+    cmd: 'spryteo convert player.png -o player.svg --mode pixel-art',
+  },
+  {
+    goal: 'Trace an ink drawing or signature into single continuous stroked paths',
+    cmd: 'spryteo convert signature.png -o signature.svg --mode line-art --stroke',
+  },
+  {
+    goal: 'Vectorize a photograph into 16 stacked colour layers with gradient detection',
+    cmd: 'spryteo convert photo.jpg -o photo.svg --mode photo --colors 16 --layering stacked --gradients auto',
+  },
+  {
+    goal: 'Emit a reusable React JSX component with camelCase attributes',
+    cmd: 'spryteo convert badge.png -o Badge.jsx --mode icon --jsx',
+  },
+  {
+    goal: 'Split a raster icon contact sheet into individual SVGs on a 24px canonical grid',
+    cmd: 'spryteo sheet sheet.png -o ./icons/ --canonical-size 24 --name-prefix icon',
+  },
+  {
+    goal: 'Vectorize a monochrome glyph inheriting parent CSS color via currentColor',
+    cmd: 'spryteo convert glyph.png -o glyph.svg --mode icon --current-color',
+  },
+  {
+    goal: 'Export an SVG with a JSON metadata sidecar for programmatic inspection',
+    cmd: 'spryteo convert mark.png -o mark.svg --mode icon --json mark.json',
+  },
+];
+
+const troubleshooting = [
+  {
+    symptom: 'Output file size too large / too many nodes',
+    cause: 'Curve-fit tolerance is too strict, noise suppression area is too low, or colour count is too high.',
+    fix: 'Increase --tolerance (e.g. --tolerance 1.0), increase --turdsize (e.g. --turdsize 8) to drop speckle noise, or reduce --colors.',
+  },
+  {
+    symptom: 'Fine details or small shapes lost as noise',
+    cause: 'The --turdsize area threshold exceeds the pixel area of small dots or punctuation, or downscaling discarded them.',
+    fix: 'Decrease --turdsize (e.g. --turdsize 1 or --turdsize 0), or increase --max-trace-dimension to prevent downscaling.',
+  },
+  {
+    symptom: 'Logo or line drawing traced as hollow outlines instead of filled shapes or strokes',
+    cause: 'Image was traced in default fill mode instead of centerline tracing.',
+    fix: 'Pass --stroke (typically with --mode line-art) to run the skeletonizing centerline tracer instead of contour outlining.',
+  },
+  {
+    symptom: 'Colours merged together that should remain distinct',
+    cause: '--colors target is too low, or k-means clustering in Lab space merged visually close hues.',
+    fix: 'Increase --colors (e.g. --colors 16), or specify exact brand colours with --palette "#hex1,#hex2,#hex3".',
+  },
+  {
+    symptom: 'Slow conversion on a large photograph',
+    cause: 'High-resolution images require extensive contour extraction across multiple quantized layers.',
+    fix: 'Lower working dimension with --max-trace-dimension 1024 (or 800), use --layering cutout, or lower --colors.',
+  },
+];
+
+const mcpTools = [
+  {
+    name: 'convert_image',
+    args: 'image_base64 (string, required): Base64-encoded raw image bytes (PNG, JPEG, GIF, WebP, BMP), with or without data:...;base64, prefix. options (object, optional): Partial ConvertOptions JSON object (e.g. {"mode": "icon", "colors": 8, "stroke": true}). Omitted fields fall back to ConvertOptions::default().',
+    returns: 'Serialized ConvertResult JSON string containing svg (rendered SVG markup) and meta (metadata sidecar object).',
+  },
+  {
+    name: 'inspect_svg',
+    args: 'meta_json (string, required): The serialized meta JSON sidecar string returned by convert_image (not the raw SVG markup).',
+    returns: 'Human-readable Markdown inspection summary showing schema version, total node count, path count, byte count, and a table of individual nodes (ID, group, shape, paint, bounding box, centroid, area, outline length, suggested draw order).',
+  },
+];
+
+const metadataFields: [string, string][] = [
+  ['schema_version', 'Metadata schema version (currently 1). Pre-versioning sidecars deserialize as 0.'],
+  ['stats.node_count', 'Total number of shape nodes in the scene.'],
+  ['stats.path_count', 'Total number of vector paths emitted.'],
+  ['stats.byte_count', 'Byte size of the serialized SVG markup.'],
+  ['current_color_applied', 'Boolean indicating whether monochrome fill was mapped to fill="currentColor".'],
+  ['groups', 'Mirrors the emitted <g> element hierarchy with id, nodes (IDs), and nested groups.'],
+  ['nodes[].id', 'Content-derived stable identifier (e.g. s-a1b2c3d4).'],
+  ['nodes[].bbox', 'Exact axis-aligned bounding box [x_min, y_min, x_max, y_max].'],
+  ['nodes[].centroid', 'Center of mass (cx, cy) computed by Green\'s theorem curve integrals.'],
+  ['nodes[].area', 'Surface area in square user units.'],
+  ['nodes[].fill', 'Representative sRGB colour {r, g, b} for quick identification.'],
+  ['nodes[].paint', 'Lossless paint definition: solid colour, currentColor with fallback, or linear/radial gradient with stops and coordinate vectors.'],
+  ['nodes[].stroke', 'Lossless stroke paint and width for centerline paths (null for filled shapes).'],
+  ['nodes[].shape', 'Emitted element kind: path, circle, ellipse, rect, or arc.'],
+  ['nodes[].closed', 'Whether the outline closes back on itself (false for open centerline strokes).'],
+  ['nodes[].path_length', 'Total outline length in user units (normalizes with pathLength="100" in stroke mode).'],
+  ['nodes[].group', 'ID of the immediate parent <g> element.'],
+  ['nodes[].group_path', 'Ancestor group IDs from root down to immediate parent.'],
+  ['nodes[].z_order', 'Paint order index (0 = bottom layer, painted first).'],
+  ['nodes[].suggested_draw_order', 'Reveal sequence index for entrance animations (ranks nesting depth first, descending area second).'],
+];
 ---
 
 <div class="page">
@@ -82,6 +218,7 @@ const pipelineStages = [
     <a href="#install" class="toc-link">Install</a>
     <a href="#cli" class="toc-link">CLI</a>
     <a href="#modes" class="toc-link">Modes</a>
+    <a href="#choosing-a-mode" class="toc-link">Choosing a mode</a>
     <a href="#pipeline" class="toc-link">How it works</a>
     <a href="#determinism" class="toc-link">Determinism &amp; testing</a>
     <a href="#library" class="toc-link">Library (Node)</a>
@@ -89,13 +226,16 @@ const pipelineStages = [
     <a href="#mcp" class="toc-link">MCP server</a>
     <a href="#api" class="toc-link">HTTP API</a>
     <a href="#options" class="toc-link">Options reference</a>
+    <a href="#recipes" class="toc-link">Recipes</a>
     <a href="#output" class="toc-link">Output &amp; metadata</a>
+    <a href="#output-anatomy" class="toc-link">Output anatomy</a>
+    <a href="#troubleshooting" class="toc-link">Troubleshooting</a>
     <a href="#architecture" class="toc-link">Crate architecture</a>
     <a href="#stack" class="toc-link">Built with</a>
   </aside>
 
   <div class="content">
-    <div class="docs-meta">docs &#183; v1.0</div>
+    <div class="docs-meta">docs &#183; v0.0.1</div>
     <h1 class="docs-title">Documentation</h1>
     <p class="docs-desc">Spryteo converts raster images and icons into clean, animateable SVG &#8212; traced, quantized, curve-fit, and semantically grouped, entirely offline. Install it, then reach for whichever surface fits your workflow.</p>
 
@@ -153,6 +293,23 @@ const pipelineStages = [
       ))}
     </div>
 
+    <h2 id="choosing-a-mode" class="heading">Choosing a mode</h2>
+    <p class="para">Given an image in front of you, use this guide to select the right <code class="inline-code">--mode</code>:</p>
+    <div class="mode-guide-table">
+      {modeGuide.map((m) => (
+        <div class="mode-guide-row">
+          <div class="mode-guide-name">
+            <code class="mode-name">{m.mode}</code>
+          </div>
+          <div class="mode-guide-body">
+            <div class="mode-guide-assumes"><strong style="color:var(--text);">Input assumptions:</strong> {m.assumes}</div>
+            <div class="mode-guide-when"><strong style="color:var(--text);">When to choose:</strong> {m.when}</div>
+            <div class="mode-guide-symptom"><strong style="color:var(--accent);">Wrong mode symptom:</strong> {m.symptom}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+
     <h2 id="pipeline" class="heading">How it works</h2>
     <p class="para">Every surface runs the same eleven-stage pipeline over the same Rust engine &#8212; no surface has its own shortcuts or its own bugs.</p>
     <div class="flag-table">
@@ -185,18 +342,50 @@ const pipelineStages = [
     <p class="para">Use <code class="inline-code">convert(bytes, optionsJson)</code> instead of <code class="inline-code">convert_default</code> to pass the same JSON options object as the Node and CLI surfaces.</p>
 
     <h2 id="mcp" class="heading">MCP server</h2>
-    <p class="para">Register Spryteo as an MCP server and agents can convert and inspect icons mid-conversation, without shelling out or leaving the chat.</p>
-    <CodeBlock html='{<br>&nbsp;&nbsp;<span style="color:var(--muted);">&quot;mcpServers&quot;</span>: {<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--muted);">&quot;spryteo&quot;</span>: { <span style="color:var(--muted);">&quot;command&quot;</span>: <span style="color:var(--accent);">&quot;spryteo-mcp&quot;</span> }<br>&nbsp;&nbsp;}<br>}' />
-    <p class="para">It exposes two tools:</p>
+    <p class="para">Register Spryteo as an MCP server so AI agents can convert raster images and inspect vector output mid-conversation.</p>
+
+    <h3 class="subheading">1. Install</h3>
+    <CodeBlock code="npm install -g spryteo-mcp" minimal />
+
+    <h3 class="subheading">2. Configure</h3>
+    <p class="para">Add the server to your client configuration:</p>
+    <CodeBlock html='{<br>&nbsp;&nbsp;<span style="color:var(--muted);">&quot;mcpServers&quot;</span>: {<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--muted);">&quot;spryteo&quot;</span>: { <span style="color:var(--muted);">&quot;command&quot;</span>: <span style="color:var(--accent);">&quot;spryteo-mcp&quot;</span> }<br>&nbsp;&nbsp;}<br>}' minimal />
+    <p class="para">Config file locations:</p>
+    <ul class="config-list">
+      <li><strong>Claude Desktop:</strong> <code class="inline-code">~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS), <code class="inline-code">%APPDATA%\Claude\claude_desktop_config.json</code> (Windows), or <code class="inline-code">~/.config/Claude/claude_desktop_config.json</code> (Linux)</li>
+      <li><strong>Claude Code:</strong> <code class="inline-code">~/.claude.json</code> (global) or <code class="inline-code">.claude.json</code> (project). Or add directly with one command:
+        <div style="margin-top: 6px;"><CodeBlock code="claude mcp add spryteo -- spryteo-mcp" minimal /></div>
+      </li>
+      <li><strong>Cursor:</strong> <code class="inline-code">~/.cursor/mcp.json</code> (global) or <code class="inline-code">.cursor/mcp.json</code> (project)</li>
+      <li><strong>VS Code:</strong> <code class="inline-code">.vscode/mcp.json</code> (workspace) or user configuration in settings</li>
+    </ul>
+
+    <h3 class="subheading">3. Verify</h3>
+    <p class="para">Check that the server registered:</p>
+    <ul class="config-list">
+      <li><strong>Claude Desktop:</strong> Open a conversation and click the hammer icon; verify <code class="inline-code">convert_image</code> and <code class="inline-code">inspect_svg</code> appear under <code class="inline-code">spryteo</code>.</li>
+      <li><strong>Claude Code:</strong> Run <code class="inline-code">claude mcp list</code>; verify <code class="inline-code">spryteo</code> is listed with tools enabled.</li>
+      <li><strong>Cursor / VS Code:</strong> Open the agent panel; verify <code class="inline-code">convert_image</code> and <code class="inline-code">inspect_svg</code> appear in the active tool list.</li>
+    </ul>
+
+    <h3 class="subheading">4. Troubleshoot</h3>
+    <ul class="config-list">
+      <li><strong>Command not found (<code class="inline-code">spryteo-mcp</code>):</strong> The global npm bin directory is not on your <code class="inline-code">PATH</code>. Run <code class="inline-code">npm prefix -g</code> to find the directory (for example <code class="inline-code">~/.npm-global/bin</code> or <code class="inline-code">/usr/local/bin</code>) and export it in your shell profile (<code class="inline-code">export PATH="$(npm prefix -g)/bin:$PATH"</code>), or set <code class="inline-code">"command"</code> in your configuration file to the absolute path of <code class="inline-code">spryteo-mcp</code>.</li>
+      <li><strong>Server registers but tools do not appear:</strong> The client loads configuration only on startup. Completely quit and restart your editor or client application.</li>
+      <li><strong>Permissions error on install (<code class="inline-code">EACCES</code>):</strong> Do not use <code class="inline-code">sudo npm install</code>. Reconfigure npm to write global packages to a directory owned by your user (<code class="inline-code">npm config set prefix ~/.npm-global</code> and add <code class="inline-code">~/.npm-global/bin</code> to <code class="inline-code">PATH</code>), or configure your client to invoke npx directly: <code class="inline-code">"command": "npx"</code>, <code class="inline-code">"args": ["-y", "spryteo-mcp"]</code>.</li>
+    </ul>
+
+    <h3 class="subheading">Available tools</h3>
     <div class="flag-table">
-      <div class="flag-row">
-        <code class="flag-name">convert_image</code>
-        <span class="flag-desc">Base64-encoded image bytes in, vectorized SVG + metadata out. Takes the same partial JSON options object as every other surface.</span>
-      </div>
-      <div class="flag-row">
-        <code class="flag-name">inspect_svg</code>
-        <span class="flag-desc">Feed it a metadata JSON string (from convert_image's response) and get back a human-readable summary of nodes, groups, centroids, bboxes, areas and colours.</span>
-      </div>
+      {mcpTools.map((t) => (
+        <div class="flag-row">
+          <code class="flag-name">{t.name}</code>
+          <div class="flag-desc">
+            <div><strong style="color:var(--text);">Arguments:</strong> {t.args}</div>
+            <div style="margin-top:6px;"><strong style="color:var(--text);">Returns:</strong> {t.returns}</div>
+          </div>
+        </div>
+      ))}
     </div>
 
     <h2 id="api" class="heading">HTTP API</h2>
@@ -229,8 +418,68 @@ const pipelineStages = [
     <h3 class="subheading">Limits</h3>
     <p class="para">Decompression-bomb guards reject oversized input before allocating: max input bytes (8MB default), max pixel count (16MP default), and a hard 8192px dimension ceiling &#8212; all configurable, all enforced before the full decode where possible.</p>
 
+    <h2 id="recipes" class="heading">Recipes</h2>
+    <p class="para">Complete, runnable examples for common vectorization tasks:</p>
+    <div class="recipe-list">
+      {recipes.map((r) => (
+        <div class="recipe-item">
+          <div class="recipe-goal">{r.goal}:</div>
+          <CodeBlock code={'$ ' + r.cmd} minimal />
+        </div>
+      ))}
+    </div>
+
     <h2 id="output" class="heading">Output &amp; metadata</h2>
     <p class="para">Every surface returns the same shape: an <code class="inline-code">svg</code> string and a <code class="inline-code">meta</code> sidecar built for programmatic and agent consumption, not just human eyeballing. <code class="inline-code">meta.nodes</code> is a flat list &#8212; one entry per shape &#8212; each with a stable <code class="inline-code">id</code>, <code class="inline-code">bbox</code>, <code class="inline-code">centroid</code>, <code class="inline-code">area</code>, resolved <code class="inline-code">fill</code>, its <code class="inline-code">group</code> key into the SVG's <code class="inline-code">&lt;g id=...&gt;</code> tree, <code class="inline-code">zOrder</code>, and a <code class="inline-code">suggestedDrawOrder</code> for animation sequencing. <code class="inline-code">meta.stats</code> gives node/path/byte counts for a quick sanity check without walking the tree.</p>
+
+    <h2 id="output-anatomy" class="heading">Output anatomy</h2>
+    <p class="para">Spryteo produces structured vector scenes designed for CSS styling, animation, and programmatic inspection.</p>
+
+    <h3 class="subheading">Group tree</h3>
+    <p class="para">The emitted SVG organizes paths into a semantic <code class="inline-code">&lt;g&gt;</code> hierarchy:</p>
+    <ul class="anatomy-list">
+      <li><strong>Component grouping (<code class="inline-code">--grouping component</code>, default):</strong> Connected visual regions become groups (<code class="inline-code">&lt;g id="g-s-..."&gt;</code>). Shapes nested entirely inside another shape's bounding contour (containment order) become child <code class="inline-code">&lt;g&gt;</code> elements under the enclosing shape.</li>
+      <li><strong>Semantic mask grouping (<code class="inline-code">--grouping semantic</code>):</strong> External segmentation masks group shapes under labeled containers (<code class="inline-code">&lt;g id="g-mask-&lt;id&gt;"&gt;</code>).</li>
+      <li><strong>Flat structure (<code class="inline-code">--grouping flat</code>):</strong> Groups are omitted and all shapes render directly under <code class="inline-code">&lt;svg&gt;</code>.</li>
+      <li><strong>Paint order:</strong> Sibling groups and nodes follow document order (z-order), so background containers render first and nested details render on top.</li>
+    </ul>
+
+    <h3 class="subheading">ID scheme</h3>
+    <p class="para">Every shape element and group receives a deterministic identifier controlled by <code class="inline-code">--id-style</code>:</p>
+    <ul class="anatomy-list">
+      <li><strong>Hash (<code class="inline-code">--id-style hash</code>, default):</strong> IDs format as <code class="inline-code">s-&lt;8 hex chars&gt;</code>, computed using blake3 over the shape's canonicalized coordinates (rounded to 3 decimals, -0.0 normalized to 0.0), primitive parameters, and fill color. Identical duplicate shapes append <code class="inline-code">-2</code>, <code class="inline-code">-3</code> in document order. Unaltered shapes maintain identical IDs across re-runs.</li>
+      <li><strong>Sequential (<code class="inline-code">--id-style sequential</code>):</strong> Shapes are numbered monotonically in paint order (<code class="inline-code">s-0</code>, <code class="inline-code">s-1</code>, <code class="inline-code">s-2</code>).</li>
+      <li><strong>None (<code class="inline-code">--id-style none</code>):</strong> Omits <code class="inline-code">id</code> attributes entirely from elements and groups.</li>
+      <li>Group IDs prefix the opening node ID (<code class="inline-code">g-s-a1b2c3d4</code> or <code class="inline-code">g-s-0</code>) or the semantic mask ID (<code class="inline-code">g-mask-&lt;id&gt;</code>).</li>
+    </ul>
+
+    <h3 class="subheading">Metadata sidecar fields</h3>
+    <p class="para">When written via <code class="inline-code">--json &lt;path&gt;</code> or returned by the Node library, WASM build, or MCP server, the <code class="inline-code">meta</code> object contains:</p>
+    <div class="flag-table">
+      {metadataFields.map(([field, desc]) => (
+        <div class="flag-row">
+          <code class="flag-name">{field}</code>
+          <span class="flag-desc">{desc}</span>
+        </div>
+      ))}
+    </div>
+
+    <h2 id="troubleshooting" class="heading">Troubleshooting</h2>
+    <p class="para">Common symptoms, root causes, and CLI fixes:</p>
+    <div class="trouble-table">
+      {troubleshooting.map((t) => (
+        <div class="trouble-row">
+          <div class="trouble-symptom">
+            <span class="trouble-label">Symptom</span>
+            <span class="trouble-text">{t.symptom}</span>
+          </div>
+          <div class="trouble-body">
+            <div class="trouble-cause"><strong style="color:var(--text);">Cause:</strong> {t.cause}</div>
+            <div class="trouble-fix"><strong style="color:var(--accent);">Fix:</strong> {t.fix}</div>
+          </div>
+        </div>
+      ))}
+    </div>
 
     <h2 id="architecture" class="heading">Crate architecture</h2>
     <p class="para">The engine is a Rust workspace of small, single-purpose crates &#8212; every surface (CLI, Node addon, WASM, MCP) links the same ones, so there's exactly one place each algorithm lives.</p>
@@ -497,6 +746,76 @@ const pipelineStages = [
     color: var(--muted);
   }
 
+  .mode-guide-table, .trouble-table {
+    border-top: 1px solid var(--border);
+    margin: 0 0 32px;
+  }
+  .mode-guide-row, .trouble-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 20px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .trouble-row {
+    grid-template-columns: 240px 1fr;
+  }
+  .mode-guide-body, .trouble-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+  .trouble-symptom {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .trouble-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+  }
+  .trouble-text {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.4;
+  }
+  .recipe-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin: 0 0 40px;
+  }
+  .recipe-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .recipe-goal {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .anatomy-list, .config-list {
+    margin: 0 0 24px;
+    padding-left: 20px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .anatomy-list li, .config-list li {
+    margin-bottom: 8px;
+  }
+  .anatomy-list strong, .config-list strong {
+    color: var(--text);
+  }
+
   .stack-row {
     display: flex;
     flex-wrap: wrap;
@@ -551,9 +870,9 @@ const pipelineStages = [
     .surface-grid {
       grid-template-columns: repeat(2, 1fr);
     }
-    .flag-row, .mode-row {
+    .flag-row, .mode-row, .mode-guide-row, .trouble-row {
       grid-template-columns: 1fr;
-      gap: 4px;
+      gap: 6px;
     }
   }
 </style>
