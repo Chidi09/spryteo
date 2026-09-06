@@ -133,6 +133,20 @@ for:
           (
             if [ "$APPVEYOR_REPO_TAG" != "true" ]; then echo "not a tag; nothing to publish"; exit 0; fi
             if [ -z "$NPM_TOKEN" ]; then echo "NPM_TOKEN is not set" >&2; exit 1; fi
+            # npm answers an unauthorized publish with 404, not 401, so a
+            # malformed token is indistinguishable from a missing package.
+            # Pasting the whole `NPM_TOKEN=npm_...` dotenv line in as the
+            # value has already cost two release attempts. Report what is
+            # wrong, never the token.
+            case "$NPM_TOKEN" in
+              *=*|*[[:space:]]*)
+                echo "NPM_TOKEN is malformed (length ${#NPM_TOKEN})." >&2
+                echo "It contains '=' or whitespace; an npm token has neither." >&2
+                echo "Set it to the token value alone -- the part after NPM_TOKEN=." >&2
+                exit 1;;
+              npm_*) ;;
+              *) echo "warning: NPM_TOKEN does not start with npm_; publishing anyway" >&2;;
+            esac
             node bindings/node/scripts/set-version.mjs "$APPVEYOR_REPO_TAG_NAME"
             echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > "$HOME/.npmrc"
             npm publish bindings/node/npm/darwin-x64 --access public
@@ -259,6 +273,20 @@ for:
           (
             if [ "$APPVEYOR_REPO_TAG" != "true" ]; then echo "not a tag; nothing to publish"; exit 0; fi
             if [ -z "$NPM_TOKEN" ]; then echo "NPM_TOKEN is not set" >&2; exit 1; fi
+            # npm answers an unauthorized publish with 404, not 401, so a
+            # malformed token is indistinguishable from a missing package.
+            # Pasting the whole `NPM_TOKEN=npm_...` dotenv line in as the
+            # value has already cost two release attempts. Report what is
+            # wrong, never the token.
+            case "$NPM_TOKEN" in
+              *=*|*[[:space:]]*)
+                echo "NPM_TOKEN is malformed (length ${#NPM_TOKEN})." >&2
+                echo "It contains '=' or whitespace; an npm token has neither." >&2
+                echo "Set it to the token value alone -- the part after NPM_TOKEN=." >&2
+                exit 1;;
+              npm_*) ;;
+              *) echo "warning: NPM_TOKEN does not start with npm_; publishing anyway" >&2;;
+            esac
             tag="${APPVEYOR_REPO_TAG_NAME#v}"
             crate="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
             if [ "$tag" != "$crate" ]; then
