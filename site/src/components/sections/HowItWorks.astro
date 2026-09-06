@@ -1,19 +1,6 @@
 ---
 import Icon from '../ui/Icon.astro';
-
-interface Step {
-  n: string;
-  title: string;
-  desc: string;
-}
-
-const steps: Step[] = [
-  { n: '01', title: 'Ingest', desc: 'Decode the raster at native resolution.' },
-  { n: '02', title: 'Trace', desc: 'Fit edges to continuous B&eacute;zier paths.' },
-  { n: '03', title: 'Group', desc: 'Cluster paths into semantic groups.' },
-  { n: '04', title: 'Optimize', desc: 'Merge, simplify, drop redundant nodes.' },
-  { n: '05', title: 'Emit', desc: 'Write clean, animateable SVG.' },
-];
+import { pipelineSteps as steps } from '../../lib/content';
 ---
 
 <section class="section">
@@ -24,7 +11,7 @@ const steps: Step[] = [
       <div class="card">
         <div class="card-n">{s.n}</div>
         <div class="card-title">{s.title}</div>
-        <div class="card-desc" set:html={s.desc} />
+        <div class="card-desc">{s.desc}</div>
       </div>
     ))}
   </div>

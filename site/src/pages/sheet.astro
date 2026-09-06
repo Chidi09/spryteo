@@ -5,7 +5,11 @@ import Footer from '../components/layout/Footer.astro';
 import SheetDemo from '../components/sections/SheetDemo.astro';
 ---
 
-<Base title="Sheet mode — Spryteo" description="Drop an icon contact sheet. Every icon comes back as its own animateable SVG — entirely offline.">
+<Base
+  title="Sheet mode — Spryteo"
+  description="Drop an icon contact sheet. Every icon comes back as its own animateable SVG — entirely offline."
+  crumbs={[{ name: 'Spryteo', path: '/' }, { name: 'Sheet mode', path: '/sheet' }]}
+>
   <Header />
 
   <main class="sheet-page">

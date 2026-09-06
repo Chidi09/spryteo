@@ -11,9 +11,27 @@ import FAQ from '../components/sections/FAQ.astro';
 import Community from '../components/sections/Community.astro';
 import CTABand from '../components/sections/CTABand.astro';
 import ClientScript from '../components/ClientScript.astro';
+import { faqs, pipelineSteps } from '../lib/content';
+import { faqPage, howTo } from '../lib/seo';
+
+// Built from the same arrays the sections render, so the structured data and
+// the visible page can never disagree.
+const jsonLd = [
+  faqPage('/', faqs),
+  howTo('/', {
+    name: 'How to convert a raster image into an animateable SVG',
+    description:
+      'The five deterministic stages Spryteo runs to turn a PNG, JPEG, GIF, WebP or BMP into a semantically grouped SVG.',
+    steps: pipelineSteps,
+  }),
+];
 ---
 
-<Base title="Spryteo — Raster to animateable SVG" description="Spryteo is an open-source, local-first tool that converts raster images (PNG, JPEG, GIF, WebP, BMP) into clean, animateable, and semantically-grouped SVGs.">
+<Base
+  title="Spryteo — Raster to animateable SVG"
+  description="Spryteo is an open-source, local-first tool that converts raster images (PNG, JPEG, GIF, WebP, BMP) into clean, animateable, and semantically-grouped SVGs."
+  jsonLd={jsonLd}
+>
   <Header />
 
   <main style="flex: 1;">

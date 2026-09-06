@@ -3,9 +3,20 @@ import Base from '../layouts/Base.astro';
 import Header from '../components/layout/Header.astro';
 import Footer from '../components/layout/Footer.astro';
 import DocsPage from '../components/sections/DocsPage.astro';
+import { techArticle, ogImage } from '../lib/seo';
+
+const title = 'Documentation — Spryteo';
+const description =
+  'Read the official documentation for Spryteo. Learn how to use the CLI, Node.js addon, WebAssembly browser build, and the MCP server for AI agents.';
+const image = ogImage('/docs');
 ---
 
-<Base title="Documentation — Spryteo" description="Read the official documentation for Spryteo. Learn how to use the CLI, Node.js addon, WebAssembly browser build, and the MCP server for AI agents.">
+<Base
+  title={title}
+  description={description}
+  crumbs={[{ name: 'Spryteo', path: '/' }, { name: 'Documentation', path: '/docs' }]}
+  jsonLd={[techArticle({ path: '/docs', headline: 'Spryteo documentation', description, image })]}
+>
   <Header />
   <main style="flex: 1;">
     <DocsPage />

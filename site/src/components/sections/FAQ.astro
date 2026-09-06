@@ -1,58 +1,6 @@
 ---
 import Icon from '../ui/Icon.astro';
-
-interface QA {
-  q: string;
-  a: string;
-}
-
-const faqs: QA[] = [
-  {
-    q: 'Is Spryteo free?',
-    a: 'Yes. Spryteo is fully open source and dual-licensed under MIT / Apache-2.0 -- free for personal and commercial use, no account, no usage limits enforced by us.',
-  },
-  {
-    q: 'Do my images get uploaded anywhere?',
-    a: 'No. The CLI, Node library, and MCP server run entirely on your machine. The browser demo runs the same engine compiled to WebAssembly, client-side -- your image never leaves the tab.',
-  },
-  {
-    q: 'What image formats does it accept?',
-    a: 'PNG, JPEG, GIF (first frame), WebP, and BMP as input. Output is always SVG. Format is detected by magic bytes, never by file extension.',
-  },
-  {
-    q: 'How is this different from other raster-to-SVG tools?',
-    a: 'Most tracers give you a single flattened <path> per colour region, or one giant path for the whole image. Spryteo groups shapes into a semantic <g> tree and gives every shape a stable, content-hashed ID -- so the output is actually structured enough to select and animate individual parts, not just display as a static image.',
-  },
-  {
-    q: 'Does it handle photos, or just icons?',
-    a: 'Both. Icon mode targets flat-colour logos and UI icons with aggressive primitive recognition (circles, rects). Photo mode runs colour quantization, optional gradient detection, and automatically downscales very large photos before tracing so conversion stays fast.',
-  },
-  {
-    q: 'Can I use it in CI or a build pipeline?',
-    a: 'Yes -- the CLI is a single static binary with no network calls, so it drops into any CI runner or build step. The Node library works the same way if you\'d rather call it from JavaScript/TypeScript directly.',
-  },
-  {
-    q: 'What is the MCP server for?',
-    a: 'Model Context Protocol lets AI agents (like Claude) call tools mid-conversation. spryteo-mcp exposes convert_image and inspect_svg as MCP tools, so an agent can vectorize an icon or inspect an SVG\'s structure without you leaving the chat.',
-  },
-  {
-    q: 'Is Spryteo v1.0 stable?',
-    a: 'The npm packages are at v1.0; the underlying Rust workspace crates are pre-1.0 (v0.0.1) and not yet published to crates.io. See SEMVER.md in the repository for the exact compatibility commitments on ConvertOptions and the metadata sidecar.',
-  },
-];
-
-const faqJsonLd = {
-  '@context': 'https://schema.org',
-  '@type': 'FAQPage',
-  mainEntity: faqs.map((f) => ({
-    '@type': 'Question',
-    name: f.q,
-    acceptedAnswer: {
-      '@type': 'Answer',
-      text: f.a,
-    },
-  })),
-};
+import { faqs } from '../../lib/content';
 ---
 
 <section class="section" id="faq">
@@ -76,7 +24,6 @@ const faqJsonLd = {
   </div>
 </section>
 
-<script type="application/ld+json" is:inline set:html={JSON.stringify(faqJsonLd)} />
 
 <style>
   .section {

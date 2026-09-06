@@ -1,16 +1,44 @@
 ---
+import { SEO } from 'astro-seo';
 import '../styles/tokens.css';
-interface Props { 
+import { SITE, buildGraph, canonical, ogImage, type Crumb } from '../lib/seo';
+
+interface Props {
   title?: string;
   description?: string;
+  /** Overrides the OG card art entirely. Absolute URL. */
+  image?: string;
+  /** Extra JSON-LD nodes merged into the page @graph (FAQPage, HowTo, ...). */
+  jsonLd?: Record<string, unknown>[];
+  crumbs?: Crumb[];
+  noindex?: boolean;
 }
-const { 
-  title = 'Spryteo — Raster to animateable SVG',
-  description = 'Spryteo is a free, open-source converter that turns raster images and icons into clean, animateable, semantically-grouped SVGs. Works offline as a CLI, Node.js library, or MCP server.'
-} = Astro.props;
 
-const pathname = Astro.url.pathname;
-const canonicalUrl = pathname === '/' || pathname === '' ? 'https://spryteo.dev/' : `https://spryteo.dev${pathname.replace(/\/$/, '')}`;
+const {
+  title = `${SITE.name} — ${SITE.tagline}`,
+  description = SITE.description,
+  image,
+  jsonLd = [],
+  crumbs,
+  noindex = false,
+} = Astro.props as Props;
+
+const path = Astro.url.pathname;
+const canonicalUrl = canonical(path);
+
+// The OG card names the page rather than repeating the site title, so a
+// pasted /docs link does not look identical to a pasted / link.
+const ogTitle = title.replace(/\s+[—-]\s+Spryteo$/, '').replace(/^Spryteo\s+[—-]\s+/, '');
+const socialImage = image ?? ogImage(path);
+
+const graph = buildGraph({
+  path,
+  title,
+  description,
+  image: socialImage,
+  crumbs,
+  extra: jsonLd,
+});
 ---
 
 <!DOCTYPE html>
@@ -18,25 +46,65 @@ const canonicalUrl = pathname === '/' || pathname === '' ? 'https://spryteo.dev/
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{title}</title>
-  <meta name="description" content={description} />
-  <link rel="canonical" href={canonicalUrl} />
-  <meta property="og:title" content={title} />
-  <meta property="og:description" content={description} />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content={canonicalUrl} />
-  <meta property="og:image" content="https://spryteo.dev/og-image.png" />
-  <meta property="og:image:width" content="1200" />
-  <meta property="og:image:height" content="630" />
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content={title} />
-  <meta name="twitter:description" content={description} />
-  <meta name="twitter:image" content="https://spryteo.dev/og-image.png" />
-  <meta name="theme-color" content="#0B0B0A" />
-  <link rel="icon" type="image/svg+xml" href="/spryteo-logo.svg" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <SEO
+    title={title}
+    description={description}
+    canonical={canonicalUrl}
+    noindex={noindex}
+    nofollow={noindex}
+    robotsExtras={noindex ? undefined : 'max-snippet:-1, max-image-preview:large, max-video-preview:-1'}
+    openGraph={{
+      basic: {
+        title: ogTitle,
+        type: 'website',
+        image: socialImage,
+        url: canonicalUrl,
+      },
+      optional: {
+        siteName: SITE.name,
+        description,
+        locale: SITE.locale,
+      },
+      image: {
+        url: socialImage,
+        secureUrl: socialImage,
+        type: 'image/png',
+        width: 1200,
+        height: 630,
+        alt: `${ogTitle} — ${SITE.name}`,
+      },
+    }}
+    twitter={{
+      card: 'summary_large_image',
+      title: ogTitle,
+      description,
+      image: socialImage,
+      imageAlt: `${ogTitle} — ${SITE.name}`,
+    }}
+    extend={{
+      meta: [
+        { name: 'theme-color', content: SITE.themeColor },
+        { name: 'author', content: SITE.name },
+        { name: 'generator', content: Astro.generator },
+      ],
+      link: [
+        { rel: 'icon', type: 'image/svg+xml', href: '/spryteo-logo.svg' },
+        { rel: 'sitemap', type: 'application/xml', href: '/sitemap-index.xml' },
+        // Plain-text and Markdown mirrors, declared so an agent that fetches
+        // the HTML can discover them without guessing at the paths.
+        { rel: 'alternate', type: 'text/plain', href: `${SITE.url}/llms.txt`, title: 'llms.txt' },
+        { rel: 'alternate', type: 'text/markdown', href: `${SITE.url}/docs.md`, title: 'Documentation (Markdown)' },
+        { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
+        { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: true },
+      ],
+    }}
+  />
+
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <script type="application/ld+json" is:inline set:html={JSON.stringify(graph)} />
+
   <style>
     * { box-sizing: border-box; }
     body {
@@ -50,23 +118,6 @@ const canonicalUrl = pathname === '/' || pathname === '' ? 'https://spryteo.dev/
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; text-underline-offset: 3px; }
   </style>
-  <script type="application/ld+json" is:inline set:html={JSON.stringify({
-    "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    "name": "Spryteo",
-    "applicationCategory": "DeveloperApplication",
-    "operatingSystem": "Any",
-    "url": "https://spryteo.dev",
-    "description": description,
-    "offers": {
-      "@type": "Offer",
-      "price": "0",
-      "priceCurrency": "USD"
-    },
-    "sameAs": [
-      "https://github.com/chidi09/spryteo"
-    ]
-  })} />
 </head>
 <body>
   <div class="app-shell">

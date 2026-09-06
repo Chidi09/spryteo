@@ -5,16 +5,20 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "og": "node scripts/og.mjs"
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.3",
     "@astrojs/vercel": "^9.0.5",
     "astro": "^5.0.0",
+    "astro-seo": "^1.2.0",
     "tesseract.js": "^6.0.1"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
+    "@resvg/resvg-js": "^2.6.2",
+    "satori": "^0.33.4",
     "typescript": "^6.0.3"
   }
 }

@@ -5,7 +5,9 @@ import Footer from '../components/layout/Footer.astro';
 import PrivacyPage from '../components/sections/PrivacyPage.astro';
 ---
 
-<Base title="Privacy Policy — Spryteo" description="Privacy Policy for Spryteo. Spryteo is a fully offline, local-first tool that does not upload your images or require an account.">
+<Base title="Privacy Policy — Spryteo" description="Privacy Policy for Spryteo. Spryteo is a fully offline, local-first tool that does not upload your images or require an account."
+  crumbs={[{ name: 'Spryteo', path: '/' }, { name: 'Privacy Policy', path: '/privacy' }]}
+>
   <Header />
   <main style="flex: 1;">
     <PrivacyPage />
