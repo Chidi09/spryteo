@@ -11,7 +11,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 const dir = process.argv[2]
 if (!dir) {
@@ -38,8 +38,16 @@ if (await published()) {
 }
 
 console.log(`publishing ${name}@${version} from ${dir}`)
+// Publish from inside the directory rather than naming it as an argument.
+// `npm publish bindings/node` does not publish that folder: npm-package-arg
+// reads a bare two-segment `a/b` as the GitHub shorthand for a repository, so
+// npm went looking for github.com/bindings/node.git and the release died on
+// `Permission denied (publickey)` after all seven platform packages had
+// landed. Deeper paths like bindings/node/npm/darwin-x64 have too many
+// segments to match the shorthand, which is why only the main package hit it.
 // shell: true so this works with npm.cmd on Windows as well as npm on Unix.
-execFileSync('npm', ['publish', dir, '--access', 'public'], {
+execFileSync('npm', ['publish', '--access', 'public'], {
+  cwd: resolve(dir),
   stdio: 'inherit',
   shell: true,
 })
