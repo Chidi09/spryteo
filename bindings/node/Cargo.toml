@@ -6,6 +6,13 @@ license.workspace = true
 authors.workspace = true
 description = "napi-rs native Node.js addon exposing the Spryteo engine (npm package: spryteo)."
 
+# Not published to crates.io. This is the Rust half of an npm package
+# (`spryteo`), not a library anyone depends on from Cargo, and its
+# spryteo-* dependencies are path-only -- a registry publish would need a
+# version on each. Without this key `cargo publish --workspace` tries it
+# every release and fails on those paths.
+publish = false
+
 [lib]
 crate-type = ["cdylib"]
 

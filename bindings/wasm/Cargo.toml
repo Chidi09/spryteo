@@ -6,6 +6,11 @@ license.workspace = true
 authors.workspace = true
 description = "wasm-bindgen browser build of the Spryteo engine; powers the hero demo."
 
+# Not published to crates.io. This is the Rust half of a wasm-pack browser
+# build, consumed as generated JS, and its spryteo-* dependencies are
+# path-only -- a registry publish would need a version on each.
+publish = false
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
