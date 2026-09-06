@@ -29,7 +29,7 @@ function platformPackage() {
     return `spryteo-darwin-${arch}`
   }
   if (platform === 'win32' && arch === 'x64') {
-    return 'spryteo-win32-x64-msvc'
+    return '@chidi09/spryteo-win32-x64-msvc'
   }
   if (platform === 'linux' && (arch === 'x64' || arch === 'arm64')) {
     return `spryteo-linux-${arch}-${isMusl() ? 'musl' : 'gnu'}`

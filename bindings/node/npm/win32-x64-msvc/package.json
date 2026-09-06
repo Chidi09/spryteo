@@ -1,5 +1,5 @@
 {
-  "name": "spryteo-win32-x64-msvc",
+  "name": "@chidi09/spryteo-win32-x64-msvc",
   "version": "0.0.1",
   "os": [
     "win32"

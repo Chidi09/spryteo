@@ -1,4 +1,4 @@
-# Publish spryteo-win32-x64-msvc. Nothing publishes except on a `v*` tag.
+# Publish @chidi09/spryteo-win32-x64-msvc. Nothing publishes except on a `v*` tag.
 $ErrorActionPreference = "Continue"
 
 if ($env:APPVEYOR_REPO_TAG -ne "true") {

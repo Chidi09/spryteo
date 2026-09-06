@@ -69,7 +69,7 @@ switch (platform) {
           if (localFileExisted) {
             nativeBinding = require('./spryteo.win32-x64-msvc.node')
           } else {
-            nativeBinding = require('spryteo-win32-x64-msvc')
+            nativeBinding = require('@chidi09/spryteo-win32-x64-msvc')
           }
         } catch (e) {
           loadError = e

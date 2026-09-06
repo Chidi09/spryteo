@@ -77,7 +77,9 @@ if (fallback) {
   const refused = spawnSync(process.execPath, [cli, '--version'], { encoding: 'utf8' })
   check(refused.status === 1, 'the CLI shim exits 1 with no platform package')
   check(/no CLI binary/.test(refused.stderr), 'the CLI shim explains what is missing')
-  check(/npm install spryteo-/.test(refused.stderr), 'the CLI shim names the package to install')
+  // The win32 package is scoped (@chidi09/...) because npm's spam filter
+  // refuses the unscoped name, so accept either shape here.
+  check(/npm install (@[\w.-]+\/)?spryteo-/.test(refused.stderr), 'the CLI shim names the package to install')
   console.log(process.exitCode ? '\nsmoke test failed' : '\nsmoke test passed')
   process.exit(process.exitCode ?? 0)
 }
