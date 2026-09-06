@@ -46,7 +46,7 @@ out or leaving the conversation.
 
 Install:
 
-    npm install -g spryteo-mcp
+    cargo install spryteo-mcp
 
 Register (Claude Desktop, Claude Code, Cursor, VS Code and any other MCP
 client share this shape):

@@ -20,12 +20,12 @@ Spryteo offers a third approach: a local Model Context Protocol (MCP) server tha
 
 Model Context Protocol allows AI assistants -- including Claude Desktop, Claude Code, Cursor, and other MCP-compliant environments -- to invoke external tools mid-conversation.
 
-Spryteo distributes an MCP server via npm under the package name `spryteo-mcp`.
+Spryteo distributes an MCP server on crates.io under the package name `spryteo-mcp`. It is a single self-contained Rust binary.
 
-To install it globally:
+To install it:
 
 ```bash
-npm install -g spryteo-mcp
+cargo install spryteo-mcp
 ```
 
 You can register it in your MCP configuration file:
@@ -109,6 +109,6 @@ When an agent iterates on a design with a user -- for example, adjusting colors 
 
 ## Current status
 
-The `spryteo-mcp` package and the underlying Rust crates are published at version 0.0.1 under dual MIT / Apache-2.0 licenses.
+The `spryteo-mcp` server and the underlying Rust crates are published on crates.io at version 0.0.2 under dual MIT / Apache-2.0 licenses. The `spryteo` CLI and Node addon are published separately on npm at 0.0.1.
 
 For complete tool schemas and usage details, refer to the [documentation](/docs) or read our machine-readable brief at [/llms.txt](/llms.txt). The repository is hosted on [GitHub](https://github.com/chidi09/spryteo).

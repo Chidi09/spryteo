@@ -97,6 +97,6 @@ This extra processing takes engineering discipline and computational effort. But
 
 Spryteo is open source and dual-licensed under MIT and Apache-2.0.
 
-The project is pre-1.0, with all engine crates and packages versioned together at 0.0.1. The core algorithms live in modular Rust crates on crates.io (`spryteo-core`, `spryteo-trace`, `spryteo-fit`, `spryteo-geom`, and others), distributed on npm as `spryteo` for the CLI and Node library, and `spryteo-mcp` for AI agent integration.
+The project is pre-1.0. The core algorithms live in modular Rust crates on crates.io (`spryteo-core`, `spryteo-trace`, `spryteo-fit`, `spryteo-geom`, and others) at 0.0.2, alongside the `spryteo-mcp` server for AI agent integration. The CLI and Node library are distributed on npm as `spryteo`, at 0.0.1.
 
 You can read the complete option and flag specifications in our [documentation](/docs) or examine the repository directly on [GitHub](https://github.com/chidi09/spryteo).

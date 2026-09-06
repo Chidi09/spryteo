@@ -41,11 +41,11 @@ export const faqs: QA[] = [
   },
   {
     q: 'How does an AI agent use Spryteo to extract an SVG?',
-    a: 'Install the MCP server with `npm install -g spryteo-mcp` and register it with your agent. The agent then calls convert_image with a path or base64 image and gets back SVG markup plus a metadata sidecar describing the groups and node counts, all computed locally -- no image is sent to a third-party API.',
+    a: 'Install the MCP server with `cargo install spryteo-mcp` and register it with your agent. The agent then calls convert_image with a path or base64 image and gets back SVG markup plus a metadata sidecar describing the groups and node counts, all computed locally -- no image is sent to a third-party API.',
   },
   {
     q: 'What version is Spryteo, and is the API stable?',
-    a: 'Everything is deliberately pre-1.0 and versioned together at 0.0.1. The Rust engine crates are published on crates.io (spryteo-core, spryteo-cli, spryteo-trace, spryteo-quant and the rest), and the npm distribution carries the same version. Breaking changes are still possible; SEMVER.md in the repository records the exact compatibility commitments on ConvertOptions and the metadata sidecar.',
+    a: 'Everything is deliberately pre-1.0. The Rust engine crates are published on crates.io at 0.0.2 (spryteo-core, spryteo-cli, spryteo-mcp, spryteo-trace, spryteo-quant and the rest); the npm distribution -- the `spryteo` CLI and Node addon with its per-platform binary packages -- is at 0.0.1. The two registries are versioned independently while the project is pre-1.0. Breaking changes are still possible; SEMVER.md in the repository records the exact compatibility commitments on ConvertOptions and the metadata sidecar.',
   },
   {
     q: 'How does Spryteo handle image transparency and alpha channels?',
@@ -85,7 +85,7 @@ export const faqs: QA[] = [
   },
   {
     q: 'How do I pin a specific version of Spryteo?',
-    a: 'For global CLI or MCP usage, specify the exact version during installation with `npm install -g spryteo@0.0.1` or `npm install -g spryteo-mcp@0.0.1`. In Node projects, pin `"spryteo": "0.0.1"` without caret or tilde prefixes in your package.json. In Rust workspaces, specify `spryteo-core = "=0.0.1"` in your Cargo.toml dependencies.',
+    a: 'For the global CLI, specify the exact version during installation with `npm install -g spryteo@0.0.1`. In Node projects, pin `"spryteo": "0.0.1"` without caret or tilde prefixes in your package.json. The MCP server is a Rust binary, so pin it with `cargo install spryteo-mcp --version 0.0.2`. In Rust workspaces, specify `spryteo-core = "=0.0.2"` in your Cargo.toml dependencies.',
   },
 ];
 

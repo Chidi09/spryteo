@@ -201,8 +201,12 @@ The same engine compiled to WebAssembly — this is what powers the live
 demo on the homepage. Everything happens client-side; no image ever
 leaves the browser.
 
+The WebAssembly build is not on npm yet. Build it from the repository with
+`wasm-pack build bindings/wasm --target web --release`, then import the
+generated `bindings/wasm/pkg` package:
+
 ```js
-import init, { convert_default } from '@spryteo/wasm'
+import init, { convert_default } from 'spryteo-wasm'
 
 await init('/spryteo_wasm_bg.wasm')
 const bytes = new Uint8Array(await file.arrayBuffer())
@@ -219,7 +223,7 @@ Register Spryteo as an MCP server so AI agents can convert raster images and ins
 ### 1. Install
 
 ```bash
-npm install -g spryteo-mcp
+cargo install spryteo-mcp
 ```
 
 ### 2. Configure
@@ -265,9 +269,9 @@ Check that the server registered:
 
 ### 4. Troubleshoot
 
-- **Command not found (`spryteo-mcp`)**: The global npm bin directory is not on your `PATH`. Run `npm prefix -g` to find the directory (for example `~/.npm-global/bin` or `/usr/local/bin`) and export it in your shell profile (`export PATH="$(npm prefix -g)/bin:$PATH"`), or set `"command"` in your configuration file to the absolute path of `spryteo-mcp`.
+- **Command not found (`spryteo-mcp`)**: Cargo's bin directory is not on your `PATH`. It is `~/.cargo/bin` by default; export it in your shell profile (`export PATH="$HOME/.cargo/bin:$PATH"`), or set `"command"` in your configuration file to the absolute path of `spryteo-mcp`.
 - **Server registers but tools do not appear**: The client loads configuration only on startup. Completely quit and restart your editor or client application.
-- **Permissions error on install (`EACCES`)**: Do not use `sudo npm install`. Reconfigure npm to write global packages to a directory owned by your user (`npm config set prefix ~/.npm-global` and add `~/.npm-global/bin` to `PATH`), or configure your client to invoke npx directly: `"command": "npx"`, `"args": ["-y", "spryteo-mcp"]`.
+- **No Rust toolchain (`cargo: command not found`)**: Install Rust from https://rustup.rs, open a new shell so `~/.cargo/bin` is on `PATH`, then re-run `cargo install spryteo-mcp`.
 
 ### Available tools
 

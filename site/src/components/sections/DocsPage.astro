@@ -235,7 +235,7 @@ const metadataFields: [string, string][] = [
   </aside>
 
   <div class="content">
-    <div class="docs-meta">docs &#183; v0.0.1</div>
+    <div class="docs-meta">docs &#183; pre-1.0</div>
     <h1 class="docs-title">Documentation</h1>
     <p class="docs-desc">Spryteo converts raster images and icons into clean, animateable SVG &#8212; traced, quantized, curve-fit, and semantically grouped, entirely offline. Install it, then reach for whichever surface fits your workflow.</p>
 
@@ -338,14 +338,15 @@ const metadataFields: [string, string][] = [
 
     <h2 id="browser" class="heading">Browser (WASM)</h2>
     <p class="para">The same engine compiled to WebAssembly &#8212; this is what powers the live demo at the top of this site. Everything happens client-side; no image ever leaves the browser.</p>
-    <CodeBlock code={"import init, { convert_default } from '@spryteo/wasm'\n\nawait init('/spryteo_wasm_bg.wasm')\nconst bytes = new Uint8Array(await file.arrayBuffer())\nconst { svg, meta } = convert_default(bytes)"} />
+    <p class="para">The WebAssembly build is not on npm yet. Build it from the repository with <code class="inline-code">wasm-pack build bindings/wasm --target web --release</code>, then import the generated <code class="inline-code">bindings/wasm/pkg</code> package.</p>
+    <CodeBlock code={"import init, { convert_default } from 'spryteo-wasm'\n\nawait init('/spryteo_wasm_bg.wasm')\nconst bytes = new Uint8Array(await file.arrayBuffer())\nconst { svg, meta } = convert_default(bytes)"} />
     <p class="para">Use <code class="inline-code">convert(bytes, optionsJson)</code> instead of <code class="inline-code">convert_default</code> to pass the same JSON options object as the Node and CLI surfaces.</p>
 
     <h2 id="mcp" class="heading">MCP server</h2>
     <p class="para">Register Spryteo as an MCP server so AI agents can convert raster images and inspect vector output mid-conversation.</p>
 
     <h3 class="subheading">1. Install</h3>
-    <CodeBlock code="npm install -g spryteo-mcp" minimal />
+    <CodeBlock code="cargo install spryteo-mcp" minimal />
 
     <h3 class="subheading">2. Configure</h3>
     <p class="para">Add the server to your client configuration:</p>
@@ -370,9 +371,9 @@ const metadataFields: [string, string][] = [
 
     <h3 class="subheading">4. Troubleshoot</h3>
     <ul class="config-list">
-      <li><strong>Command not found (<code class="inline-code">spryteo-mcp</code>):</strong> The global npm bin directory is not on your <code class="inline-code">PATH</code>. Run <code class="inline-code">npm prefix -g</code> to find the directory (for example <code class="inline-code">~/.npm-global/bin</code> or <code class="inline-code">/usr/local/bin</code>) and export it in your shell profile (<code class="inline-code">export PATH="$(npm prefix -g)/bin:$PATH"</code>), or set <code class="inline-code">"command"</code> in your configuration file to the absolute path of <code class="inline-code">spryteo-mcp</code>.</li>
+      <li><strong>Command not found (<code class="inline-code">spryteo-mcp</code>):</strong> Cargo's bin directory is not on your <code class="inline-code">PATH</code>. It is <code class="inline-code">~/.cargo/bin</code> by default; export it in your shell profile (<code class="inline-code">export PATH="$HOME/.cargo/bin:$PATH"</code>), or set <code class="inline-code">"command"</code> in your configuration file to the absolute path of <code class="inline-code">spryteo-mcp</code>.</li>
       <li><strong>Server registers but tools do not appear:</strong> The client loads configuration only on startup. Completely quit and restart your editor or client application.</li>
-      <li><strong>Permissions error on install (<code class="inline-code">EACCES</code>):</strong> Do not use <code class="inline-code">sudo npm install</code>. Reconfigure npm to write global packages to a directory owned by your user (<code class="inline-code">npm config set prefix ~/.npm-global</code> and add <code class="inline-code">~/.npm-global/bin</code> to <code class="inline-code">PATH</code>), or configure your client to invoke npx directly: <code class="inline-code">"command": "npx"</code>, <code class="inline-code">"args": ["-y", "spryteo-mcp"]</code>.</li>
+      <li><strong>No Rust toolchain (<code class="inline-code">cargo: command not found</code>):</strong> Install Rust from <a href="https://rustup.rs">rustup.rs</a>, open a new shell so <code class="inline-code">~/.cargo/bin</code> is on <code class="inline-code">PATH</code>, then re-run <code class="inline-code">cargo install spryteo-mcp</code>.</li>
     </ul>
 
     <h3 class="subheading">Available tools</h3>

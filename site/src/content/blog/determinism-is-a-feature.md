@@ -82,4 +82,4 @@ Spryteo emits only the SVG markup and the metadata required to represent the sce
 
 Every component in the Spryteo workspace -- from `spryteo-core` and `spryteo-quant` to `spryteo-trace` and `spryteo-svg` -- is built under this determinism contract.
 
-The project is pre-1.0, with all crates and npm packages published at version 0.0.1 under dual MIT / Apache-2.0 licenses. You can read more about our pipeline stages in the [documentation](/docs) or examine the test suite on [GitHub](https://github.com/chidi09/spryteo).
+The project is pre-1.0. The Rust engine crates are published on crates.io at 0.0.2 and the npm distribution -- the `spryteo` CLI and Node addon -- is at 0.0.1, both under dual MIT / Apache-2.0 licenses. You can read more about our pipeline stages in the [documentation](/docs) or examine the test suite on [GitHub](https://github.com/chidi09/spryteo).

@@ -43,7 +43,7 @@ When you drag an image onto the browser demo, the file is read into a browser `U
 
 ### 4. The local MCP server
 
-The `spryteo-mcp` package runs as a local process communicating with your AI assistant over standard input and output. When an agent invokes `convert_image`, image data remains on the local filesystem and CPU.
+The `spryteo-mcp` binary runs as a local process communicating with your AI assistant over standard input and output. When an agent invokes `convert_image`, image data remains on the local filesystem and CPU.
 
 ## Hosted vectorizer APIs versus local execution
 
@@ -69,6 +69,6 @@ Build pipelines should not fail because a third-party API is experiencing an out
 
 ## Current status
 
-Spryteo is pre-1.0 and versioned across all crates and packages at 0.0.1. The Rust engine crates (`spryteo-core`, `spryteo-raster`, `spryteo-quant`, `spryteo-trace`, and others) are available on crates.io, and the CLI and MCP tools are distributed on npm.
+Spryteo is pre-1.0. The Rust engine crates (`spryteo-core`, `spryteo-raster`, `spryteo-quant`, `spryteo-trace`, and others) are available on crates.io at 0.0.2, alongside the `spryteo-cli` and `spryteo-mcp` binaries. The CLI and the native Node addon are also distributed on npm as `spryteo`, at 0.0.1.
 
 You can review our command-line flags and options in the [documentation](/docs) or explore the source repository on [GitHub](https://github.com/chidi09/spryteo).

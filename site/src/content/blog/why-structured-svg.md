@@ -144,4 +144,4 @@ Animation libraries and agents can inspect this metadata to calculate coordinate
 
 A vector image should be an editable, interactive asset. By structuring paths into a logical `<g>` tree, assigning stable content-hashed IDs, and recovering true geometric primitives, Spryteo turns vectorization into a tool for building software components.
 
-Spryteo is open source (dual MIT / Apache-2.0) and pre-1.0, with all crates and npm packages currently at version 0.0.1. You can explore the CLI and options in the [documentation](/docs) or review the source code on [GitHub](https://github.com/chidi09/spryteo).
+Spryteo is open source (dual MIT / Apache-2.0) and pre-1.0: the crates.io packages are at 0.0.2 and the npm packages at 0.0.1. You can explore the CLI and options in the [documentation](/docs) or review the source code on [GitHub](https://github.com/chidi09/spryteo).
